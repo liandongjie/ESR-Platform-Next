@@ -28,11 +28,16 @@ RUN python -m pip install --upgrade pip setuptools wheel \
 RUN python -c "import geopandas, numpy, pyproj, rasterio, shapely; print('GIS runtime OK; GDAL=' + rasterio.__gdal_version__)"
 
 FROM base AS development
-COPY . .
-RUN python -m pip install --prefer-binary ".[dev]"
-EXPOSE 5000
-CMD ["python", "-m", "flask", "--app", "wsgi:app", "run", "--host=0.0.0.0", "--port=5000", "--debug"]
 
+COPY . .
+
+# Development uses an editable install so Python always imports the source
+# mounted at /app instead of a stale package copied into site-packages.
+RUN python -m pip install --prefer-binary -e ".[dev]"
+
+EXPOSE 5000
+
+CMD ["python", "-m", "flask", "--app", "wsgi:app", "run", "--host=0.0.0.0", "--port=5000", "--debug"]
 FROM base AS production
 COPY . .
 EXPOSE 5000
