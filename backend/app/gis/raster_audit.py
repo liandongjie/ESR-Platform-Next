@@ -283,7 +283,9 @@ def audit_raster_directory(
             )
 
     readable_records = [
-        record for record in records if record.exists and not record.errors and record.crs is not None
+        record
+        for record in records
+        if record.exists and not record.errors and record.crs is not None
     ]
     reference = readable_records[0] if readable_records else None
 
@@ -294,7 +296,10 @@ def audit_raster_directory(
     found_raster_count = sum(1 for record in records if record.exists)
     all_rasters_readable = all(record.exists and not record.errors for record in records)
     all_rasters_aligned = (
-        all(record.alignment is not None and record.alignment.aligned for record in readable_records)
+        all(
+            record.alignment is not None and record.alignment.aligned
+            for record in readable_records
+        )
         if len(readable_records) == len(indicators) and readable_records
         else None
     )
