@@ -18,11 +18,13 @@ export default tseslint.config(
     rules: {
       'vue/multi-word-component-names': 'off',
       'vue/max-attributes-per-line': 'off',
+      'vue/singleline-html-element-content-newline': 'off',
     },
   },
   {
+    files: ['**/*.{ts,tsx,mts,cts,vue}'],
     rules: {
-      '@typescript-eslint/no-explicit-any': 'error',
+      'no-undef': 'off',
     },
   },
 )
