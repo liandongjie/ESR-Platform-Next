@@ -12,8 +12,7 @@ from typing import Any
 
 from pydantic import Field, FiniteFloat, field_validator
 
-from app.gis.geojson import parse_geojson_geometry
-from app.gis.risk_models import RiskAnalysisValidationError
+from app.gis.geojson import GeoJsonValidationError, parse_geojson_geometry
 from app.schemas.common import ApiModel
 
 
@@ -42,7 +41,7 @@ class RiskAnalysisJobRequest(ApiModel):
 
         try:
             parse_geojson_geometry(value)
-        except RiskAnalysisValidationError as exc:
+        except GeoJsonValidationError as exc:
             # 转成 ValueError 后由 Pydantic 统一包装成 API 可返回的 422 校验错误。
             raise ValueError(str(exc)) from exc
         return value

@@ -4,9 +4,9 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
 
-from app.gis.geojson import parse_geojson_geometry
+from app.gis.geojson import GeoJsonValidationError, parse_geojson_geometry
 from app.gis.indicators import INDICATORS, IndicatorDefinition
-from app.gis.risk_models import IndicatorWeight
+from app.gis.risk_models import IndicatorWeight, RiskAnalysisValidationError
 from app.gis.risk_pipeline import RiskAnalysisPipeline, write_risk_geotiff
 from app.repositories.risk_analysis_job_store import RiskAnalysisJobStore
 from app.schemas.risk_analysis import RiskAnalysisJobRequest
@@ -49,7 +49,11 @@ class RiskAnalysisJobService:
         on_progress: ProgressCallback | None = None,
     ) -> dict[str, Any]:
         _notify(on_progress, "PREPARING", 15)
-        geometry = parse_geojson_geometry(request.geometry)
+        try:
+            geometry = parse_geojson_geometry(request.geometry)
+        except GeoJsonValidationError as exc:
+            # Schema 正常校验后理论上不会到这里；保留转换用于直接 Service 调用的防御性边界。
+            raise RiskAnalysisValidationError(str(exc)) from exc
         weights = tuple(
             IndicatorWeight(item.code, float(item.weight_percent))
             for item in request.weights
