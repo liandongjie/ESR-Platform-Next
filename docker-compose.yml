@@ -1,0 +1,119 @@
+name: esr-platform-next
+
+services:
+  db:
+    image: postgis/postgis:16-3.4
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-esr_platform}
+      POSTGRES_USER: ${POSTGRES_USER:-esr}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-esr_dev_password}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-esr} -d ${POSTGRES_DB:-esr_platform}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  redis:
+    image: redis:7.4-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: ./backend
+      target: development
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://esr:esr_dev_password@db:5432/esr_platform}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      CELERY_BROKER_URL: ${CELERY_BROKER_URL:-redis://redis:6379/0}
+      CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND:-redis://redis:6379/1}
+      ESR_SOURCE_RASTER_DIR: /data/source
+      ESR_RUNTIME_DATA_DIR: /data/runtime
+    volumes:
+      - ./backend:/app
+      - type: bind
+        source: ${ESR_SOURCE_RASTER_HOST_DIR:-./data/source}
+        target: /data/source
+        read_only: true
+      - runtime_data:/data/runtime
+    ports:
+      - "5000:5000"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5000/api/v1/health/live')"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: ./backend
+      target: development
+    command: ["celery", "-A", "app.celery_app:celery_app", "worker", "--loglevel=INFO", "--concurrency=2"]
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://esr:esr_dev_password@db:5432/esr_platform}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      CELERY_BROKER_URL: ${CELERY_BROKER_URL:-redis://redis:6379/0}
+      CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND:-redis://redis:6379/1}
+      ESR_SOURCE_RASTER_DIR: /data/source
+      ESR_RUNTIME_DATA_DIR: /data/runtime
+    volumes:
+      - ./backend:/app
+      - type: bind
+        source: ${ESR_SOURCE_RASTER_HOST_DIR:-./data/source}
+        target: /data/source
+        read_only: true
+      - runtime_data:/data/runtime
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      target: development
+    environment:
+      VITE_API_BASE_URL: ${VITE_API_BASE_URL:-/api/v1}
+      VITE_DEV_PROXY_TARGET: http://backend:5000
+      VITE_AMAP_JS_API_KEY: ${VITE_AMAP_JS_API_KEY:-}
+      VITE_AMAP_SECURITY_JS_CODE: ${VITE_AMAP_SECURITY_JS_CODE:-}
+      VITE_AMAP_CENTER_LNG: ${VITE_AMAP_CENTER_LNG:-118.9000}
+      VITE_AMAP_CENTER_LAT: ${VITE_AMAP_CENTER_LAT:-32.1000}
+      VITE_AMAP_ZOOM: ${VITE_AMAP_ZOOM:-13}
+    volumes:
+      - ./frontend:/app
+      - frontend_node_modules:/app/node_modules
+    ports:
+      - "5173:5173"
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  redis_data:
+  runtime_data:
+  frontend_node_modules:
