@@ -43,6 +43,7 @@ services:
       ESR_RUNTIME_DATA_DIR: /data/runtime
     volumes:
       - ./backend:/app
+      - ./docs:/workspace/docs
       - type: bind
         source: ${ESR_SOURCE_RASTER_HOST_DIR:-./data/source}
         target: /data/source

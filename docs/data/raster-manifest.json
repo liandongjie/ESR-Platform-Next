@@ -1,0 +1,726 @@
+{
+  "schema_version": "1.0",
+  "generated_at": "2026-08-07T05:14:34.289652Z",
+  "audit_mode": "full",
+  "expected_raster_count": 12,
+  "found_raster_count": 12,
+  "missing_files": [],
+  "unexpected_tif_files": [],
+  "reference_file": "PM25.tif",
+  "common_crs": "EPSG:4326",
+  "all_expected_files_present": true,
+  "all_rasters_readable": true,
+  "all_rasters_aligned": true,
+  "normalized_range_check": "passed",
+  "normalized_range_note": "12 个栅格已完成逐块完整扫描，所有有限有效像元均位于 [0, 1]。",
+  "rasters": [
+    {
+      "code": "PM25",
+      "name": "细颗粒物 (PM2.5)",
+      "filename": "PM25.tif",
+      "exists": true,
+      "size_bytes": 17352556,
+      "driver": "GTiff",
+      "band_count": 1,
+      "width": 9000,
+      "height": 5956,
+      "dtype": "float32",
+      "crs": "EPSG:4326",
+      "transform": [
+        0.01,
+        0.0,
+        60.000006428013194,
+        0.0,
+        -0.01,
+        60.52939338171446
+      ],
+      "resolution": [
+        0.01,
+        0.01
+      ],
+      "bounds": [
+        60.000006428013194,
+        0.9693933817144611,
+        150.0000064280132,
+        60.52939338171446
+      ],
+      "nodata": -3.4028234663852886e+38,
+      "has_dataset_mask": true,
+      "stats": {
+        "method": "full-block-scan",
+        "sampled_value_count": 53604000,
+        "valid_value_count": 9643346,
+        "nodata_or_masked_count": 43960654,
+        "nan_count": 0,
+        "inf_count": 0,
+        "below_expected_min_count": 0,
+        "above_expected_max_count": 0,
+        "minimum": 5.214808029840867e-10,
+        "maximum": 1.0,
+        "mean": 0.2369000115305184,
+        "within_expected_range": true
+      },
+      "alignment": {
+        "reference_file": "PM25.tif",
+        "crs_match": true,
+        "shape_match": true,
+        "resolution_match": true,
+        "transform_match": true,
+        "bounds_match": true,
+        "aligned": true,
+        "mismatch_reasons": []
+      },
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "code": "AQI",
+      "name": "空气质量指数 (AQI)",
+      "filename": "AQI.tif",
+      "exists": true,
+      "size_bytes": 17234085,
+      "driver": "GTiff",
+      "band_count": 1,
+      "width": 9000,
+      "height": 5956,
+      "dtype": "float32",
+      "crs": "EPSG:4326",
+      "transform": [
+        0.01,
+        0.0,
+        60.000006428013194,
+        0.0,
+        -0.01,
+        60.52939338171446
+      ],
+      "resolution": [
+        0.01,
+        0.01
+      ],
+      "bounds": [
+        60.000006428013194,
+        0.9693933817144611,
+        150.0000064280132,
+        60.52939338171446
+      ],
+      "nodata": -3.4028234663852886e+38,
+      "has_dataset_mask": true,
+      "stats": {
+        "method": "full-block-scan",
+        "sampled_value_count": 53604000,
+        "valid_value_count": 9650993,
+        "nodata_or_masked_count": 43953007,
+        "nan_count": 0,
+        "inf_count": 0,
+        "below_expected_min_count": 0,
+        "above_expected_max_count": 0,
+        "minimum": 2.639705343199239e-9,
+        "maximum": 1.0,
+        "mean": 0.2830238582753652,
+        "within_expected_range": true
+      },
+      "alignment": {
+        "reference_file": "PM25.tif",
+        "crs_match": true,
+        "shape_match": true,
+        "resolution_match": true,
+        "transform_match": true,
+        "bounds_match": true,
+        "aligned": true,
+        "mismatch_reasons": []
+      },
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "code": "NDVI",
+      "name": "归一化差值植被指数",
+      "filename": "NDVI.tif",
+      "exists": true,
+      "size_bytes": 218801213,
+      "driver": "GTiff",
+      "band_count": 1,
+      "width": 9000,
+      "height": 5956,
+      "dtype": "float32",
+      "crs": "EPSG:4326",
+      "transform": [
+        0.01,
+        0.0,
+        60.000006428013194,
+        0.0,
+        -0.01,
+        60.52939338171446
+      ],
+      "resolution": [
+        0.01,
+        0.01
+      ],
+      "bounds": [
+        60.000006428013194,
+        0.9693933817144611,
+        150.0000064280132,
+        60.52939338171446
+      ],
+      "nodata": -3.4028234663852886e+38,
+      "has_dataset_mask": true,
+      "stats": {
+        "method": "full-block-scan",
+        "sampled_value_count": 53604000,
+        "valid_value_count": 9594515,
+        "nodata_or_masked_count": 44009485,
+        "nan_count": 0,
+        "inf_count": 0,
+        "below_expected_min_count": 0,
+        "above_expected_max_count": 0,
+        "minimum": 0.0,
+        "maximum": 1.0,
+        "mean": 0.5951659372139997,
+        "within_expected_range": true
+      },
+      "alignment": {
+        "reference_file": "PM25.tif",
+        "crs_match": true,
+        "shape_match": true,
+        "resolution_match": true,
+        "transform_match": true,
+        "bounds_match": true,
+        "aligned": true,
+        "mismatch_reasons": []
+      },
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "code": "hwmd",
+      "name": "河网密度",
+      "filename": "hwmd.tif",
+      "exists": true,
+      "size_bytes": 4547003,
+      "driver": "GTiff",
+      "band_count": 1,
+      "width": 9000,
+      "height": 5956,
+      "dtype": "float32",
+      "crs": "EPSG:4326",
+      "transform": [
+        0.01,
+        0.0,
+        60.000006428013194,
+        0.0,
+        -0.01,
+        60.52939338171446
+      ],
+      "resolution": [
+        0.01,
+        0.01
+      ],
+      "bounds": [
+        60.000006428013194,
+        0.9693933817144611,
+        150.0000064280132,
+        60.52939338171446
+      ],
+      "nodata": -3.4028234663852886e+38,
+      "has_dataset_mask": true,
+      "stats": {
+        "method": "full-block-scan",
+        "sampled_value_count": 53604000,
+        "valid_value_count": 9618024,
+        "nodata_or_masked_count": 43985976,
+        "nan_count": 0,
+        "inf_count": 0,
+        "below_expected_min_count": 0,
+        "above_expected_max_count": 0,
+        "minimum": 0.0,
+        "maximum": 1.0,
+        "mean": 0.1940166563772507,
+        "within_expected_range": true
+      },
+      "alignment": {
+        "reference_file": "PM25.tif",
+        "crs_match": true,
+        "shape_match": true,
+        "resolution_match": true,
+        "transform_match": true,
+        "bounds_match": true,
+        "aligned": true,
+        "mismatch_reasons": []
+      },
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "code": "rkmd",
+      "name": "人口密度",
+      "filename": "rkmd.tif",
+      "exists": true,
+      "size_bytes": 37044792,
+      "driver": "GTiff",
+      "band_count": 1,
+      "width": 9000,
+      "height": 5956,
+      "dtype": "float32",
+      "crs": "EPSG:4326",
+      "transform": [
+        0.01,
+        0.0,
+        60.000006428013194,
+        0.0,
+        -0.01,
+        60.52939338171446
+      ],
+      "resolution": [
+        0.01,
+        0.01
+      ],
+      "bounds": [
+        60.000006428013194,
+        0.9693933817144611,
+        150.0000064280132,
+        60.52939338171446
+      ],
+      "nodata": -3.4028234663852886e+38,
+      "has_dataset_mask": true,
+      "stats": {
+        "method": "full-block-scan",
+        "sampled_value_count": 53604000,
+        "valid_value_count": 9551319,
+        "nodata_or_masked_count": 44052681,
+        "nan_count": 0,
+        "inf_count": 0,
+        "below_expected_min_count": 0,
+        "above_expected_max_count": 0,
+        "minimum": 0.0,
+        "maximum": 1.0,
+        "mean": 0.00037434505742176547,
+        "within_expected_range": true
+      },
+      "alignment": {
+        "reference_file": "PM25.tif",
+        "crs_match": true,
+        "shape_match": true,
+        "resolution_match": true,
+        "transform_match": true,
+        "bounds_match": true,
+        "aligned": true,
+        "mismatch_reasons": []
+      },
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "code": "xxmd",
+      "name": "学校密度",
+      "filename": "xxmd.tif",
+      "exists": true,
+      "size_bytes": 3852526,
+      "driver": "GTiff",
+      "band_count": 1,
+      "width": 9000,
+      "height": 5956,
+      "dtype": "float32",
+      "crs": "EPSG:4326",
+      "transform": [
+        0.01,
+        0.0,
+        60.000006428013194,
+        0.0,
+        -0.01,
+        60.52939338171446
+      ],
+      "resolution": [
+        0.01,
+        0.01
+      ],
+      "bounds": [
+        60.000006428013194,
+        0.9693933817144611,
+        150.0000064280132,
+        60.52939338171446
+      ],
+      "nodata": -3.4028234663852886e+38,
+      "has_dataset_mask": true,
+      "stats": {
+        "method": "full-block-scan",
+        "sampled_value_count": 53604000,
+        "valid_value_count": 9618024,
+        "nodata_or_masked_count": 43985976,
+        "nan_count": 0,
+        "inf_count": 0,
+        "below_expected_min_count": 0,
+        "above_expected_max_count": 0,
+        "minimum": 0.0,
+        "maximum": 1.0,
+        "mean": 0.0017358493751154704,
+        "within_expected_range": true
+      },
+      "alignment": {
+        "reference_file": "PM25.tif",
+        "crs_match": true,
+        "shape_match": true,
+        "resolution_match": true,
+        "transform_match": true,
+        "bounds_match": true,
+        "aligned": true,
+        "mismatch_reasons": []
+      },
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "code": "jmdmd",
+      "name": "居民点密度",
+      "filename": "jmdmd.tif",
+      "exists": true,
+      "size_bytes": 3423442,
+      "driver": "GTiff",
+      "band_count": 1,
+      "width": 9000,
+      "height": 5956,
+      "dtype": "float32",
+      "crs": "EPSG:4326",
+      "transform": [
+        0.01,
+        0.0,
+        60.000006428013194,
+        0.0,
+        -0.01,
+        60.52939338171446
+      ],
+      "resolution": [
+        0.01,
+        0.01
+      ],
+      "bounds": [
+        60.000006428013194,
+        0.9693933817144611,
+        150.0000064280132,
+        60.52939338171446
+      ],
+      "nodata": -3.4028234663852886e+38,
+      "has_dataset_mask": true,
+      "stats": {
+        "method": "full-block-scan",
+        "sampled_value_count": 53604000,
+        "valid_value_count": 9618024,
+        "nodata_or_masked_count": 43985976,
+        "nan_count": 0,
+        "inf_count": 0,
+        "below_expected_min_count": 0,
+        "above_expected_max_count": 0,
+        "minimum": 0.0,
+        "maximum": 1.0,
+        "mean": 0.006083565470853723,
+        "within_expected_range": true
+      },
+      "alignment": {
+        "reference_file": "PM25.tif",
+        "crs_match": true,
+        "shape_match": true,
+        "resolution_match": true,
+        "transform_match": true,
+        "bounds_match": true,
+        "aligned": true,
+        "mismatch_reasons": []
+      },
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "code": "xspb",
+      "name": "刑事批捕率",
+      "filename": "xspb.tif",
+      "exists": true,
+      "size_bytes": 3187569,
+      "driver": "GTiff",
+      "band_count": 1,
+      "width": 9000,
+      "height": 5956,
+      "dtype": "float32",
+      "crs": "EPSG:4326",
+      "transform": [
+        0.01,
+        0.0,
+        60.000006428013194,
+        0.0,
+        -0.01,
+        60.52939338171446
+      ],
+      "resolution": [
+        0.01,
+        0.01
+      ],
+      "bounds": [
+        60.000006428013194,
+        0.9693933817144611,
+        150.0000064280132,
+        60.52939338171446
+      ],
+      "nodata": -3.4028234663852886e+38,
+      "has_dataset_mask": true,
+      "stats": {
+        "method": "full-block-scan",
+        "sampled_value_count": 53604000,
+        "valid_value_count": 9619345,
+        "nodata_or_masked_count": 43984655,
+        "nan_count": 0,
+        "inf_count": 0,
+        "below_expected_min_count": 0,
+        "above_expected_max_count": 0,
+        "minimum": 0.0,
+        "maximum": 1.0,
+        "mean": 0.49076946693198575,
+        "within_expected_range": true
+      },
+      "alignment": {
+        "reference_file": "PM25.tif",
+        "crs_match": true,
+        "shape_match": true,
+        "resolution_match": true,
+        "transform_match": true,
+        "bounds_match": true,
+        "aligned": true,
+        "mismatch_reasons": []
+      },
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "code": "xsqs",
+      "name": "刑事起诉率",
+      "filename": "xsqs.tif",
+      "exists": true,
+      "size_bytes": 3187431,
+      "driver": "GTiff",
+      "band_count": 1,
+      "width": 9000,
+      "height": 5956,
+      "dtype": "float32",
+      "crs": "EPSG:4326",
+      "transform": [
+        0.01,
+        0.0,
+        60.000006428013194,
+        0.0,
+        -0.01,
+        60.52939338171446
+      ],
+      "resolution": [
+        0.01,
+        0.01
+      ],
+      "bounds": [
+        60.000006428013194,
+        0.9693933817144611,
+        150.0000064280132,
+        60.52939338171446
+      ],
+      "nodata": -3.4028234663852886e+38,
+      "has_dataset_mask": true,
+      "stats": {
+        "method": "full-block-scan",
+        "sampled_value_count": 53604000,
+        "valid_value_count": 9619345,
+        "nodata_or_masked_count": 43984655,
+        "nan_count": 0,
+        "inf_count": 0,
+        "below_expected_min_count": 0,
+        "above_expected_max_count": 0,
+        "minimum": 0.0,
+        "maximum": 1.0,
+        "mean": 0.4422996540936816,
+        "within_expected_range": true
+      },
+      "alignment": {
+        "reference_file": "PM25.tif",
+        "crs_match": true,
+        "shape_match": true,
+        "resolution_match": true,
+        "transform_match": true,
+        "bounds_match": true,
+        "aligned": true,
+        "mismatch_reasons": []
+      },
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "code": "gyfb",
+      "name": "官员腐败指数",
+      "filename": "gyfb.tif",
+      "exists": true,
+      "size_bytes": 218747821,
+      "driver": "GTiff",
+      "band_count": 1,
+      "width": 9000,
+      "height": 5956,
+      "dtype": "float32",
+      "crs": "EPSG:4326",
+      "transform": [
+        0.01,
+        0.0,
+        60.000006428013194,
+        0.0,
+        -0.01,
+        60.52939338171446
+      ],
+      "resolution": [
+        0.01,
+        0.01
+      ],
+      "bounds": [
+        60.000006428013194,
+        0.9693933817144611,
+        150.0000064280132,
+        60.52939338171446
+      ],
+      "nodata": -3.4028234663852886e+38,
+      "has_dataset_mask": true,
+      "stats": {
+        "method": "full-block-scan",
+        "sampled_value_count": 53604000,
+        "valid_value_count": 9617719,
+        "nodata_or_masked_count": 43986281,
+        "nan_count": 0,
+        "inf_count": 0,
+        "below_expected_min_count": 0,
+        "above_expected_max_count": 0,
+        "minimum": 0.0,
+        "maximum": 1.0,
+        "mean": 0.3109205683620655,
+        "within_expected_range": true
+      },
+      "alignment": {
+        "reference_file": "PM25.tif",
+        "crs_match": true,
+        "shape_match": true,
+        "resolution_match": true,
+        "transform_match": true,
+        "bounds_match": true,
+        "aligned": true,
+        "mismatch_reasons": []
+      },
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "code": "fmyl",
+      "name": "垃圾焚烧负面舆论占比",
+      "filename": "fmyl.tif",
+      "exists": true,
+      "size_bytes": 3187382,
+      "driver": "GTiff",
+      "band_count": 1,
+      "width": 9000,
+      "height": 5956,
+      "dtype": "float32",
+      "crs": "EPSG:4326",
+      "transform": [
+        0.01,
+        0.0,
+        60.000006428013194,
+        0.0,
+        -0.01,
+        60.52939338171446
+      ],
+      "resolution": [
+        0.01,
+        0.01
+      ],
+      "bounds": [
+        60.000006428013194,
+        0.9693933817144611,
+        150.0000064280132,
+        60.52939338171446
+      ],
+      "nodata": -3.4028234663852886e+38,
+      "has_dataset_mask": true,
+      "stats": {
+        "method": "full-block-scan",
+        "sampled_value_count": 53604000,
+        "valid_value_count": 9619345,
+        "nodata_or_masked_count": 43984655,
+        "nan_count": 0,
+        "inf_count": 0,
+        "below_expected_min_count": 0,
+        "above_expected_max_count": 0,
+        "minimum": 0.0,
+        "maximum": 1.0,
+        "mean": 0.25940328617782593,
+        "within_expected_range": true
+      },
+      "alignment": {
+        "reference_file": "PM25.tif",
+        "crs_match": true,
+        "shape_match": true,
+        "resolution_match": true,
+        "transform_match": true,
+        "bounds_match": true,
+        "aligned": true,
+        "mismatch_reasons": []
+      },
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "code": "fmts",
+      "name": "环境投诉负面数量占比",
+      "filename": "fmts.tif",
+      "exists": true,
+      "size_bytes": 3187779,
+      "driver": "GTiff",
+      "band_count": 1,
+      "width": 9000,
+      "height": 5956,
+      "dtype": "float32",
+      "crs": "EPSG:4326",
+      "transform": [
+        0.01,
+        0.0,
+        60.000006428013194,
+        0.0,
+        -0.01,
+        60.52939338171446
+      ],
+      "resolution": [
+        0.01,
+        0.01
+      ],
+      "bounds": [
+        60.000006428013194,
+        0.9693933817144611,
+        150.0000064280132,
+        60.52939338171446
+      ],
+      "nodata": -3.4028234663852886e+38,
+      "has_dataset_mask": true,
+      "stats": {
+        "method": "full-block-scan",
+        "sampled_value_count": 53604000,
+        "valid_value_count": 9619345,
+        "nodata_or_masked_count": 43984655,
+        "nan_count": 0,
+        "inf_count": 0,
+        "below_expected_min_count": 0,
+        "above_expected_max_count": 0,
+        "minimum": 0.0,
+        "maximum": 0.9999334216117859,
+        "mean": 0.09256553066069793,
+        "within_expected_range": true
+      },
+      "alignment": {
+        "reference_file": "PM25.tif",
+        "crs_match": true,
+        "shape_match": true,
+        "resolution_match": true,
+        "transform_match": true,
+        "bounds_match": true,
+        "aligned": true,
+        "mismatch_reasons": []
+      },
+      "warnings": [],
+      "errors": []
+    }
+  ]
+}
