@@ -8,7 +8,7 @@ from flask import Flask, jsonify
 
 from app.api.v1 import api_v1
 from app.config import CONFIG_BY_NAME
-from app.extensions import cors, db, jwt, migrate
+from app.extensions import celery, cors, db, jwt, migrate
 
 
 def create_app(config_name: str | None = None) -> Flask:
@@ -51,6 +51,9 @@ def _init_extensions(app: Flask) -> None:
         app,
         resources={r"/api/*": {"origins": app.config.get("CORS_ORIGINS", "*")}},
     )
+    # Web 进程也要投递和查询 Celery 任务，因此必须复用与 Worker 相同的 broker/result 配置。
+    # 如果只在 celery_app.py 中配置，普通 Flask Web 进程会保留 Celery 的默认连接配置。
+    celery.conf.update(app.config["CELERY"])
 
 
 def _register_blueprints(app: Flask) -> None:

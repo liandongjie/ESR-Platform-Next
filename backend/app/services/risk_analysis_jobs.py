@@ -1,22 +1,17 @@
 from __future__ import annotations
 
-import json
-import re
 from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
 
-from shapely.errors import ShapelyError
-from shapely.geometry import shape
-
+from app.gis.geojson import parse_geojson_geometry
 from app.gis.indicators import INDICATORS, IndicatorDefinition
-from app.gis.risk_models import IndicatorWeight, RiskAnalysisValidationError
+from app.gis.risk_models import IndicatorWeight
 from app.gis.risk_pipeline import RiskAnalysisPipeline, write_risk_geotiff
+from app.repositories.risk_analysis_job_store import RiskAnalysisJobStore
 from app.schemas.risk_analysis import RiskAnalysisJobRequest
 
 _ALGORITHM_VERSION = "weighted-overlay-v1"
-_ARTIFACT_ROOT_NAME = "risk-analysis"
-_TASK_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 
 type ProgressCallback = Callable[[str, int], None]
 
@@ -26,39 +21,12 @@ def _notify(callback: ProgressCallback | None, stage: str, progress: int) -> Non
         callback(stage, progress)
 
 
-def _task_directory(runtime_dir: Path, task_id: str) -> Path:
-    """Return a task-scoped output directory without allowing path traversal."""
-
-    if task_id in {".", ".."} or not _TASK_ID_PATTERN.fullmatch(task_id):
-        raise ValueError("task_id 必须以字母或数字开头，且只能包含安全路径字符")
-
-    root = Path(runtime_dir).expanduser().resolve()
-    task_dir = root / _ARTIFACT_ROOT_NAME / task_id
-    task_dir.mkdir(parents=True, exist_ok=True)
-    return task_dir
-
-
-def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
-    """Write metadata atomically so readers never observe a half-written manifest."""
-
-    temporary = path.with_name(f".{path.name}.tmp")
-    temporary.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True),
-        encoding="utf-8",
-    )
-    temporary.replace(path)
-
-
-def _relative_artifact_path(path: Path, runtime_dir: Path) -> str:
-    return path.resolve().relative_to(runtime_dir.resolve()).as_posix()
-
-
 class RiskAnalysisJobService:
-    """Application service that turns one validated job into durable artifacts.
+    """把一次已校验任务编排成持久化产物。
 
-    The service owns orchestration and artifact layout, while ``RiskAnalysisPipeline``
-    remains responsible only for deterministic GIS computation. Keeping these layers
-    separate lets Flask, Celery and future CLI entry points reuse exactly one workflow.
+    Service 负责应用层编排和产物布局；``RiskAnalysisPipeline`` 只负责确定性的 GIS
+    计算。文件路径和 JSON 原子写入交给 ``RiskAnalysisJobStore``，避免 API 与 Worker
+    各自维护一套任务目录规则。
     """
 
     def __init__(
@@ -70,6 +38,7 @@ class RiskAnalysisJobService:
     ) -> None:
         self.raster_dir = Path(raster_dir)
         self.runtime_dir = Path(runtime_dir).expanduser().resolve()
+        self.store = RiskAnalysisJobStore(self.runtime_dir)
         self.pipeline = RiskAnalysisPipeline(self.raster_dir, indicators=indicators)
 
     def execute(
@@ -80,7 +49,7 @@ class RiskAnalysisJobService:
         on_progress: ProgressCallback | None = None,
     ) -> dict[str, Any]:
         _notify(on_progress, "PREPARING", 15)
-        geometry = self._parse_geometry(request.geometry)
+        geometry = parse_geojson_geometry(request.geometry)
         weights = tuple(
             IndicatorWeight(item.code, float(item.weight_percent))
             for item in request.weights
@@ -90,13 +59,12 @@ class RiskAnalysisJobService:
         result = self.pipeline.run(geometry=geometry, weights=weights)
 
         _notify(on_progress, "PERSISTING", 85)
-        task_dir = _task_directory(self.runtime_dir, task_id)
+        task_dir = self.store.task_directory(task_id, create=True)
         raster_path = task_dir / "risk.tif"
         temporary_raster = task_dir / ".risk.tif.tmp"
         manifest_path = task_dir / "result.json"
 
-        # Publish the GeoTIFF only after Rasterio has closed a complete temporary file.
-        # A killed worker therefore cannot leave a partial file at the final path.
+        # 先完整写入临时 GeoTIFF，再原子替换最终文件，避免 Worker 中断后留下残缺结果。
         try:
             write_risk_geotiff(result, temporary_raster)
             temporary_raster.replace(raster_path)
@@ -136,25 +104,15 @@ class RiskAnalysisJobService:
                 }
                 for item in result.indicators
             ],
-            # Store paths relative to the runtime root. Future HTTP responses should
-            # not expose container-internal absolute paths such as /data/runtime/....
+            # 对外只保存相对 runtime 根目录的 artifact key，不暴露 /data/runtime 等容器路径。
             "artifacts": {
-                "raster": _relative_artifact_path(raster_path, self.runtime_dir),
-                "manifest": _relative_artifact_path(manifest_path, self.runtime_dir),
+                "raster": self.store.relative_path(raster_path),
+                "manifest": self.store.relative_path(manifest_path),
             },
         }
-        _atomic_write_json(manifest_path, payload)
+        self.store.write_json(task_id=task_id, filename="result.json", payload=payload)
         _notify(on_progress, "COMPLETED", 100)
         return payload
-
-    @staticmethod
-    def _parse_geometry(geojson: dict[str, Any]):
-        try:
-            geometry = shape(geojson)
-        except (KeyError, TypeError, ValueError, ShapelyError) as exc:
-            raise RiskAnalysisValidationError("geometry 不是合法的 GeoJSON geometry") from exc
-        return geometry
-
 
 def write_failure_manifest(
     *,
@@ -163,18 +121,18 @@ def write_failure_manifest(
     error_code: str,
     message: str,
 ) -> dict[str, Any]:
-    """Persist a stable failure reason for later polling/history APIs."""
+    """持久化稳定失败原因，供轮询 API 和后续历史任务使用。"""
 
-    runtime_dir = Path(runtime_dir).expanduser().resolve()
-    task_dir = _task_directory(runtime_dir, task_id)
+    store = RiskAnalysisJobStore(runtime_dir)
+    task_dir = store.task_directory(task_id, create=True)
     manifest_path = task_dir / "result.json"
     payload = {
         "task_id": task_id,
         "status": "FAILED",
         "error": {"code": error_code, "message": message},
         "artifacts": {
-            "manifest": _relative_artifact_path(manifest_path, runtime_dir),
+            "manifest": store.relative_path(manifest_path),
         },
     }
-    _atomic_write_json(manifest_path, payload)
+    store.write_json(task_id=task_id, filename="result.json", payload=payload)
     return payload
