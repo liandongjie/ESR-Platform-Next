@@ -6,6 +6,7 @@ from uuid import uuid4
 from flask import Blueprint, current_app, jsonify, request, url_for
 from pydantic import ValidationError
 
+from app.api.validation import validation_details
 from app.extensions import celery as celery_app
 from app.repositories.risk_analysis_job_store import RiskAnalysisJobStore
 from app.schemas.risk_analysis import RiskAnalysisJobRequest
@@ -21,22 +22,6 @@ class TaskStatusBackendUnavailable(RuntimeError):
 
 def _job_store() -> RiskAnalysisJobStore:
     return RiskAnalysisJobStore(current_app.config["RUNTIME_DATA_DIR"])
-
-
-def _validation_details(error: ValidationError) -> list[dict[str, str]]:
-    """只返回稳定、可 JSON 化的校验字段，不把 Pydantic 内部对象泄露给前端。"""
-
-    details: list[dict[str, str]] = []
-    for item in error.errors(include_url=False):
-        location = ".".join(str(part) for part in item.get("loc", ()))
-        details.append(
-            {
-                "field": location,
-                "message": str(item.get("msg", "Invalid value")),
-                "type": str(item.get("type", "validation_error")),
-            }
-        )
-    return details
 
 
 def _status_urls(task_id: str) -> tuple[str, str]:
@@ -142,7 +127,7 @@ def create_risk_analysis_job():
                 {
                     "code": "INVALID_REQUEST",
                     "message": "风险分析任务参数校验失败",
-                    "details": _validation_details(exc),
+                    "details": validation_details(exc),
                 }
             ),
             422,
