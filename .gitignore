@@ -70,3 +70,6 @@ temp/
 .idea/
 .DS_Store
 Thumbs.db
+
+# TypeScript incremental build metadata
+*.tsbuildinfo
