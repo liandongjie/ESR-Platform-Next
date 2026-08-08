@@ -13,7 +13,7 @@ import { DataAnalysis, List, MapLocation } from '@element-plus/icons-vue'
         </div>
       </div>
       <div class="topbar-actions">
-        <span class="stage-badge">工程骨架</span>
+        <span class="stage-badge">Phase 2D</span>
         <el-avatar :size="34">DJ</el-avatar>
       </div>
     </header>
@@ -30,7 +30,7 @@ import { DataAnalysis, List, MapLocation } from '@element-plus/icons-vue'
         </RouterLink>
         <div class="sidebar-note">
           <el-icon><DataAnalysis /></el-icon>
-          <span>第一阶段先跑通真实栅格纵向链路</span>
+          <span>风险分析任务已支持服务端历史追踪</span>
         </div>
       </aside>
 

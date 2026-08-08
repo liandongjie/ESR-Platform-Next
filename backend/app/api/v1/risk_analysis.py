@@ -9,7 +9,7 @@ from pydantic import ValidationError
 from app.api.validation import validation_details
 from app.extensions import celery as celery_app
 from app.repositories.risk_analysis_job_store import RiskAnalysisJobStore
-from app.schemas.risk_analysis import RiskAnalysisJobRequest
+from app.schemas.risk_analysis import RiskAnalysisJobRequest, RiskAnalysisSuccessResult
 from app.services.risk_analysis_jobs import write_failure_manifest
 
 risk_analysis_bp = Blueprint("risk_analysis", __name__)
@@ -43,6 +43,24 @@ def _final_status_payload(
     result: dict[str, Any],
 ) -> dict[str, Any]:
     status = str(result.get("status", "FAILED"))
+    invalid_result_error: dict[str, str] | None = None
+
+    if status == "SUCCEEDED":
+        try:
+            RiskAnalysisSuccessResult.model_validate(result)
+        except ValidationError as exc:
+            # 文件虽然声称成功，但缺少结果 Contract 必需字段时业务上已经不可消费。
+            current_app.logger.warning(
+                "Invalid risk-analysis result manifest for task %s: %s",
+                task_id,
+                exc,
+            )
+            status = "FAILED"
+            invalid_result_error = {
+                "code": "INVALID_RESULT_MANIFEST",
+                "message": "风险分析结果文件格式不完整或已损坏",
+            }
+
     payload: dict[str, Any] = {
         "task_id": task_id,
         "status": status,
@@ -51,7 +69,9 @@ def _final_status_payload(
         "result_available": status == "SUCCEEDED",
         "submitted_at": submission.get("submitted_at") if submission else None,
     }
-    if status == "FAILED":
+    if invalid_result_error is not None:
+        payload["error"] = invalid_result_error
+    elif status == "FAILED":
         payload["error"] = result.get("error")
     return payload
 
@@ -188,10 +208,15 @@ def list_risk_analysis_jobs():
     """按提交时间倒序返回最近风险分析任务，不在列表接口返回完整研究区 geometry。"""
 
     raw_limit = request.args.get("limit", "20")
+    raw_offset = request.args.get("offset", "0")
     try:
         limit = int(raw_limit)
     except (TypeError, ValueError):
         limit = 0
+    try:
+        offset = int(raw_offset)
+    except (TypeError, ValueError):
+        offset = -1
 
     if not 1 <= limit <= 100:
         return (
@@ -199,6 +224,16 @@ def list_risk_analysis_jobs():
                 {
                     "code": "INVALID_REQUEST",
                     "message": "limit 必须是 1 到 100 的整数",
+                }
+            ),
+            422,
+        )
+    if offset < 0:
+        return (
+            jsonify(
+                {
+                    "code": "INVALID_REQUEST",
+                    "message": "offset 必须是大于等于 0 的整数",
                 }
             ),
             422,
@@ -219,7 +254,8 @@ def list_risk_analysis_jobs():
     records.sort(key=lambda item: (item[0], item[1]), reverse=True)
 
     items: list[dict[str, Any]] = []
-    for _, task_id, submission in records[:limit]:
+    # offset/limit 只负责列表窗口切片，total 始终表示完整任务数，前端据此计算总页数。
+    for _, task_id, submission in records[offset : offset + limit]:
         try:
             status = _job_status_payload(store, task_id)
         except TaskStatusBackendUnavailable as exc:
@@ -247,7 +283,14 @@ def list_risk_analysis_jobs():
         }
         items.append(status)
 
-    response = jsonify({"items": items, "limit": limit, "total": len(records)})
+    response = jsonify(
+        {
+            "items": items,
+            "limit": limit,
+            "offset": offset,
+            "total": len(records),
+        }
+    )
     response.headers["Cache-Control"] = "no-store"
     return response
 
@@ -284,10 +327,34 @@ def get_risk_analysis_result(task_id: str):
 
     result = store.read_result(task_id)
     if result is not None:
+        if result.get("status") == "SUCCEEDED":
+            try:
+                # API 边界必须验证磁盘上的持久化 Contract，不能把 status=SUCCEEDED 等同于结果完整。
+                success_result = RiskAnalysisSuccessResult.model_validate(result)
+            except ValidationError as exc:
+                current_app.logger.warning(
+                    "Invalid risk-analysis result manifest for task %s: %s",
+                    task_id,
+                    exc,
+                )
+                response = jsonify(
+                    {
+                        "code": "INVALID_RESULT_MANIFEST",
+                        "message": "风险分析结果文件格式不完整或已损坏",
+                        "task_id": task_id,
+                        "status": "FAILED",
+                    }
+                )
+                response.headers["Cache-Control"] = "no-store"
+                return response, 409
+
+            # 旧的完整结果即使没有 schema_version，也统一规范成当前 v1 响应。
+            response = jsonify(success_result.model_dump(mode="json"))
+            response.headers["Cache-Control"] = "no-store"
+            return response, 200
+
         response = jsonify(result)
         response.headers["Cache-Control"] = "no-store"
-        if result.get("status") == "SUCCEEDED":
-            return response, 200
         return response, 409
 
     try:

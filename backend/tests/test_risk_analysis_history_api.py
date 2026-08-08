@@ -39,6 +39,51 @@ def _write_submission(
     )
 
 
+def _write_success_result(store: RiskAnalysisJobStore, *, task_id: str) -> None:
+    store.write_json(
+        task_id=task_id,
+        filename="result.json",
+        payload={
+            "schema_version": 1,
+            "task_id": task_id,
+            "status": "SUCCEEDED",
+            "algorithm_version": "weighted-overlay-v1",
+            "geometry": {
+                "type": "Polygon",
+                "bounds": [118.9, 32.1, 118.91, 32.11],
+            },
+            "grid": {
+                "crs": "EPSG:4326",
+                "shape": [2, 2],
+                "nodata": -9999.0,
+            },
+            "statistics": {
+                "valid_pixel_count": 4,
+                "minimum": 0.2,
+                "maximum": 0.5,
+                "mean": 0.35,
+            },
+            "indicators": [
+                {
+                    "code": "PM25",
+                    "name": "细颗粒物 (PM2.5)",
+                    "weight_percent": 100.0,
+                    "statistics": {
+                        "valid_pixel_count": 4,
+                        "minimum": 0.2,
+                        "maximum": 0.5,
+                        "mean": 0.35,
+                    },
+                }
+            ],
+            "artifacts": {
+                "raster": f"risk-analysis/{task_id}/risk.tif",
+                "manifest": f"risk-analysis/{task_id}/result.json",
+            },
+        },
+    )
+
+
 def test_job_store_lists_only_known_task_directories(app):
     store = RiskAnalysisJobStore(app.config["RUNTIME_DATA_DIR"])
     _write_submission(
@@ -70,11 +115,7 @@ def test_history_endpoint_returns_newest_first_with_compact_request_summary(
         task_id="newer-task",
         submitted_at="2026-08-08T02:00:00+00:00",
     )
-    store.write_json(
-        task_id="newer-task",
-        filename="result.json",
-        payload={"task_id": "newer-task", "status": "SUCCEEDED"},
-    )
+    _write_success_result(store, task_id="newer-task")
     monkeypatch.setattr(
         "app.api.v1.risk_analysis.celery_app.AsyncResult",
         lambda _: FakeAsyncResult("PENDING"),
@@ -85,6 +126,7 @@ def test_history_endpoint_returns_newest_first_with_compact_request_summary(
     assert response.status_code == 200
     payload = response.get_json()
     assert payload["total"] == 2
+    assert payload["offset"] == 0
     assert [item["task_id"] for item in payload["items"]] == [
         "newer-task",
         "older-task",
@@ -119,6 +161,64 @@ def test_history_endpoint_respects_limit(client, app, monkeypatch):
 
 def test_history_endpoint_rejects_invalid_limit(client):
     response = client.get("/api/v1/risk-analysis/jobs?limit=0")
+
+    assert response.status_code == 422
+    assert response.get_json()["code"] == "INVALID_REQUEST"
+
+
+def test_history_endpoint_supports_offset(client, app, monkeypatch):
+    store = RiskAnalysisJobStore(app.config["RUNTIME_DATA_DIR"])
+    for index in range(4):
+        _write_submission(
+            store,
+            task_id=f"paged-task-{index}",
+            submitted_at=f"2026-08-08T0{index + 1}:00:00+00:00",
+        )
+    monkeypatch.setattr(
+        "app.api.v1.risk_analysis.celery_app.AsyncResult",
+        lambda _: FakeAsyncResult("PENDING"),
+    )
+
+    response = client.get("/api/v1/risk-analysis/jobs?limit=2&offset=2")
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["total"] == 4
+    assert payload["limit"] == 2
+    assert payload["offset"] == 2
+    assert [item["task_id"] for item in payload["items"]] == [
+        "paged-task-1",
+        "paged-task-0",
+    ]
+
+
+def test_history_endpoint_returns_empty_page_when_offset_exceeds_total(
+    client,
+    app,
+    monkeypatch,
+):
+    store = RiskAnalysisJobStore(app.config["RUNTIME_DATA_DIR"])
+    _write_submission(
+        store,
+        task_id="only-task",
+        submitted_at="2026-08-08T01:00:00+00:00",
+    )
+    monkeypatch.setattr(
+        "app.api.v1.risk_analysis.celery_app.AsyncResult",
+        lambda _: FakeAsyncResult("PENDING"),
+    )
+
+    response = client.get("/api/v1/risk-analysis/jobs?limit=20&offset=40")
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["total"] == 1
+    assert payload["offset"] == 40
+    assert payload["items"] == []
+
+
+def test_history_endpoint_rejects_invalid_offset(client):
+    response = client.get("/api/v1/risk-analysis/jobs?offset=-1")
 
     assert response.status_code == 422
     assert response.get_json()["code"] == "INVALID_REQUEST"

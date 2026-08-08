@@ -62,6 +62,7 @@ def test_job_service_persists_task_scoped_raster_and_manifest(tmp_path: Path):
     manifest_path = task_dir / "result.json"
     assert raster_path.is_file()
     assert manifest_path.is_file()
+    assert payload["schema_version"] == 1
     assert payload["status"] == "SUCCEEDED"
     assert payload["algorithm_version"] == "weighted-overlay-v1"
     assert payload["artifacts"]["raster"] == "risk-analysis/task-123/risk.tif"
@@ -127,6 +128,7 @@ def test_failure_manifest_uses_same_task_scoped_contract(tmp_path: Path):
     manifest = runtime_dir / "risk-analysis" / "task-failed" / "result.json"
     assert manifest.is_file()
     assert payload == json.loads(manifest.read_text(encoding="utf-8"))
+    assert payload["schema_version"] == 1
     assert payload["status"] == "FAILED"
     assert payload["error"]["code"] == "ANALYSIS_ERROR"
     assert payload["artifacts"]["manifest"] == "risk-analysis/task-failed/result.json"

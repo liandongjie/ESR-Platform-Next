@@ -39,6 +39,22 @@ export interface RiskAnalysisJobStatus {
   }
 }
 
+export interface RiskAnalysisJobRequestSummary {
+  geometry_type: string | null
+  weights: RiskIndicatorWeightInput[]
+}
+
+export interface RiskAnalysisJobHistoryItem extends RiskAnalysisJobStatus {
+  request_summary: RiskAnalysisJobRequestSummary
+}
+
+export interface RiskAnalysisJobHistoryResponse {
+  items: RiskAnalysisJobHistoryItem[]
+  limit: number
+  offset: number
+  total: number
+}
+
 export interface RasterStatistics {
   valid_pixel_count: number
   minimum: number
@@ -54,6 +70,7 @@ export interface RiskIndicatorResult {
 }
 
 export interface RiskAnalysisResult {
+  schema_version: 1
   task_id: string
   status: 'SUCCEEDED'
   algorithm_version: string
