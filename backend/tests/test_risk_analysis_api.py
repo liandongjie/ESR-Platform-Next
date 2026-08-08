@@ -111,6 +111,87 @@ def test_create_job_returns_202_and_persists_submission(client, app, monkeypatch
     submission = store.read_submission(payload["task_id"])
     assert submission is not None
     assert submission["status"] == "QUEUED"
+    assert submission["request"] == _valid_payload()
+
+
+def test_submission_endpoint_returns_persisted_request(client, monkeypatch):
+    task_id = _create_job(client, monkeypatch)
+
+    response = client.get(f"/api/v1/risk-analysis/jobs/{task_id}/submission")
+
+    assert response.status_code == 200
+    assert response.headers["Cache-Control"] == "no-store"
+    payload = response.get_json()
+    assert payload["task_id"] == task_id
+    assert payload["submitted_at"]
+    assert payload["request"] == _valid_payload()
+    assert "status" not in payload
+
+
+def test_submission_endpoint_returns_404_for_unknown_task(client):
+    response = client.get(
+        "/api/v1/risk-analysis/jobs/not-created-by-api/submission"
+    )
+
+    assert response.status_code == 404
+    assert response.get_json()["code"] == "JOB_NOT_FOUND"
+
+
+def test_submission_endpoint_returns_404_when_known_task_has_no_submission(client, app):
+    task_id = "result-only-task"
+    store = RiskAnalysisJobStore(app.config["RUNTIME_DATA_DIR"])
+    store.write_json(
+        task_id=task_id,
+        filename="result.json",
+        payload=_valid_success_manifest(task_id),
+    )
+
+    response = client.get(f"/api/v1/risk-analysis/jobs/{task_id}/submission")
+
+    assert response.status_code == 404
+    assert response.get_json()["code"] == "SUBMISSION_NOT_FOUND"
+
+
+def test_submission_endpoint_rejects_invalid_envelope(client, app, monkeypatch):
+    task_id = _create_job(client, monkeypatch)
+    store = RiskAnalysisJobStore(app.config["RUNTIME_DATA_DIR"])
+    submission = store.read_submission(task_id)
+    assert submission is not None
+    submission["status"] = "RUNNING"
+    store.write_json(task_id=task_id, filename="submission.json", payload=submission)
+
+    response = client.get(f"/api/v1/risk-analysis/jobs/{task_id}/submission")
+
+    assert response.status_code == 409
+    assert response.get_json()["code"] == "INVALID_SUBMISSION_MANIFEST"
+
+
+def test_submission_endpoint_rejects_task_id_mismatch(client, app, monkeypatch):
+    task_id = _create_job(client, monkeypatch)
+    store = RiskAnalysisJobStore(app.config["RUNTIME_DATA_DIR"])
+    submission = store.read_submission(task_id)
+    assert submission is not None
+    submission["task_id"] = "different-task"
+    store.write_json(task_id=task_id, filename="submission.json", payload=submission)
+
+    response = client.get(f"/api/v1/risk-analysis/jobs/{task_id}/submission")
+
+    assert response.status_code == 409
+    assert response.get_json()["code"] == "INVALID_SUBMISSION_MANIFEST"
+
+
+def test_submission_endpoint_rejects_invalid_request(client, app, monkeypatch):
+    task_id = _create_job(client, monkeypatch)
+    store = RiskAnalysisJobStore(app.config["RUNTIME_DATA_DIR"])
+    submission = store.read_submission(task_id)
+    assert submission is not None
+    submission["request"]["weights"] = []
+    store.write_json(task_id=task_id, filename="submission.json", payload=submission)
+
+    response = client.get(f"/api/v1/risk-analysis/jobs/{task_id}/submission")
+
+    assert response.status_code == 409
+    assert response.get_json()["code"] == "INVALID_SUBMISSION_MANIFEST"
 
 
 def test_create_job_rejects_structurally_invalid_request_without_enqueue(client, monkeypatch):
