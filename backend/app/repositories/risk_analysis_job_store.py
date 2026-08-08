@@ -97,6 +97,26 @@ class RiskAnalysisJobStore:
     def read_result(self, task_id: str) -> dict[str, Any] | None:
         return self.read_json(task_id=task_id, filename="result.json")
 
+    def list_task_ids(self) -> list[str]:
+        """列出已有持久化元数据的任务 ID，忽略临时目录和无关文件。"""
+
+        if not self.root_dir.is_dir():
+            return []
+
+        task_ids: list[str] = []
+        for candidate in self.root_dir.iterdir():
+            if not candidate.is_dir():
+                continue
+
+            task_id = candidate.name
+            if task_id in {".", ".."} or not _TASK_ID_PATTERN.fullmatch(task_id):
+                continue
+
+            # 只暴露真正有提交记录或最终结果的目录，避免把 Worker 临时目录误当成历史任务。
+            if (candidate / "submission.json").is_file() or (candidate / "result.json").is_file():
+                task_ids.append(task_id)
+        return task_ids
+
     def task_exists(self, task_id: str) -> bool:
         """只把有提交记录或最终结果的目录视为已知任务。"""
 
