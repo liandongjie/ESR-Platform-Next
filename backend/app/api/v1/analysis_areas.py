@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, current_app, jsonify, request
 from pydantic import ValidationError
 
 from app.api.validation import validation_details
@@ -20,7 +20,11 @@ def create_analysis_area_buffer():
         return jsonify({"code": "INVALID_JSON", "message": "请求体必须是 JSON object"}), 400
 
     try:
-        buffer_request = AnalysisAreaBufferRequest.model_validate(raw_payload)
+        # 与 /meta/capabilities 共用 MAX_BUFFER_METERS，避免前端展示和后端校验出现双重标准。
+        buffer_request = AnalysisAreaBufferRequest.model_validate(
+            raw_payload,
+            context={"max_buffer_meters": current_app.config["MAX_BUFFER_METERS"]},
+        )
     except ValidationError as exc:
         return (
             jsonify(

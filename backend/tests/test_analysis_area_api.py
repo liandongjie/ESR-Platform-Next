@@ -51,3 +51,18 @@ def test_buffer_endpoint_rejects_excessive_distance_before_gis_work(client):
     body = response.get_json()
     assert body["code"] == "INVALID_REQUEST"
     assert any(item["field"] == "distance_m" for item in body["details"])
+
+
+def test_buffer_endpoint_uses_configured_distance_limit(client, app):
+    """修改服务配置后，Buffer API 必须立即使用同一个上限。"""
+    app.config["MAX_BUFFER_METERS"] = 2500
+
+    response = client.post("/api/v1/analysis-areas/buffer", json=_point_payload(3000.0))
+
+    assert response.status_code == 422
+    body = response.get_json()
+    assert body["code"] == "INVALID_REQUEST"
+    assert any(
+        item["field"] == "distance_m" and "2500" in item["message"]
+        for item in body["details"]
+    )
