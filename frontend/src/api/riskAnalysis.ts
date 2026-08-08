@@ -1,11 +1,13 @@
 import { http } from '@/api/http'
 import { parseRiskAnalysisResult } from '@/validation/riskAnalysisResult'
+import { parseRiskAnalysisSubmission } from '@/validation/riskAnalysisSubmission'
 import type {
   RiskAnalysisJobCreated,
   RiskAnalysisJobRequest,
   RiskAnalysisJobHistoryResponse,
   RiskAnalysisJobStatus,
   RiskAnalysisResult,
+  RiskAnalysisSubmissionDetail,
 } from '@/types/riskAnalysis'
 
 const DEFAULT_RETRY_AFTER_MS = 2000
@@ -47,6 +49,15 @@ export async function getRiskAnalysisJob(taskId: string): Promise<RiskAnalysisJo
     `/risk-analysis/jobs/${encodeURIComponent(taskId)}`,
   )
   return response.data
+}
+
+export async function getRiskAnalysisSubmission(
+  taskId: string,
+): Promise<RiskAnalysisSubmissionDetail> {
+  const response = await http.get<unknown>(
+    `/risk-analysis/jobs/${encodeURIComponent(taskId)}/submission`,
+  )
+  return parseRiskAnalysisSubmission(response.data, taskId)
 }
 
 export async function getRiskAnalysisResult(taskId: string): Promise<RiskAnalysisResult> {
