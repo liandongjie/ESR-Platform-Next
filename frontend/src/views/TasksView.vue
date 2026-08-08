@@ -67,6 +67,10 @@ function openTask(item: RiskAnalysisJobHistoryItem) {
   void taskHistoryStore.openTask(item)
 }
 
+function changePage(page: number) {
+  void taskHistoryStore.changePage(page)
+}
+
 onMounted(() => {
   // 页面每次进入都从服务端重新读取任务；浏览器 F5 后不会依赖旧 Pinia 内存恢复历史。
   void taskHistoryStore.initialize()
@@ -174,6 +178,20 @@ onBeforeUnmount(() => {
           </template>
         </el-table-column>
       </el-table>
+
+      <div
+        v-if="taskHistoryStore.total > taskHistoryStore.limit"
+        class="pagination-row"
+      >
+        <el-pagination
+          background
+          layout="prev, pager, next, total"
+          :current-page="taskHistoryStore.page"
+          :page-size="taskHistoryStore.limit"
+          :total="taskHistoryStore.total"
+          @current-change="changePage"
+        />
+      </div>
     </section>
 
     <el-drawer v-model="drawerVisible" title="任务详情" size="420px">
@@ -318,6 +336,12 @@ onBeforeUnmount(() => {
 .task-id {
   font-size: 11px;
   word-break: break-all;
+}
+
+.pagination-row {
+  display: flex;
+  justify-content: flex-end;
+  padding-top: 16px;
 }
 
 .detail-block,

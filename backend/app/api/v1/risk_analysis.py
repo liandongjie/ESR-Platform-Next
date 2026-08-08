@@ -208,10 +208,15 @@ def list_risk_analysis_jobs():
     """按提交时间倒序返回最近风险分析任务，不在列表接口返回完整研究区 geometry。"""
 
     raw_limit = request.args.get("limit", "20")
+    raw_offset = request.args.get("offset", "0")
     try:
         limit = int(raw_limit)
     except (TypeError, ValueError):
         limit = 0
+    try:
+        offset = int(raw_offset)
+    except (TypeError, ValueError):
+        offset = -1
 
     if not 1 <= limit <= 100:
         return (
@@ -219,6 +224,16 @@ def list_risk_analysis_jobs():
                 {
                     "code": "INVALID_REQUEST",
                     "message": "limit 必须是 1 到 100 的整数",
+                }
+            ),
+            422,
+        )
+    if offset < 0:
+        return (
+            jsonify(
+                {
+                    "code": "INVALID_REQUEST",
+                    "message": "offset 必须是大于等于 0 的整数",
                 }
             ),
             422,
@@ -239,7 +254,8 @@ def list_risk_analysis_jobs():
     records.sort(key=lambda item: (item[0], item[1]), reverse=True)
 
     items: list[dict[str, Any]] = []
-    for _, task_id, submission in records[:limit]:
+    # offset/limit 只负责列表窗口切片，total 始终表示完整任务数，前端据此计算总页数。
+    for _, task_id, submission in records[offset : offset + limit]:
         try:
             status = _job_status_payload(store, task_id)
         except TaskStatusBackendUnavailable as exc:
@@ -267,7 +283,14 @@ def list_risk_analysis_jobs():
         }
         items.append(status)
 
-    response = jsonify({"items": items, "limit": limit, "total": len(records)})
+    response = jsonify(
+        {
+            "items": items,
+            "limit": limit,
+            "offset": offset,
+            "total": len(records),
+        }
+    )
     response.headers["Cache-Control"] = "no-store"
     return response
 

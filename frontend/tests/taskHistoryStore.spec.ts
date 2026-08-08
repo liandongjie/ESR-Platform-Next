@@ -40,6 +40,7 @@ function historyResponse(
       },
     ],
     limit: 20,
+    offset: 0,
     total: 1,
   }
 }
@@ -90,9 +91,39 @@ describe('task history store', () => {
     const store = useTaskHistoryStore()
     await store.initialize()
 
-    expect(mockedListJobs).toHaveBeenCalledWith(20)
+    expect(mockedListJobs).toHaveBeenCalledWith(20, 0)
     expect(store.items[0]?.task_id).toBe('task-1')
     expect(store.total).toBe(1)
+  })
+
+  it('loads the second page with an offset and reuses the same history API', async () => {
+    const firstPage = {
+      ...historyResponse(),
+      total: 45,
+    }
+    const secondPage = {
+      ...historyResponse(),
+      items: [
+        {
+          ...historyResponse().items[0]!,
+          task_id: 'task-page-2',
+        },
+      ],
+      offset: 20,
+      total: 45,
+    }
+    mockedListJobs
+      .mockResolvedValueOnce(firstPage)
+      .mockResolvedValueOnce(secondPage)
+
+    const store = useTaskHistoryStore()
+    await store.initialize()
+    await store.changePage(2)
+
+    expect(mockedListJobs).toHaveBeenNthCalledWith(2, 20, 20)
+    expect(store.page).toBe(2)
+    expect(store.offset).toBe(20)
+    expect(store.items[0]?.task_id).toBe('task-page-2')
   })
 
   it('keeps refreshing while a task is active and stops after it reaches a terminal state', async () => {
@@ -126,6 +157,8 @@ describe('task history store', () => {
 
     expect(reloadedStore.items[0]?.task_id).toBe('task-1')
     expect(reloadedStore.items[0]?.status).toBe('RUNNING')
+    expect(reloadedStore.page).toBe(1)
+    expect(reloadedStore.offset).toBe(0)
     expect(reloadedStore.polling).toBe(true)
   })
 

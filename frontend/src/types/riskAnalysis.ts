@@ -51,6 +51,7 @@ export interface RiskAnalysisJobHistoryItem extends RiskAnalysisJobStatus {
 export interface RiskAnalysisJobHistoryResponse {
   items: RiskAnalysisJobHistoryItem[]
   limit: number
+  offset: number
   total: number
 }
 

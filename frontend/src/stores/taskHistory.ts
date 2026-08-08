@@ -15,6 +15,7 @@ interface TaskHistoryState {
   items: RiskAnalysisJobHistoryItem[]
   total: number
   limit: number
+  page: number
   loading: boolean
   refreshing: boolean
   error: string | null
@@ -41,6 +42,7 @@ export const useTaskHistoryStore = defineStore('taskHistory', {
     items: [],
     total: 0,
     limit: 20,
+    page: 1,
     loading: false,
     refreshing: false,
     error: null,
@@ -52,6 +54,7 @@ export const useTaskHistoryStore = defineStore('taskHistory', {
     detailError: null,
   }),
   getters: {
+    offset: (state): number => (state.page - 1) * state.limit,
     hasRefreshableTasks: (state): boolean =>
       state.items.some((item) => needsRefresh(item.status, item.result_available)),
     selectedTask: (state): RiskAnalysisJobHistoryItem | null =>
@@ -67,7 +70,7 @@ export const useTaskHistoryStore = defineStore('taskHistory', {
       this.error = null
 
       try {
-        const history = await listRiskAnalysisJobs(this.limit)
+        const history = await listRiskAnalysisJobs(this.limit, this.offset)
         this.items = history.items
         this.total = history.total
         return true
@@ -86,6 +89,20 @@ export const useTaskHistoryStore = defineStore('taskHistory', {
       }
     },
     async refreshNow() {
+      const loaded = await this.loadJobs(false)
+      if (loaded && this.hasRefreshableTasks) {
+        this.startAutoRefresh()
+      }
+    },
+    async changePage(page: number) {
+      const lastPage = Math.max(1, Math.ceil(this.total / this.limit))
+      const nextPage = Math.min(Math.max(1, page), lastPage)
+      if (nextPage === this.page) return
+
+      // 切页前让旧轮询版本失效，避免上一页的迟到响应覆盖新页数据。
+      this.stopAutoRefresh()
+      this.page = nextPage
+
       const loaded = await this.loadJobs(false)
       if (loaded && this.hasRefreshableTasks) {
         this.startAutoRefresh()

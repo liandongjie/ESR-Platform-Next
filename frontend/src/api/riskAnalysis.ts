@@ -34,9 +34,10 @@ export async function createRiskAnalysisJob(
 
 export async function listRiskAnalysisJobs(
   limit = 20,
+  offset = 0,
 ): Promise<RiskAnalysisJobHistoryResponse> {
   const response = await http.get<RiskAnalysisJobHistoryResponse>('/risk-analysis/jobs', {
-    params: { limit },
+    params: { limit, offset },
   })
   return response.data
 }

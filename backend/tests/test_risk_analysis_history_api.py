@@ -126,6 +126,7 @@ def test_history_endpoint_returns_newest_first_with_compact_request_summary(
     assert response.status_code == 200
     payload = response.get_json()
     assert payload["total"] == 2
+    assert payload["offset"] == 0
     assert [item["task_id"] for item in payload["items"]] == [
         "newer-task",
         "older-task",
@@ -160,6 +161,64 @@ def test_history_endpoint_respects_limit(client, app, monkeypatch):
 
 def test_history_endpoint_rejects_invalid_limit(client):
     response = client.get("/api/v1/risk-analysis/jobs?limit=0")
+
+    assert response.status_code == 422
+    assert response.get_json()["code"] == "INVALID_REQUEST"
+
+
+def test_history_endpoint_supports_offset(client, app, monkeypatch):
+    store = RiskAnalysisJobStore(app.config["RUNTIME_DATA_DIR"])
+    for index in range(4):
+        _write_submission(
+            store,
+            task_id=f"paged-task-{index}",
+            submitted_at=f"2026-08-08T0{index + 1}:00:00+00:00",
+        )
+    monkeypatch.setattr(
+        "app.api.v1.risk_analysis.celery_app.AsyncResult",
+        lambda _: FakeAsyncResult("PENDING"),
+    )
+
+    response = client.get("/api/v1/risk-analysis/jobs?limit=2&offset=2")
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["total"] == 4
+    assert payload["limit"] == 2
+    assert payload["offset"] == 2
+    assert [item["task_id"] for item in payload["items"]] == [
+        "paged-task-1",
+        "paged-task-0",
+    ]
+
+
+def test_history_endpoint_returns_empty_page_when_offset_exceeds_total(
+    client,
+    app,
+    monkeypatch,
+):
+    store = RiskAnalysisJobStore(app.config["RUNTIME_DATA_DIR"])
+    _write_submission(
+        store,
+        task_id="only-task",
+        submitted_at="2026-08-08T01:00:00+00:00",
+    )
+    monkeypatch.setattr(
+        "app.api.v1.risk_analysis.celery_app.AsyncResult",
+        lambda _: FakeAsyncResult("PENDING"),
+    )
+
+    response = client.get("/api/v1/risk-analysis/jobs?limit=20&offset=40")
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["total"] == 1
+    assert payload["offset"] == 40
+    assert payload["items"] == []
+
+
+def test_history_endpoint_rejects_invalid_offset(client):
+    response = client.get("/api/v1/risk-analysis/jobs?offset=-1")
 
     assert response.status_code == 422
     assert response.get_json()["code"] == "INVALID_REQUEST"
