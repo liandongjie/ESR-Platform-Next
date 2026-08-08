@@ -9,7 +9,7 @@ import {
 } from '@/api/riskAnalysis'
 import { useAnalysisStore } from '@/stores/analysis'
 import type { AnalysisAreaBufferResponse } from '@/types/analysisArea'
-import type { RiskAnalysisResult } from '@/types/riskAnalysis'
+import type { RiskAnalysisJobStatus, RiskAnalysisResult } from '@/types/riskAnalysis'
 
 vi.mock('@/api/analysisAreas', () => ({
   createAnalysisAreaBuffer: vi.fn(),
@@ -25,6 +25,7 @@ const mockedCreateBuffer = vi.mocked(createAnalysisAreaBuffer)
 const mockedCreateJob = vi.mocked(createRiskAnalysisJob)
 const mockedGetJob = vi.mocked(getRiskAnalysisJob)
 const mockedGetResult = vi.mocked(getRiskAnalysisResult)
+const workspaceTaskStorageKey = 'esr:risk-analysis:workspace-task-id'
 
 function makeBufferResponse(distanceM = 3000): AnalysisAreaBufferResponse {
   return {
@@ -109,6 +110,7 @@ describe('analysis store', () => {
     mockedCreateJob.mockReset()
     mockedGetJob.mockReset()
     mockedGetResult.mockReset()
+    window.sessionStorage.clear()
   })
 
   afterEach(() => {
@@ -356,5 +358,160 @@ describe('analysis store', () => {
     expect(store.result?.task_id).toBe('task-1')
     expect(store.analysisLocked).toBe(false)
     expect(store.canResumePolling).toBe(false)
+  })
+
+  it('replaces the old workspace task pointer only after a new task is created', async () => {
+    vi.useFakeTimers()
+    const store = useAnalysisStore()
+    await prepareBuffer(store)
+    window.sessionStorage.setItem(workspaceTaskStorageKey, 'old-task')
+
+    let resolveCreate:
+      | ((value: Awaited<ReturnType<typeof createRiskAnalysisJob>>) => void)
+      | undefined
+    mockedCreateJob.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveCreate = resolve
+        }),
+    )
+
+    const submission = store.submitRiskAnalysis()
+    expect(window.sessionStorage.getItem(workspaceTaskStorageKey)).toBeNull()
+
+    resolveCreate?.({
+      job: {
+        task_id: 'task-2',
+        status: 'QUEUED',
+        submitted_at: '2026-08-08T12:00:00Z',
+        status_url: '/api/v1/risk-analysis/jobs/task-2',
+        result_url: '/api/v1/risk-analysis/jobs/task-2/result',
+      },
+      retryAfterMs: 2000,
+    })
+    await submission
+
+    expect(window.sessionStorage.getItem(workspaceTaskStorageKey)).toBe('task-2')
+    store.resetRiskAnalysis()
+    expect(window.sessionStorage.getItem(workspaceTaskStorageKey)).toBeNull()
+  })
+
+  it('restores a running task once and reuses the existing polling loop', async () => {
+    vi.useFakeTimers()
+    window.sessionStorage.setItem(workspaceTaskStorageKey, 'task-1')
+    const store = useAnalysisStore()
+
+    mockedGetJob
+      .mockResolvedValueOnce({
+        task_id: 'task-1',
+        status: 'RUNNING',
+        stage: 'ANALYZING',
+        progress: 35,
+        result_available: false,
+        submitted_at: '2026-08-07T12:00:00Z',
+      })
+      .mockResolvedValueOnce({
+        task_id: 'task-1',
+        status: 'SUCCEEDED',
+        stage: 'COMPLETED',
+        progress: 100,
+        result_available: true,
+        submitted_at: '2026-08-07T12:00:00Z',
+      })
+    mockedGetResult.mockResolvedValueOnce(makeRiskResult())
+
+    await store.restoreRiskAnalysis()
+
+    expect(store.sourceGeometryWgs84).toBeNull()
+    expect(store.job?.task_id).toBe('task-1')
+    expect(store.jobStatus?.status).toBe('RUNNING')
+    expect(store.polling).toBe(true)
+    expect(mockedGetJob).toHaveBeenCalledTimes(1)
+
+    await store.restoreRiskAnalysis()
+    expect(mockedGetJob).toHaveBeenCalledTimes(1)
+
+    await vi.advanceTimersByTimeAsync(2000)
+
+    expect(mockedGetJob).toHaveBeenCalledTimes(2)
+    expect(mockedGetResult).toHaveBeenCalledWith('task-1')
+    expect(store.result?.task_id).toBe('task-1')
+    expect(store.polling).toBe(false)
+  })
+
+  it('restores an already completed task without starting polling', async () => {
+    window.sessionStorage.setItem(workspaceTaskStorageKey, 'task-1')
+    const store = useAnalysisStore()
+    mockedGetJob.mockResolvedValueOnce({
+      task_id: 'task-1',
+      status: 'SUCCEEDED',
+      stage: 'COMPLETED',
+      progress: 100,
+      result_available: true,
+      submitted_at: '2026-08-07T12:00:00Z',
+    })
+    mockedGetResult.mockResolvedValueOnce(makeRiskResult())
+
+    await store.restoreRiskAnalysis()
+
+    expect(mockedGetResult).toHaveBeenCalledWith('task-1')
+    expect(store.result?.task_id).toBe('task-1')
+    expect(store.polling).toBe(false)
+  })
+
+  it.each([
+    ['FAILED', '服务端分析失败'],
+    ['CANCELED', '风险分析任务已取消'],
+  ] as const)('restores the %s terminal state and error', async (status, expectedError) => {
+    window.sessionStorage.setItem(workspaceTaskStorageKey, 'task-1')
+    const store = useAnalysisStore()
+    const jobStatus: RiskAnalysisJobStatus = {
+      task_id: 'task-1',
+      status,
+      stage: status,
+      progress: status === 'FAILED' ? 100 : null,
+      result_available: false,
+      submitted_at: '2026-08-07T12:00:00Z',
+      ...(status === 'FAILED' ? { error: { message: expectedError } } : {}),
+    }
+    mockedGetJob.mockResolvedValueOnce(jobStatus)
+
+    await store.restoreRiskAnalysis()
+
+    expect(store.jobStatus?.status).toBe(status)
+    expect(store.taskError).toBe(expectedError)
+    expect(store.polling).toBe(false)
+    expect(mockedGetResult).not.toHaveBeenCalled()
+  })
+
+  it('ignores a late restore response after the workflow is reset', async () => {
+    window.sessionStorage.setItem(workspaceTaskStorageKey, 'task-1')
+    const store = useAnalysisStore()
+    let resolveStatus: ((value: RiskAnalysisJobStatus) => void) | undefined
+    mockedGetJob.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveStatus = resolve
+        }),
+    )
+
+    const restoration = store.restoreRiskAnalysis()
+    expect(store.job?.task_id).toBe('task-1')
+
+    store.resetRiskAnalysis()
+    resolveStatus?.({
+      task_id: 'task-1',
+      status: 'RUNNING',
+      stage: 'ANALYZING',
+      progress: 40,
+      result_available: false,
+      submitted_at: '2026-08-07T12:00:00Z',
+    })
+    await restoration
+
+    expect(store.job).toBeNull()
+    expect(store.jobStatus).toBeNull()
+    expect(store.polling).toBe(false)
+    expect(window.sessionStorage.getItem(workspaceTaskStorageKey)).toBeNull()
   })
 })
