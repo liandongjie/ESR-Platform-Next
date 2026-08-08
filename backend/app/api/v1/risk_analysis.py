@@ -9,7 +9,7 @@ from pydantic import ValidationError
 from app.api.validation import validation_details
 from app.extensions import celery as celery_app
 from app.repositories.risk_analysis_job_store import RiskAnalysisJobStore
-from app.schemas.risk_analysis import RiskAnalysisJobRequest
+from app.schemas.risk_analysis import RiskAnalysisJobRequest, RiskAnalysisSuccessResult
 from app.services.risk_analysis_jobs import write_failure_manifest
 
 risk_analysis_bp = Blueprint("risk_analysis", __name__)
@@ -43,6 +43,24 @@ def _final_status_payload(
     result: dict[str, Any],
 ) -> dict[str, Any]:
     status = str(result.get("status", "FAILED"))
+    invalid_result_error: dict[str, str] | None = None
+
+    if status == "SUCCEEDED":
+        try:
+            RiskAnalysisSuccessResult.model_validate(result)
+        except ValidationError as exc:
+            # 文件虽然声称成功，但缺少结果 Contract 必需字段时业务上已经不可消费。
+            current_app.logger.warning(
+                "Invalid risk-analysis result manifest for task %s: %s",
+                task_id,
+                exc,
+            )
+            status = "FAILED"
+            invalid_result_error = {
+                "code": "INVALID_RESULT_MANIFEST",
+                "message": "风险分析结果文件格式不完整或已损坏",
+            }
+
     payload: dict[str, Any] = {
         "task_id": task_id,
         "status": status,
@@ -51,7 +69,9 @@ def _final_status_payload(
         "result_available": status == "SUCCEEDED",
         "submitted_at": submission.get("submitted_at") if submission else None,
     }
-    if status == "FAILED":
+    if invalid_result_error is not None:
+        payload["error"] = invalid_result_error
+    elif status == "FAILED":
         payload["error"] = result.get("error")
     return payload
 
@@ -284,10 +304,34 @@ def get_risk_analysis_result(task_id: str):
 
     result = store.read_result(task_id)
     if result is not None:
+        if result.get("status") == "SUCCEEDED":
+            try:
+                # API 边界必须验证磁盘上的持久化 Contract，不能把 status=SUCCEEDED 等同于结果完整。
+                success_result = RiskAnalysisSuccessResult.model_validate(result)
+            except ValidationError as exc:
+                current_app.logger.warning(
+                    "Invalid risk-analysis result manifest for task %s: %s",
+                    task_id,
+                    exc,
+                )
+                response = jsonify(
+                    {
+                        "code": "INVALID_RESULT_MANIFEST",
+                        "message": "风险分析结果文件格式不完整或已损坏",
+                        "task_id": task_id,
+                        "status": "FAILED",
+                    }
+                )
+                response.headers["Cache-Control"] = "no-store"
+                return response, 409
+
+            # 旧的完整结果即使没有 schema_version，也统一规范成当前 v1 响应。
+            response = jsonify(success_result.model_dump(mode="json"))
+            response.headers["Cache-Control"] = "no-store"
+            return response, 200
+
         response = jsonify(result)
         response.headers["Cache-Control"] = "no-store"
-        if result.get("status") == "SUCCEEDED":
-            return response, 200
         return response, 409
 
     try:

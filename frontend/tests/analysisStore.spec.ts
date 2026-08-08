@@ -57,6 +57,7 @@ function makeBufferResponse(distanceM = 3000): AnalysisAreaBufferResponse {
 
 function makeRiskResult(): RiskAnalysisResult {
   return {
+    schema_version: 1,
     task_id: 'task-1',
     status: 'SUCCEEDED',
     algorithm_version: 'v1',

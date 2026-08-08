@@ -76,6 +76,7 @@ class RiskAnalysisJobService:
             temporary_raster.unlink(missing_ok=True)
 
         payload: dict[str, Any] = {
+            "schema_version": 1,
             "task_id": task_id,
             "status": "SUCCEEDED",
             "algorithm_version": _ALGORITHM_VERSION,
@@ -131,6 +132,7 @@ def write_failure_manifest(
     task_dir = store.task_directory(task_id, create=True)
     manifest_path = task_dir / "result.json"
     payload = {
+        "schema_version": 1,
         "task_id": task_id,
         "status": "FAILED",
         "error": {"code": error_code, "message": message},

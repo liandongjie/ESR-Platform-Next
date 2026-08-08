@@ -1,7 +1,9 @@
 import { http } from '@/api/http'
+import { parseRiskAnalysisResult } from '@/validation/riskAnalysisResult'
 import type {
   RiskAnalysisJobCreated,
   RiskAnalysisJobRequest,
+  RiskAnalysisJobHistoryResponse,
   RiskAnalysisJobStatus,
   RiskAnalysisResult,
 } from '@/types/riskAnalysis'
@@ -30,6 +32,15 @@ export async function createRiskAnalysisJob(
   }
 }
 
+export async function listRiskAnalysisJobs(
+  limit = 20,
+): Promise<RiskAnalysisJobHistoryResponse> {
+  const response = await http.get<RiskAnalysisJobHistoryResponse>('/risk-analysis/jobs', {
+    params: { limit },
+  })
+  return response.data
+}
+
 export async function getRiskAnalysisJob(taskId: string): Promise<RiskAnalysisJobStatus> {
   const response = await http.get<RiskAnalysisJobStatus>(
     `/risk-analysis/jobs/${encodeURIComponent(taskId)}`,
@@ -38,11 +49,12 @@ export async function getRiskAnalysisJob(taskId: string): Promise<RiskAnalysisJo
 }
 
 export async function getRiskAnalysisResult(taskId: string): Promise<RiskAnalysisResult> {
-  const response = await http.get<RiskAnalysisResult>(
+  const response = await http.get<unknown>(
     `/risk-analysis/jobs/${encodeURIComponent(taskId)}/result`,
   )
   if (response.status !== 200) {
     throw new Error('风险分析结果尚未就绪')
   }
-  return response.data
+  // TypeScript 泛型不会校验运行时 JSON；只有通过结构检查的数据才能进入 Pinia 和模板。
+  return parseRiskAnalysisResult(response.data)
 }

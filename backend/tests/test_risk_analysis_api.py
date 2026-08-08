@@ -33,6 +33,48 @@ def _valid_payload() -> dict[str, Any]:
     }
 
 
+def _valid_success_manifest(task_id: str) -> dict[str, Any]:
+    """模拟 schema_version 引入前已经生成、但字段完整的真实历史结果。"""
+
+    return {
+        "task_id": task_id,
+        "status": "SUCCEEDED",
+        "algorithm_version": "weighted-overlay-v1",
+        "geometry": {
+            "type": "Polygon",
+            "bounds": [118.885, 32.085, 118.915, 32.115],
+        },
+        "grid": {
+            "crs": "EPSG:4326",
+            "shape": [4, 4],
+            "nodata": -9999.0,
+        },
+        "statistics": {
+            "valid_pixel_count": 9,
+            "minimum": 0.36,
+            "maximum": 0.41,
+            "mean": 0.37,
+        },
+        "indicators": [
+            {
+                "code": "PM25",
+                "name": "细颗粒物 (PM2.5)",
+                "weight_percent": 100.0,
+                "statistics": {
+                    "valid_pixel_count": 9,
+                    "minimum": 0.36,
+                    "maximum": 0.41,
+                    "mean": 0.37,
+                },
+            }
+        ],
+        "artifacts": {
+            "raster": f"risk-analysis/{task_id}/risk.tif",
+            "manifest": f"risk-analysis/{task_id}/result.json",
+        },
+    }
+
+
 def _create_job(client, monkeypatch) -> str:
     monkeypatch.setattr(
         "app.api.v1.risk_analysis.celery_app.send_task",
@@ -159,6 +201,25 @@ def test_result_endpoint_returns_202_before_final_manifest(client, monkeypatch):
 def test_result_endpoint_returns_success_manifest(client, app, monkeypatch):
     task_id = _create_job(client, monkeypatch)
     store = RiskAnalysisJobStore(app.config["RUNTIME_DATA_DIR"])
+    # 完整历史结果即使没有 schema_version，也应该按 v1 继续兼容。
+    store.write_json(
+        task_id=task_id,
+        filename="result.json",
+        payload=_valid_success_manifest(task_id),
+    )
+
+    response = client.get(f"/api/v1/risk-analysis/jobs/{task_id}/result")
+
+    assert response.status_code == 200
+    assert response.get_json()["schema_version"] == 1
+    assert response.get_json()["status"] == "SUCCEEDED"
+    assert response.get_json()["statistics"]["valid_pixel_count"] == 9
+
+
+def test_result_endpoint_rejects_incomplete_success_manifest(client, app, monkeypatch):
+    task_id = _create_job(client, monkeypatch)
+    store = RiskAnalysisJobStore(app.config["RUNTIME_DATA_DIR"])
+    # 复现早期 pytest 污染真实 runtime 时留下的残缺 SUCCEEDED result.json。
     store.write_json(
         task_id=task_id,
         filename="result.json",
@@ -169,11 +230,15 @@ def test_result_endpoint_returns_success_manifest(client, app, monkeypatch):
         },
     )
 
-    response = client.get(f"/api/v1/risk-analysis/jobs/{task_id}/result")
+    result_response = client.get(f"/api/v1/risk-analysis/jobs/{task_id}/result")
+    status_response = client.get(f"/api/v1/risk-analysis/jobs/{task_id}")
 
-    assert response.status_code == 200
-    assert response.get_json()["status"] == "SUCCEEDED"
-    assert response.get_json()["statistics"]["valid_pixel_count"] == 9
+    assert result_response.status_code == 409
+    assert result_response.get_json()["code"] == "INVALID_RESULT_MANIFEST"
+    assert status_response.status_code == 200
+    assert status_response.get_json()["status"] == "FAILED"
+    assert status_response.get_json()["result_available"] is False
+    assert status_response.get_json()["error"]["code"] == "INVALID_RESULT_MANIFEST"
 
 
 def test_result_endpoint_returns_409_for_failed_job(client, app, monkeypatch):
