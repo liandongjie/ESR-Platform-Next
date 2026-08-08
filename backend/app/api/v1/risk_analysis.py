@@ -183,6 +183,75 @@ def create_risk_analysis_job():
     return response
 
 
+@risk_analysis_bp.get("/jobs")
+def list_risk_analysis_jobs():
+    """按提交时间倒序返回最近风险分析任务，不在列表接口返回完整研究区 geometry。"""
+
+    raw_limit = request.args.get("limit", "20")
+    try:
+        limit = int(raw_limit)
+    except (TypeError, ValueError):
+        limit = 0
+
+    if not 1 <= limit <= 100:
+        return (
+            jsonify(
+                {
+                    "code": "INVALID_REQUEST",
+                    "message": "limit 必须是 1 到 100 的整数",
+                }
+            ),
+            422,
+        )
+
+    store = _job_store()
+    records: list[tuple[str, str, dict[str, Any] | None]] = []
+    for task_id in store.list_task_ids():
+        submission = store.read_submission(task_id)
+        submitted_at = ""
+        if submission is not None:
+            raw_submitted_at = submission.get("submitted_at")
+            if isinstance(raw_submitted_at, str):
+                submitted_at = raw_submitted_at
+        records.append((submitted_at, task_id, submission))
+
+    # submitted_at 由服务端统一写成 UTC ISO 8601，可直接按字典序排序；缺失时间的旧任务排在末尾。
+    records.sort(key=lambda item: (item[0], item[1]), reverse=True)
+
+    items: list[dict[str, Any]] = []
+    for _, task_id, submission in records[:limit]:
+        try:
+            status = _job_status_payload(store, task_id)
+        except TaskStatusBackendUnavailable as exc:
+            current_app.logger.warning("Risk-analysis history status unavailable: %s", exc)
+            return jsonify({"code": "STATUS_UNAVAILABLE", "message": str(exc)}), 503
+
+        if status is None:  # pragma: no cover - 目录扫描与读取之间的极小竞态保护
+            continue
+
+        request_payload = submission.get("request") if submission else None
+        geometry_type = None
+        weights: list[dict[str, Any]] = []
+        if isinstance(request_payload, dict):
+            geometry = request_payload.get("geometry")
+            if isinstance(geometry, dict) and isinstance(geometry.get("type"), str):
+                geometry_type = geometry["type"]
+            raw_weights = request_payload.get("weights")
+            if isinstance(raw_weights, list):
+                weights = [item for item in raw_weights if isinstance(item, dict)]
+
+        # 历史列表只返回轻量摘要，避免复杂 Polygon 坐标在任务列表中反复传输。
+        status["request_summary"] = {
+            "geometry_type": geometry_type,
+            "weights": weights,
+        }
+        items.append(status)
+
+    response = jsonify({"items": items, "limit": limit, "total": len(records)})
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
 @risk_analysis_bp.get("/jobs/<task_id>")
 def get_risk_analysis_job(task_id: str):
     """查询稳定业务状态；未知 task_id 返回 404，而不是误报为 Celery PENDING。"""
