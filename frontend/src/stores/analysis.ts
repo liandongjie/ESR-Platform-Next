@@ -13,7 +13,6 @@ import type {
   PointGeometry,
 } from '@/types/analysisArea'
 import type {
-  RiskAnalysisJobCreated,
   RiskAnalysisJobStatus,
   RiskAnalysisResult,
   RiskIndicatorWeightInput,
@@ -21,6 +20,11 @@ import type {
 
 const MAX_CONSECUTIVE_POLL_FAILURES = 3
 const DEFAULT_POLL_INTERVAL_MS = 2000
+const WORKSPACE_TASK_ID_STORAGE_KEY = 'esr:risk-analysis:workspace-task-id'
+
+interface RiskAnalysisJobReference {
+  task_id: string
+}
 
 interface AnalysisState {
   sourceGeometryWgs84: PointGeometry | null
@@ -30,7 +34,7 @@ interface AnalysisState {
   bufferError: string | null
   bufferRequestRevision: number
   weights: RiskIndicatorWeightInput[]
-  job: RiskAnalysisJobCreated | null
+  job: RiskAnalysisJobReference | null
   jobStatus: RiskAnalysisJobStatus | null
   result: RiskAnalysisResult | null
   jobSubmitting: boolean
@@ -42,6 +46,31 @@ interface AnalysisState {
 
 function wait(milliseconds: number): Promise<void> {
   return new Promise((resolve) => window.setTimeout(resolve, milliseconds))
+}
+
+function readWorkspaceTaskId(): string | null {
+  try {
+    const taskId = window.sessionStorage.getItem(WORKSPACE_TASK_ID_STORAGE_KEY)?.trim()
+    return taskId || null
+  } catch {
+    return null
+  }
+}
+
+function saveWorkspaceTaskId(taskId: string): void {
+  try {
+    window.sessionStorage.setItem(WORKSPACE_TASK_ID_STORAGE_KEY, taskId)
+  } catch {
+    // sessionStorage 不可用时仅失去同标签页 F5 恢复能力，不影响任务提交和轮询。
+  }
+}
+
+function clearWorkspaceTaskId(): void {
+  try {
+    window.sessionStorage.removeItem(WORKSPACE_TASK_ID_STORAGE_KEY)
+  } catch {
+    // 与写入失败相同，存储不可用不应阻断正常分析流程。
+  }
 }
 
 export const useAnalysisStore = defineStore('analysis', {
@@ -85,6 +114,7 @@ export const useAnalysisStore = defineStore('analysis', {
     resetRiskAnalysis() {
       // 不把 Timer 放进 Pinia；递增版本号即可让旧轮询在下一次唤醒时自行退出。
       this.jobRevision += 1
+      clearWorkspaceTaskId()
       this.job = null
       this.jobStatus = null
       this.result = null
@@ -138,6 +168,48 @@ export const useAnalysisStore = defineStore('analysis', {
       this.polling = true
       this.taskError = null
       void this.pollRiskAnalysis(revision, this.pollIntervalMs)
+    },
+    async restoreRiskAnalysis() {
+      // Store 已经持有任务时说明只是路由重新挂载，不能重复查询或启动第二个轮询。
+      if (this.job || this.jobSubmitting || this.polling) return
+
+      const taskId = readWorkspaceTaskId()
+      if (!taskId) return
+
+      const revision = ++this.jobRevision
+      this.job = { task_id: taskId }
+      this.jobStatus = null
+      this.result = null
+      this.jobSubmitting = false
+      this.polling = false
+      this.taskError = null
+      this.pollIntervalMs = DEFAULT_POLL_INTERVAL_MS
+
+      try {
+        const status = await getRiskAnalysisJob(taskId)
+        if (revision !== this.jobRevision) return
+
+        this.jobStatus = status
+        if (status.status === 'FAILED' || status.status === 'CANCELED') {
+          this.taskError =
+            status.error?.message || `风险分析任务${status.status === 'FAILED' ? '失败' : '已取消'}`
+          return
+        }
+
+        if (status.status === 'SUCCEEDED' && status.result_available) {
+          const result = await getRiskAnalysisResult(taskId)
+          if (revision !== this.jobRevision) return
+          this.result = result
+          return
+        }
+
+        this.polling = true
+        void this.pollRiskAnalysis(revision, this.pollIntervalMs)
+      } catch (error: unknown) {
+        if (revision !== this.jobRevision) return
+        this.polling = false
+        this.taskError = getApiErrorMessage(error, '恢复当前风险分析任务失败')
+      }
     },
     async createBuffer() {
       if (this.analysisLocked) {
@@ -193,6 +265,7 @@ export const useAnalysisStore = defineStore('analysis', {
       }
 
       const revision = ++this.jobRevision
+      clearWorkspaceTaskId()
       this.job = null
       this.jobStatus = null
       this.result = null
@@ -208,6 +281,7 @@ export const useAnalysisStore = defineStore('analysis', {
         if (revision !== this.jobRevision) return
 
         this.job = created.job
+        saveWorkspaceTaskId(created.job.task_id)
         this.jobStatus = {
           task_id: created.job.task_id,
           status: created.job.status,

@@ -86,11 +86,11 @@ const progressPercentage = computed(() => {
   return Math.max(0, Math.min(100, progress))
 })
 const activeWorkflowStep = computed(() => {
+  if (analysisStore.result) return 5
+  if (analysisStore.job) return 4
   if (!analysisStore.sourceGeometryWgs84) return 1
   if (!analysisStore.bufferResult) return 2
-  if (!analysisStore.job) return 3
-  if (!analysisStore.result) return 4
-  return 5
+  return 3
 })
 
 function handlePointSelected(coordinates: Coordinate) {
@@ -118,6 +118,7 @@ function resumeRiskAnalysisPolling() {
 
 onMounted(() => {
   void systemStore.load()
+  void analysisStore.restoreRiskAnalysis()
 })
 </script>
 
@@ -204,12 +205,20 @@ onMounted(() => {
         </div>
 
         <el-empty
-          v-if="!analysisStore.sourceGeometryWgs84"
+          v-if="!analysisStore.sourceGeometryWgs84 && !analysisStore.job"
           description="点击地图选择研究点"
           :image-size="86"
         />
 
-        <template v-else>
+        <el-alert
+          v-if="analysisStore.job && !analysisStore.sourceGeometryWgs84"
+          title="已恢复当前任务状态；本阶段未恢复研究点和缓冲区输入。"
+          type="info"
+          :closable="false"
+          show-icon
+        />
+
+        <template v-if="analysisStore.sourceGeometryWgs84">
           <div class="selection-summary">
             <span class="selection-label">研究点（WGS84）</span>
             <strong>{{ selectedCoordinateText?.lng }}, {{ selectedCoordinateText?.lat }}</strong>
@@ -305,92 +314,92 @@ onMounted(() => {
               {{ analysisStore.polling ? '分析进行中' : '开始风险分析' }}
             </el-button>
           </section>
-
-          <section v-if="analysisStore.job || analysisStore.taskError" class="control-section">
-            <div class="section-title-row">
-              <strong>异步任务</strong>
-              <el-tag :type="jobStatusType" effect="plain" size="small">
-                {{ jobStatusText }}
-              </el-tag>
-            </div>
-
-            <div v-if="analysisStore.job" class="task-meta">
-              <span>Task ID</span>
-              <code>{{ analysisStore.job.task_id }}</code>
-            </div>
-            <div v-if="analysisStore.jobStatus" class="task-meta">
-              <span>Stage</span>
-              <strong>{{ analysisStore.jobStatus.stage }}</strong>
-            </div>
-            <el-progress
-              v-if="analysisStore.jobStatus"
-              :percentage="progressPercentage"
-              :status="analysisStore.result ? 'success' : undefined"
-            />
-            <small v-if="analysisStore.polling" class="section-hint">
-              正在按服务端建议间隔查询状态，任务进入终态后会自动停止。
-            </small>
-
-            <el-alert
-              v-if="analysisStore.taskError"
-              :title="analysisStore.taskError"
-              type="error"
-              :closable="false"
-              show-icon
-            />
-            <el-button
-              v-if="analysisStore.canResumePolling"
-              plain
-              @click="resumeRiskAnalysisPolling"
-            >
-              重新查询当前任务
-            </el-button>
-          </section>
-
-          <section v-if="analysisStore.result" class="control-section result-section">
-            <div class="section-title-row">
-              <strong>分析结果</strong>
-              <el-tag type="success" effect="dark" size="small">SUCCEEDED</el-tag>
-            </div>
-
-            <div class="statistics-grid">
-              <div>
-                <span>有效像元</span>
-                <strong>{{ analysisStore.result.statistics.valid_pixel_count }}</strong>
-              </div>
-              <div>
-                <span>最小值</span>
-                <strong>{{ analysisStore.result.statistics.minimum.toFixed(6) }}</strong>
-              </div>
-              <div>
-                <span>平均值</span>
-                <strong>{{ analysisStore.result.statistics.mean.toFixed(6) }}</strong>
-              </div>
-              <div>
-                <span>最大值</span>
-                <strong>{{ analysisStore.result.statistics.maximum.toFixed(6) }}</strong>
-              </div>
-            </div>
-
-            <div class="task-meta">
-              <span>Grid</span>
-              <strong>
-                {{ analysisStore.result.grid.shape[0] }} ×
-                {{ analysisStore.result.grid.shape[1] }} · {{ analysisStore.result.grid.crs }}
-              </strong>
-            </div>
-
-            <div class="indicator-results">
-              <div v-for="indicator in analysisStore.result.indicators" :key="indicator.code">
-                <div>
-                  <strong>{{ indicator.code }}</strong>
-                  <small>{{ indicator.name }} · {{ indicator.weight_percent }}%</small>
-                </div>
-                <span>mean {{ indicator.statistics.mean.toFixed(6) }}</span>
-              </div>
-            </div>
-          </section>
         </template>
+
+        <section v-if="analysisStore.job || analysisStore.taskError" class="control-section">
+          <div class="section-title-row">
+            <strong>异步任务</strong>
+            <el-tag :type="jobStatusType" effect="plain" size="small">
+              {{ jobStatusText }}
+            </el-tag>
+          </div>
+
+          <div v-if="analysisStore.job" class="task-meta">
+            <span>Task ID</span>
+            <code>{{ analysisStore.job.task_id }}</code>
+          </div>
+          <div v-if="analysisStore.jobStatus" class="task-meta">
+            <span>Stage</span>
+            <strong>{{ analysisStore.jobStatus.stage }}</strong>
+          </div>
+          <el-progress
+            v-if="analysisStore.jobStatus"
+            :percentage="progressPercentage"
+            :status="analysisStore.result ? 'success' : undefined"
+          />
+          <small v-if="analysisStore.polling" class="section-hint">
+            正在按服务端建议间隔查询状态，任务进入终态后会自动停止。
+          </small>
+
+          <el-alert
+            v-if="analysisStore.taskError"
+            :title="analysisStore.taskError"
+            type="error"
+            :closable="false"
+            show-icon
+          />
+          <el-button
+            v-if="analysisStore.canResumePolling"
+            plain
+            @click="resumeRiskAnalysisPolling"
+          >
+            重新查询当前任务
+          </el-button>
+        </section>
+
+        <section v-if="analysisStore.result" class="control-section result-section">
+          <div class="section-title-row">
+            <strong>分析结果</strong>
+            <el-tag type="success" effect="dark" size="small">SUCCEEDED</el-tag>
+          </div>
+
+          <div class="statistics-grid">
+            <div>
+              <span>有效像元</span>
+              <strong>{{ analysisStore.result.statistics.valid_pixel_count }}</strong>
+            </div>
+            <div>
+              <span>最小值</span>
+              <strong>{{ analysisStore.result.statistics.minimum.toFixed(6) }}</strong>
+            </div>
+            <div>
+              <span>平均值</span>
+              <strong>{{ analysisStore.result.statistics.mean.toFixed(6) }}</strong>
+            </div>
+            <div>
+              <span>最大值</span>
+              <strong>{{ analysisStore.result.statistics.maximum.toFixed(6) }}</strong>
+            </div>
+          </div>
+
+          <div class="task-meta">
+            <span>Grid</span>
+            <strong>
+              {{ analysisStore.result.grid.shape[0] }} ×
+              {{ analysisStore.result.grid.shape[1] }} · {{ analysisStore.result.grid.crs }}
+            </strong>
+          </div>
+
+          <div class="indicator-results">
+            <div v-for="indicator in analysisStore.result.indicators" :key="indicator.code">
+              <div>
+                <strong>{{ indicator.code }}</strong>
+                <small>{{ indicator.name }} · {{ indicator.weight_percent }}%</small>
+              </div>
+              <span>mean {{ indicator.statistics.mean.toFixed(6) }}</span>
+            </div>
+          </div>
+        </section>
       </aside>
     </section>
 
