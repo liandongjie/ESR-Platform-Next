@@ -3,6 +3,7 @@ import { computed, onMounted } from 'vue'
 
 import StatusCard from '@/components/common/StatusCard.vue'
 import MapCanvas from '@/components/map/MapCanvas.vue'
+import RiskAnalysisResultDownloads from '@/components/risk-analysis/RiskAnalysisResultDownloads.vue'
 import { useAnalysisStore } from '@/stores/analysis'
 import { useSystemStore } from '@/stores/system'
 import type { Coordinate } from '@/types/analysisArea'
@@ -411,6 +412,8 @@ onMounted(() => {
             <strong>分析结果</strong>
             <el-tag type="success" effect="dark" size="small">SUCCEEDED</el-tag>
           </div>
+
+          <RiskAnalysisResultDownloads :task-id="analysisStore.result.task_id" />
 
           <small v-if="analysisStore.spatialLoading" class="section-hint">
             正在加载空间风险分布…

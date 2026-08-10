@@ -1,3 +1,5 @@
+import axios from 'axios'
+
 import { http } from '@/api/http'
 import {
   parseRiskAnalysisResult,
@@ -16,6 +18,18 @@ import type {
 
 const DEFAULT_RETRY_AFTER_MS = 2000
 
+export type RiskAnalysisArtifactKind = 'raster' | 'manifest'
+
+export interface DownloadedRiskAnalysisArtifact {
+  blob: Blob
+  filename: string
+}
+
+const ARTIFACT_FILENAME_SUFFIXES: Record<RiskAnalysisArtifactKind, string> = {
+  raster: 'risk.tif',
+  manifest: 'result.json',
+}
+
 export interface CreatedRiskAnalysisJob {
   job: RiskAnalysisJobCreated
   retryAfterMs: number
@@ -25,6 +39,29 @@ function retryAfterMilliseconds(value: unknown): number {
   const seconds = Number(value)
   if (!Number.isFinite(seconds) || seconds <= 0) return DEFAULT_RETRY_AFTER_MS
   return seconds * 1000
+}
+
+function artifactFilename(
+  contentDisposition: unknown,
+  taskId: string,
+  kind: RiskAnalysisArtifactKind,
+) {
+  if (typeof contentDisposition === 'string') {
+    const match = /(?:^|;)\s*filename\s*=\s*(?:"([^"]+)"|([^;\s]+))/i.exec(contentDisposition)
+    const filename = match?.[1] ?? match?.[2]
+    if (filename) return filename
+  }
+  return `risk-analysis-${taskId}-${ARTIFACT_FILENAME_SUFFIXES[kind]}`
+}
+
+async function restoreBlobErrorPayload(error: unknown): Promise<void> {
+  if (!axios.isAxiosError(error) || !(error.response?.data instanceof Blob)) return
+
+  try {
+    error.response.data = JSON.parse(await error.response.data.text())
+  } catch {
+    // Blob 不是 JSON 时保留原 AxiosError，继续复用既有 timeout/network/fallback 处理。
+  }
 }
 
 export async function createRiskAnalysisJob(
@@ -85,4 +122,27 @@ export async function getRiskAnalysisSpatialResult(
     throw new Error('空间风险结果尚未就绪')
   }
   return parseRiskAnalysisSpatialResult(response.data, taskId)
+}
+
+export async function downloadRiskAnalysisArtifact(
+  taskId: string,
+  kind: RiskAnalysisArtifactKind,
+): Promise<DownloadedRiskAnalysisArtifact> {
+  try {
+    const response = await http.get<Blob>(
+      `/risk-analysis/jobs/${encodeURIComponent(taskId)}/result/artifacts/${kind}`,
+      {
+        responseType: 'blob',
+        // 202 仍是未就绪错误，不得被 Axios 的默认 2xx 规则当作可下载文件。
+        validateStatus: (status) => status === 200,
+      },
+    )
+    return {
+      blob: response.data,
+      filename: artifactFilename(response.headers['content-disposition'], taskId, kind),
+    }
+  } catch (error: unknown) {
+    await restoreBlobErrorPayload(error)
+    throw error
+  }
 }

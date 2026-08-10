@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, onMounted } from 'vue'
 
 import MapCanvas from '@/components/map/MapCanvas.vue'
+import RiskAnalysisResultDownloads from '@/components/risk-analysis/RiskAnalysisResultDownloads.vue'
 import { useTaskHistoryStore } from '@/stores/taskHistory'
 import type { RiskAnalysisJobHistoryItem, RiskJobStatus } from '@/types/riskAnalysis'
 
@@ -240,6 +241,7 @@ onBeforeUnmount(() => {
 
         <template v-else-if="taskHistoryStore.selectedResult">
           <h3>分析结果</h3>
+          <RiskAnalysisResultDownloads :task-id="taskHistoryStore.selectedResult.task_id" />
           <div class="detail-grid">
             <div>
               <span>有效像元</span>
