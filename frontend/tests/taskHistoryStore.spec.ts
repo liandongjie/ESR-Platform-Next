@@ -1,29 +1,37 @@
 import { createPinia, setActivePinia } from 'pinia'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { getRiskAnalysisResult, listRiskAnalysisJobs } from '@/api/riskAnalysis'
+import {
+  getRiskAnalysisResult,
+  getRiskAnalysisSpatialResult,
+  listRiskAnalysisJobs,
+} from '@/api/riskAnalysis'
 import { useTaskHistoryStore } from '@/stores/taskHistory'
 import type {
   RiskAnalysisJobHistoryResponse,
   RiskAnalysisResult,
+  RiskAnalysisSpatialResult,
 } from '@/types/riskAnalysis'
 
 vi.mock('@/api/riskAnalysis', () => ({
   getRiskAnalysisResult: vi.fn(),
+  getRiskAnalysisSpatialResult: vi.fn(),
   listRiskAnalysisJobs: vi.fn(),
 }))
 
 const mockedListJobs = vi.mocked(listRiskAnalysisJobs)
 const mockedGetResult = vi.mocked(getRiskAnalysisResult)
+const mockedGetSpatialResult = vi.mocked(getRiskAnalysisSpatialResult)
 
 function historyResponse(
   status: 'QUEUED' | 'RUNNING' | 'SUCCEEDED' = 'SUCCEEDED',
   resultAvailable = status === 'SUCCEEDED',
+  taskId = 'task-1',
 ): RiskAnalysisJobHistoryResponse {
   return {
     items: [
       {
-        task_id: 'task-1',
+        task_id: taskId,
         status,
         stage: status === 'SUCCEEDED' ? 'COMPLETED' : status,
         progress: status === 'SUCCEEDED' ? 100 : 20,
@@ -45,10 +53,10 @@ function historyResponse(
   }
 }
 
-function riskResult(): RiskAnalysisResult {
+function riskResult(taskId = 'task-1'): RiskAnalysisResult {
   return {
     schema_version: 1,
-    task_id: 'task-1',
+    task_id: taskId,
     status: 'SUCCEEDED',
     algorithm_version: 'v1',
     geometry: {
@@ -68,10 +76,50 @@ function riskResult(): RiskAnalysisResult {
     },
     indicators: [],
     artifacts: {
-      raster: 'risk-analysis/task-1/risk.tif',
-      manifest: 'risk-analysis/task-1/result.json',
+      raster: `risk-analysis/${taskId}/risk.tif`,
+      manifest: `risk-analysis/${taskId}/result.json`,
     },
   }
+}
+
+function spatialResult(taskId = 'task-1', value = 0.5): RiskAnalysisSpatialResult {
+  return {
+    schema_version: 1,
+    task_id: taskId,
+    crs: 'EPSG:4326',
+    value_range: { minimum: 0, maximum: 1 },
+    feature_collection: {
+      type: 'FeatureCollection',
+      features: [
+        {
+          type: 'Feature',
+          geometry: {
+            type: 'Polygon',
+            coordinates: [
+              [
+                [118.86, 32.07],
+                [118.87, 32.07],
+                [118.87, 32.08],
+                [118.86, 32.08],
+                [118.86, 32.07],
+              ],
+            ],
+          },
+          properties: { value },
+        },
+      ],
+    },
+  }
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  let reject!: (reason: Error) => void
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise
+    reject = rejectPromise
+  })
+  return { promise, resolve, reject }
 }
 
 describe('task history store', () => {
@@ -79,6 +127,7 @@ describe('task history store', () => {
     setActivePinia(createPinia())
     mockedListJobs.mockReset()
     mockedGetResult.mockReset()
+    mockedGetSpatialResult.mockReset()
   })
 
   afterEach(() => {
@@ -162,7 +211,7 @@ describe('task history store', () => {
     expect(reloadedStore.polling).toBe(true)
   })
 
-  it('loads final result only when the selected task is actually available', async () => {
+  it('loads final and spatial results only when the selected task is actually available', async () => {
     const store = useTaskHistoryStore()
     const running = historyResponse('RUNNING', false).items[0]
     const completed = historyResponse('SUCCEEDED', true).items[0]
@@ -170,11 +219,120 @@ describe('task history store', () => {
 
     await store.openTask(running)
     expect(mockedGetResult).not.toHaveBeenCalled()
+    expect(mockedGetSpatialResult).not.toHaveBeenCalled()
 
     mockedGetResult.mockResolvedValueOnce(riskResult())
+    mockedGetSpatialResult.mockResolvedValueOnce(spatialResult())
     await store.openTask(completed)
 
     expect(mockedGetResult).toHaveBeenCalledWith('task-1')
+    expect(mockedGetSpatialResult).toHaveBeenCalledWith('task-1')
     expect(store.selectedResult?.statistics.valid_pixel_count).toBe(28)
+    expect(store.selectedSpatialResult?.task_id).toBe('task-1')
+  })
+
+  it('reuses in-flight and loaded requests in the same detail session', async () => {
+    const store = useTaskHistoryStore()
+    const task = historyResponse().items[0]!
+    const resultRequest = deferred<RiskAnalysisResult>()
+    const spatialRequest = deferred<RiskAnalysisSpatialResult>()
+    mockedGetResult.mockReturnValueOnce(resultRequest.promise)
+    mockedGetSpatialResult.mockReturnValueOnce(spatialRequest.promise)
+
+    const opening = store.openTask(task)
+    const revision = store.detailRevision
+    await store.openTask(task)
+
+    expect(store.detailRevision).toBe(revision)
+    expect(mockedGetResult).toHaveBeenCalledTimes(1)
+    expect(mockedGetSpatialResult).toHaveBeenCalledTimes(1)
+
+    resultRequest.resolve(riskResult())
+    spatialRequest.resolve(spatialResult())
+    await opening
+    await Promise.resolve()
+    await store.openTask(task)
+
+    expect(store.detailRevision).toBe(revision)
+    expect(mockedGetResult).toHaveBeenCalledTimes(1)
+    expect(mockedGetSpatialResult).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps the final result when the independent spatial request fails', async () => {
+    const store = useTaskHistoryStore()
+    const task = historyResponse().items[0]!
+    mockedGetResult.mockResolvedValueOnce(riskResult())
+    mockedGetSpatialResult.mockRejectedValueOnce(new Error('spatial unavailable'))
+
+    await store.openTask(task)
+
+    expect(store.selectedResult?.task_id).toBe('task-1')
+    expect(store.detailError).toBeNull()
+    expect(store.spatialError).toBe('spatial unavailable')
+  })
+
+  it.each(['success', 'error'] as const)(
+    'ignores a late task A spatial %s after task B is selected',
+    async (outcome) => {
+      const store = useTaskHistoryStore()
+      const taskA = historyResponse('SUCCEEDED', true, 'task-a').items[0]!
+      const taskB = historyResponse('SUCCEEDED', true, 'task-b').items[0]!
+      const spatialA = deferred<RiskAnalysisSpatialResult>()
+      mockedGetResult.mockImplementation((taskId) => Promise.resolve(riskResult(taskId)))
+      mockedGetSpatialResult
+        .mockReturnValueOnce(spatialA.promise)
+        .mockResolvedValueOnce(spatialResult('task-b'))
+
+      await store.openTask(taskA)
+      await store.openTask(taskB)
+      if (outcome === 'success') spatialA.resolve(spatialResult('task-a'))
+      else spatialA.reject(new Error('late task A failure'))
+      await Promise.resolve()
+
+      expect(store.selectedTaskId).toBe('task-b')
+      expect(store.selectedSpatialResult?.task_id).toBe('task-b')
+      expect(store.spatialError).toBeNull()
+    },
+  )
+
+  it.each(['success', 'error'] as const)(
+    'ignores a late spatial %s after closing the detail',
+    async (outcome) => {
+      const store = useTaskHistoryStore()
+      const task = historyResponse().items[0]!
+      const spatialRequest = deferred<RiskAnalysisSpatialResult>()
+      mockedGetResult.mockResolvedValueOnce(riskResult())
+      mockedGetSpatialResult.mockReturnValueOnce(spatialRequest.promise)
+
+      await store.openTask(task)
+      store.closeDetail()
+      if (outcome === 'success') spatialRequest.resolve(spatialResult())
+      else spatialRequest.reject(new Error('late closed detail failure'))
+      await Promise.resolve()
+
+      expect(store.selectedTaskId).toBeNull()
+      expect(store.selectedSpatialResult).toBeNull()
+      expect(store.spatialError).toBeNull()
+    },
+  )
+
+  it('uses a new revision when a closed task is reopened and ignores its old response', async () => {
+    const store = useTaskHistoryStore()
+    const task = historyResponse().items[0]!
+    const oldSpatial = deferred<RiskAnalysisSpatialResult>()
+    mockedGetResult.mockResolvedValue(riskResult())
+    mockedGetSpatialResult
+      .mockReturnValueOnce(oldSpatial.promise)
+      .mockResolvedValueOnce(spatialResult('task-1', 1))
+
+    await store.openTask(task)
+    const firstRevision = store.detailRevision
+    store.closeDetail()
+    await store.openTask(task)
+    oldSpatial.resolve(spatialResult('task-1', 0))
+    await Promise.resolve()
+
+    expect(store.detailRevision).toBeGreaterThan(firstRevision)
+    expect(store.selectedSpatialResult?.feature_collection.features[0]?.properties.value).toBe(1)
   })
 })

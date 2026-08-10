@@ -1,5 +1,6 @@
 import AMapLoader from '@amap/amap-jsapi-loader'
 import { flushPromises, mount } from '@vue/test-utils'
+import { defineComponent } from 'vue'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import MapCanvas from '@/components/map/MapCanvas.vue'
@@ -24,9 +25,19 @@ interface PolygonOptions {
 const polygonOptions: PolygonOptions[] = []
 const polygonSetMapCalls: ReturnType<typeof vi.fn>[] = []
 const setFitView = vi.fn()
+let mapClickHandler: ((event: TestMapClickEvent) => void) | null = null
+
+interface TestMapClickEvent {
+  lnglat: {
+    getLng: () => number
+    getLat: () => number
+  }
+}
 
 class FakeMap {
-  on = vi.fn()
+  on = vi.fn((event: string, handler: (event: TestMapClickEvent) => void) => {
+    if (event === 'click') mapClickHandler = handler
+  })
   off = vi.fn()
   setFitView = setFitView
   destroy = vi.fn()
@@ -109,6 +120,7 @@ describe('MapCanvas risk cells', () => {
     polygonOptions.length = 0
     polygonSetMapCalls.length = 0
     setFitView.mockReset()
+    mapClickHandler = null
     vi.mocked(AMapLoader.load).mockReset()
     vi.mocked(AMapLoader.load).mockResolvedValue({
       Map: FakeMap,
@@ -156,6 +168,47 @@ describe('MapCanvas risk cells', () => {
     await wrapper.setProps({ riskSpatialResult: spatialResult('task-2', [1]) })
     expect(setFitView).toHaveBeenCalledTimes(2)
 
+    wrapper.unmount()
+  })
+
+  it.each([
+    [{ readOnly: true, selectionDisabled: false }, '历史结果只读展示'],
+    [{ readOnly: false, selectionDisabled: true }, '分析任务进行中，暂不可更换研究点'],
+  ])('blocks selection with the distinct %s mode', async (mode, expectedTip) => {
+    const wrapper = mount(MapCanvas, { props: mode })
+    await flushPromises()
+
+    mapClickHandler?.({
+      lnglat: {
+        getLng: () => 118.9,
+        getLat: () => 32.1,
+      },
+    })
+
+    expect(wrapper.text()).toContain(expectedTip)
+    expect(wrapper.emitted('select-point')).toBeUndefined()
+    wrapper.unmount()
+  })
+
+  it('refits task A when keyed detail navigation remounts it after task B', async () => {
+    const Harness = defineComponent({
+      components: { MapCanvas },
+      data: () => ({ current: spatialResult('task-a') }),
+      template:
+        '<MapCanvas :key="current.task_id" :risk-spatial-result="current" read-only />',
+    })
+    const wrapper = mount(Harness)
+    await flushPromises()
+    expect(setFitView).toHaveBeenCalledTimes(1)
+
+    await wrapper.setData({ current: spatialResult('task-a', [0.8]) })
+    expect(setFitView).toHaveBeenCalledTimes(1)
+
+    await wrapper.setData({ current: spatialResult('task-b') })
+    expect(setFitView).toHaveBeenCalledTimes(2)
+
+    await wrapper.setData({ current: spatialResult('task-a') })
+    expect(setFitView).toHaveBeenCalledTimes(3)
     wrapper.unmount()
   })
 })

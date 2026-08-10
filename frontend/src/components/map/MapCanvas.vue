@@ -16,6 +16,7 @@ interface Props {
   sourcePoint?: PointGeometry | null
   bufferGeometry?: BufferGeometry | null
   riskSpatialResult?: RiskAnalysisSpatialResult | null
+  readOnly?: boolean
   selectionDisabled?: boolean
 }
 
@@ -59,6 +60,7 @@ const props = withDefaults(defineProps<Props>(), {
   sourcePoint: null,
   bufferGeometry: null,
   riskSpatialResult: null,
+  readOnly: false,
   selectionDisabled: false,
 })
 const emit = defineEmits<{
@@ -188,6 +190,7 @@ function renderRiskCells() {
 }
 
 function handleMapClick(event: AMapMouseEvent) {
+  if (props.readOnly) return
   // 异步分析没有取消能力时禁止切换研究点，避免客户端丢失仍在 Worker 中执行的 task_id。
   if (props.selectionDisabled) return
 
@@ -273,7 +276,13 @@ onBeforeUnmount(() => {
       </div>
     </div>
     <div v-else class="map-tip">
-      {{ props.selectionDisabled ? '分析任务进行中，暂不可更换研究点' : '点击地图选择研究点' }}
+      {{
+        props.readOnly
+          ? '历史结果只读展示'
+          : props.selectionDisabled
+            ? '分析任务进行中，暂不可更换研究点'
+            : '点击地图选择研究点'
+      }}
     </div>
     <div v-if="state === 'ready' && props.riskSpatialResult" class="risk-legend">
       <strong>综合风险值</strong>

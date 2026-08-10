@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted } from 'vue'
 
+import MapCanvas from '@/components/map/MapCanvas.vue'
 import { useTaskHistoryStore } from '@/stores/taskHistory'
 import type { RiskAnalysisJobHistoryItem, RiskJobStatus } from '@/types/riskAnalysis'
 
@@ -274,6 +275,30 @@ onBeforeUnmount(() => {
           description="任务尚未产生可读取的最终结果"
           :image-size="80"
         />
+
+        <template
+          v-if="
+            taskHistoryStore.selectedTask.status === 'SUCCEEDED' &&
+              taskHistoryStore.selectedTask.result_available
+          "
+        >
+          <h3>空间风险分布</h3>
+          <el-alert
+            v-if="taskHistoryStore.spatialError"
+            :title="taskHistoryStore.spatialError"
+            type="warning"
+            :closable="false"
+            show-icon
+          />
+          <el-skeleton v-if="taskHistoryStore.spatialLoading" :rows="4" animated />
+          <MapCanvas
+            v-else-if="taskHistoryStore.selectedSpatialResult"
+            :key="taskHistoryStore.selectedSpatialResult.task_id"
+            class="task-spatial-map"
+            :risk-spatial-result="taskHistoryStore.selectedSpatialResult"
+            read-only
+          />
+        </template>
       </template>
     </el-drawer>
   </div>
@@ -294,6 +319,10 @@ onBeforeUnmount(() => {
   align-items: center;
   justify-content: space-between;
   gap: 16px;
+}
+
+.task-spatial-map {
+  min-height: 360px;
 }
 
 .page-heading h1 {
