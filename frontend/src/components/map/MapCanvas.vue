@@ -3,16 +3,19 @@ import AMapLoader from '@amap/amap-jsapi-loader'
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
 import { gcj02ToWgs84, wgs84ToGcj02 } from '@/map/coordinates'
+import { RISK_VALUE_COLOR_BINS, riskColorForValue } from '@/map/riskSpatial'
 import type {
   BufferGeometry,
   Coordinate,
   PointGeometry,
   PolygonGeometry,
 } from '@/types/analysisArea'
+import type { RiskAnalysisSpatialResult } from '@/types/riskAnalysis'
 
 interface Props {
   sourcePoint?: PointGeometry | null
   bufferGeometry?: BufferGeometry | null
+  riskSpatialResult?: RiskAnalysisSpatialResult | null
   selectionDisabled?: boolean
 }
 
@@ -48,12 +51,14 @@ interface AMapNamespace {
     strokeWeight: number
     fillColor: string
     fillOpacity: number
+    zIndex: number
   }) => OverlayInstance
 }
 
 const props = withDefaults(defineProps<Props>(), {
   sourcePoint: null,
   bufferGeometry: null,
+  riskSpatialResult: null,
   selectionDisabled: false,
 })
 const emit = defineEmits<{
@@ -67,6 +72,8 @@ let map: MapInstance | null = null
 let amap: AMapNamespace | null = null
 let marker: OverlayInstance | null = null
 let bufferOverlays: OverlayInstance[] = []
+let riskCellOverlays: OverlayInstance[] = []
+const fittedRiskTaskIds = new Set<string>()
 
 function parseNumber(value: string | undefined, fallback: number): number {
   const parsed = Number(value)
@@ -83,6 +90,11 @@ function removeBufferOverlays() {
   bufferOverlays = []
 }
 
+function removeRiskCellOverlays() {
+  riskCellOverlays.forEach((overlay) => overlay.setMap(null))
+  riskCellOverlays = []
+}
+
 function renderSourcePoint() {
   removeMarker()
   if (!map || !amap || !props.sourcePoint) return
@@ -93,16 +105,22 @@ function renderSourcePoint() {
   marker.setMap(map)
 }
 
-function createPolygonOverlay(geometry: PolygonGeometry): OverlayInstance | null {
+function createPolygonOverlay(
+  geometry: PolygonGeometry,
+  style: {
+    strokeColor: string
+    strokeWeight: number
+    fillColor: string
+    fillOpacity: number
+    zIndex: number
+  },
+): OverlayInstance | null {
   if (!map || !amap) return null
 
   const path = geometry.coordinates.map((ring) => ring.map(wgs84ToGcj02))
   const polygon = new amap.Polygon({
     path,
-    strokeColor: '#3370ff',
-    strokeWeight: 2,
-    fillColor: '#3370ff',
-    fillOpacity: 0.16,
+    ...style,
   })
   polygon.setMap(map)
   return polygon
@@ -113,17 +131,59 @@ function renderBufferGeometry() {
   if (!map || !amap || !props.bufferGeometry) return
 
   if (props.bufferGeometry.type === 'Polygon') {
-    const overlay = createPolygonOverlay(props.bufferGeometry)
+    const overlay = createPolygonOverlay(props.bufferGeometry, {
+      strokeColor: '#3370ff',
+      strokeWeight: 2,
+      fillColor: '#3370ff',
+      fillOpacity: 0.12,
+      zIndex: 30,
+    })
     if (overlay) bufferOverlays.push(overlay)
   } else {
     for (const coordinates of props.bufferGeometry.coordinates) {
-      const overlay = createPolygonOverlay({ type: 'Polygon', coordinates })
+      const overlay = createPolygonOverlay(
+        { type: 'Polygon', coordinates },
+        {
+          strokeColor: '#3370ff',
+          strokeWeight: 2,
+          fillColor: '#3370ff',
+          fillOpacity: 0.12,
+          zIndex: 30,
+        },
+      )
       if (overlay) bufferOverlays.push(overlay)
     }
   }
 
-  if (bufferOverlays.length > 0) {
+  if (
+    bufferOverlays.length > 0 &&
+    !props.riskSpatialResult?.feature_collection.features.length
+  ) {
     map.setFitView(bufferOverlays)
+  }
+}
+
+function renderRiskCells() {
+  removeRiskCellOverlays()
+  if (!map || !amap || !props.riskSpatialResult) return
+
+  for (const feature of props.riskSpatialResult.feature_collection.features) {
+    const color = riskColorForValue(feature.properties.value)
+    if (!color) continue
+    const overlay = createPolygonOverlay(feature.geometry, {
+      strokeColor: color,
+      strokeWeight: 0.5,
+      fillColor: color,
+      fillOpacity: 0.72,
+      zIndex: 20,
+    })
+    if (overlay) riskCellOverlays.push(overlay)
+  }
+
+  const taskId = props.riskSpatialResult.task_id
+  if (riskCellOverlays.length > 0 && !fittedRiskTaskIds.has(taskId)) {
+    map.setFitView(riskCellOverlays)
+    fittedRiskTaskIds.add(taskId)
   }
 }
 
@@ -138,6 +198,7 @@ function handleMapClick(event: AMapMouseEvent) {
 
 watch(() => props.sourcePoint, renderSourcePoint, { deep: true })
 watch(() => props.bufferGeometry, renderBufferGeometry, { deep: true })
+watch(() => props.riskSpatialResult, renderRiskCells, { deep: true })
 
 onMounted(async () => {
   const key = import.meta.env.VITE_AMAP_JS_API_KEY?.trim()
@@ -173,6 +234,7 @@ onMounted(async () => {
     state.value = 'ready'
     renderSourcePoint()
     renderBufferGeometry()
+    renderRiskCells()
   } catch (error: unknown) {
     state.value = 'error'
     errorMessage.value = error instanceof Error ? error.message : '地图初始化失败'
@@ -186,6 +248,7 @@ onBeforeUnmount(() => {
   }
   removeMarker()
   removeBufferOverlays()
+  removeRiskCellOverlays()
   map?.destroy()
   map = null
   amap = null
@@ -212,6 +275,13 @@ onBeforeUnmount(() => {
     <div v-else class="map-tip">
       {{ props.selectionDisabled ? '分析任务进行中，暂不可更换研究点' : '点击地图选择研究点' }}
     </div>
+    <div v-if="state === 'ready' && props.riskSpatialResult" class="risk-legend">
+      <strong>综合风险值</strong>
+      <div v-for="bin in RISK_VALUE_COLOR_BINS" :key="bin.label" class="risk-legend-row">
+        <span class="risk-legend-swatch" :style="{ backgroundColor: bin.color }" />
+        <span>{{ bin.label }}</span>
+      </div>
+    </div>
     <div class="map-status">
       <span class="status-dot" :class="{ online: state === 'ready' }" />
       {{ state === 'ready' ? '地图已连接' : '地图待配置' }}
@@ -233,5 +303,39 @@ onBeforeUnmount(() => {
   font-size: 12px;
   box-shadow: 0 8px 22px rgba(43, 73, 121, 0.08);
   backdrop-filter: blur(8px);
+}
+
+.risk-legend {
+  position: absolute;
+  right: 14px;
+  bottom: 44px;
+  z-index: 2;
+  display: grid;
+  gap: 5px;
+  padding: 10px 12px;
+  border: 1px solid rgba(220, 228, 240, 0.92);
+  border-radius: 9px;
+  color: #52627f;
+  background: rgba(255, 255, 255, 0.92);
+  font-size: 11px;
+  box-shadow: 0 8px 22px rgba(43, 73, 121, 0.08);
+  backdrop-filter: blur(8px);
+}
+
+.risk-legend strong {
+  color: var(--text);
+  font-size: 12px;
+}
+
+.risk-legend-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.risk-legend-swatch {
+  width: 20px;
+  height: 9px;
+  border-radius: 2px;
 }
 </style>

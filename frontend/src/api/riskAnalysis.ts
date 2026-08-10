@@ -1,5 +1,8 @@
 import { http } from '@/api/http'
-import { parseRiskAnalysisResult } from '@/validation/riskAnalysisResult'
+import {
+  parseRiskAnalysisResult,
+  parseRiskAnalysisSpatialResult,
+} from '@/validation/riskAnalysisResult'
 import { parseRiskAnalysisSubmission } from '@/validation/riskAnalysisSubmission'
 import type {
   RiskAnalysisJobCreated,
@@ -7,6 +10,7 @@ import type {
   RiskAnalysisJobHistoryResponse,
   RiskAnalysisJobStatus,
   RiskAnalysisResult,
+  RiskAnalysisSpatialResult,
   RiskAnalysisSubmissionDetail,
 } from '@/types/riskAnalysis'
 
@@ -69,4 +73,16 @@ export async function getRiskAnalysisResult(taskId: string): Promise<RiskAnalysi
   }
   // TypeScript 泛型不会校验运行时 JSON；只有通过结构检查的数据才能进入 Pinia 和模板。
   return parseRiskAnalysisResult(response.data)
+}
+
+export async function getRiskAnalysisSpatialResult(
+  taskId: string,
+): Promise<RiskAnalysisSpatialResult> {
+  const response = await http.get<unknown>(
+    `/risk-analysis/jobs/${encodeURIComponent(taskId)}/result/spatial`,
+  )
+  if (response.status !== 200) {
+    throw new Error('空间风险结果尚未就绪')
+  }
+  return parseRiskAnalysisSpatialResult(response.data, taskId)
 }
