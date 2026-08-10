@@ -6,10 +6,15 @@ import {
   createRiskAnalysisJob,
   getRiskAnalysisJob,
   getRiskAnalysisResult,
+  getRiskAnalysisSubmission,
 } from '@/api/riskAnalysis'
 import { useAnalysisStore } from '@/stores/analysis'
 import type { AnalysisAreaBufferResponse } from '@/types/analysisArea'
-import type { RiskAnalysisJobStatus, RiskAnalysisResult } from '@/types/riskAnalysis'
+import type {
+  RiskAnalysisJobStatus,
+  RiskAnalysisResult,
+  RiskAnalysisSubmissionDetail,
+} from '@/types/riskAnalysis'
 
 vi.mock('@/api/analysisAreas', () => ({
   createAnalysisAreaBuffer: vi.fn(),
@@ -19,12 +24,14 @@ vi.mock('@/api/riskAnalysis', () => ({
   createRiskAnalysisJob: vi.fn(),
   getRiskAnalysisJob: vi.fn(),
   getRiskAnalysisResult: vi.fn(),
+  getRiskAnalysisSubmission: vi.fn(),
 }))
 
 const mockedCreateBuffer = vi.mocked(createAnalysisAreaBuffer)
 const mockedCreateJob = vi.mocked(createRiskAnalysisJob)
 const mockedGetJob = vi.mocked(getRiskAnalysisJob)
 const mockedGetResult = vi.mocked(getRiskAnalysisResult)
+const mockedGetSubmission = vi.mocked(getRiskAnalysisSubmission)
 const workspaceTaskStorageKey = 'esr:risk-analysis:workspace-task-id'
 
 function makeBufferResponse(distanceM = 3000): AnalysisAreaBufferResponse {
@@ -97,6 +104,21 @@ function makeRiskResult(): RiskAnalysisResult {
   }
 }
 
+function makeSubmission(): RiskAnalysisSubmissionDetail {
+  return {
+    task_id: 'task-1',
+    submitted_at: '2026-08-07T12:00:00Z',
+    request: {
+      geometry: makeBufferResponse().buffer.geometry,
+      weights: [
+        { code: 'PM25', weight_percent: 30 },
+        { code: 'AQI', weight_percent: 40 },
+        { code: 'NDVI', weight_percent: 30 },
+      ],
+    },
+  }
+}
+
 async function prepareBuffer(store: ReturnType<typeof useAnalysisStore>) {
   mockedCreateBuffer.mockResolvedValueOnce(makeBufferResponse())
   store.setSourcePoint([118.9, 32.1])
@@ -110,6 +132,8 @@ describe('analysis store', () => {
     mockedCreateJob.mockReset()
     mockedGetJob.mockReset()
     mockedGetResult.mockReset()
+    mockedGetSubmission.mockReset()
+    mockedGetSubmission.mockResolvedValue(makeSubmission())
     window.sessionStorage.clear()
   })
 
@@ -400,6 +424,13 @@ describe('analysis store', () => {
     vi.useFakeTimers()
     window.sessionStorage.setItem(workspaceTaskStorageKey, 'task-1')
     const store = useAnalysisStore()
+    let resolveSubmission: ((value: RiskAnalysisSubmissionDetail) => void) | undefined
+    mockedGetSubmission.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveSubmission = resolve
+        }),
+    )
 
     mockedGetJob
       .mockResolvedValueOnce({
@@ -426,10 +457,13 @@ describe('analysis store', () => {
     expect(store.job?.task_id).toBe('task-1')
     expect(store.jobStatus?.status).toBe('RUNNING')
     expect(store.polling).toBe(true)
+    expect(store.submissionLoading).toBe(true)
     expect(mockedGetJob).toHaveBeenCalledTimes(1)
+    expect(mockedGetSubmission).toHaveBeenCalledTimes(1)
 
     await store.restoreRiskAnalysis()
     expect(mockedGetJob).toHaveBeenCalledTimes(1)
+    expect(mockedGetSubmission).toHaveBeenCalledTimes(1)
 
     await vi.advanceTimersByTimeAsync(2000)
 
@@ -437,6 +471,16 @@ describe('analysis store', () => {
     expect(mockedGetResult).toHaveBeenCalledWith('task-1')
     expect(store.result?.task_id).toBe('task-1')
     expect(store.polling).toBe(false)
+    expect(store.submissionContext).toBeNull()
+
+    resolveSubmission?.(makeSubmission())
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(store.submissionContext?.request.geometry.type).toBe('Polygon')
+    expect(store.weights).toEqual(makeSubmission().request.weights)
+    expect(store.weights[0]).not.toBe(store.submissionContext?.request.weights[0])
+    store.weights[0]!.weight_percent = 99
+    expect(store.submissionContext?.request.weights[0]?.weight_percent).toBe(30)
   })
 
   it('restores an already completed task without starting polling', async () => {
@@ -457,6 +501,28 @@ describe('analysis store', () => {
     expect(mockedGetResult).toHaveBeenCalledWith('task-1')
     expect(store.result?.task_id).toBe('task-1')
     expect(store.polling).toBe(false)
+  })
+
+  it('keeps result recovery independent when submission context fails', async () => {
+    window.sessionStorage.setItem(workspaceTaskStorageKey, 'task-1')
+    const store = useAnalysisStore()
+    mockedGetSubmission.mockRejectedValueOnce(new Error('submission unavailable'))
+    mockedGetJob.mockResolvedValueOnce({
+      task_id: 'task-1',
+      status: 'SUCCEEDED',
+      stage: 'COMPLETED',
+      progress: 100,
+      result_available: true,
+      submitted_at: '2026-08-07T12:00:00Z',
+    })
+    mockedGetResult.mockResolvedValueOnce(makeRiskResult())
+
+    await store.restoreRiskAnalysis()
+
+    expect(store.result?.task_id).toBe('task-1')
+    expect(store.submissionContext).toBeNull()
+    expect(store.submissionError).toBe('提交上下文恢复失败，但任务状态和分析结果不受影响')
+    expect(store.taskError).toBeNull()
   })
 
   it.each([
@@ -513,5 +579,34 @@ describe('analysis store', () => {
     expect(store.jobStatus).toBeNull()
     expect(store.polling).toBe(false)
     expect(window.sessionStorage.getItem(workspaceTaskStorageKey)).toBeNull()
+  })
+
+  it('ignores a late submission response after the workflow is reset', async () => {
+    window.sessionStorage.setItem(workspaceTaskStorageKey, 'task-1')
+    const store = useAnalysisStore()
+    let resolveSubmission: ((value: RiskAnalysisSubmissionDetail) => void) | undefined
+    mockedGetSubmission.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveSubmission = resolve
+        }),
+    )
+    mockedGetJob.mockResolvedValueOnce({
+      task_id: 'task-1',
+      status: 'RUNNING',
+      stage: 'ANALYZING',
+      progress: 40,
+      result_available: false,
+      submitted_at: '2026-08-07T12:00:00Z',
+    })
+
+    await store.restoreRiskAnalysis()
+    store.resetRiskAnalysis()
+    resolveSubmission?.(makeSubmission())
+    await Promise.resolve()
+
+    expect(store.submissionContext).toBeNull()
+    expect(store.submissionLoading).toBe(false)
+    expect(store.submissionError).toBeNull()
   })
 })

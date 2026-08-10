@@ -6,6 +6,7 @@ import {
   createRiskAnalysisJob,
   getRiskAnalysisJob,
   getRiskAnalysisResult,
+  getRiskAnalysisSubmission,
 } from '@/api/riskAnalysis'
 import type {
   AnalysisAreaBufferResponse,
@@ -15,6 +16,7 @@ import type {
 import type {
   RiskAnalysisJobStatus,
   RiskAnalysisResult,
+  RiskAnalysisSubmissionDetail,
   RiskIndicatorWeightInput,
 } from '@/types/riskAnalysis'
 
@@ -37,6 +39,9 @@ interface AnalysisState {
   job: RiskAnalysisJobReference | null
   jobStatus: RiskAnalysisJobStatus | null
   result: RiskAnalysisResult | null
+  submissionContext: RiskAnalysisSubmissionDetail | null
+  submissionLoading: boolean
+  submissionError: string | null
   jobSubmitting: boolean
   polling: boolean
   taskError: string | null
@@ -89,6 +94,9 @@ export const useAnalysisStore = defineStore('analysis', {
     job: null,
     jobStatus: null,
     result: null,
+    submissionContext: null,
+    submissionLoading: false,
+    submissionError: null,
     jobSubmitting: false,
     polling: false,
     taskError: null,
@@ -118,6 +126,9 @@ export const useAnalysisStore = defineStore('analysis', {
       this.job = null
       this.jobStatus = null
       this.result = null
+      this.submissionContext = null
+      this.submissionLoading = false
+      this.submissionError = null
       this.jobSubmitting = false
       this.polling = false
       this.taskError = null
@@ -170,8 +181,12 @@ export const useAnalysisStore = defineStore('analysis', {
       void this.pollRiskAnalysis(revision, this.pollIntervalMs)
     },
     async restoreRiskAnalysis() {
-      // Store 已经持有任务时说明只是路由重新挂载，不能重复查询或启动第二个轮询。
-      if (this.job || this.jobSubmitting || this.polling) return
+      // 路由重新挂载时只允许补取缺失的 Context，不能重复查询状态或启动第二个轮询。
+      if (this.job) {
+        if (!this.bufferResult) void this.restoreRiskAnalysisSubmission(this.job.task_id)
+        return
+      }
+      if (this.jobSubmitting || this.polling) return
 
       const taskId = readWorkspaceTaskId()
       if (!taskId) return
@@ -180,10 +195,15 @@ export const useAnalysisStore = defineStore('analysis', {
       this.job = { task_id: taskId }
       this.jobStatus = null
       this.result = null
+      this.submissionContext = null
+      this.submissionLoading = false
+      this.submissionError = null
       this.jobSubmitting = false
       this.polling = false
       this.taskError = null
       this.pollIntervalMs = DEFAULT_POLL_INTERVAL_MS
+      // 提交上下文是补充信息；慢响应或失败不能延迟状态、轮询和 Result 恢复。
+      void this.restoreRiskAnalysisSubmission(taskId)
 
       try {
         const status = await getRiskAnalysisJob(taskId)
@@ -209,6 +229,34 @@ export const useAnalysisStore = defineStore('analysis', {
         if (revision !== this.jobRevision) return
         this.polling = false
         this.taskError = getApiErrorMessage(error, '恢复当前风险分析任务失败')
+      }
+    },
+    async restoreRiskAnalysisSubmission(taskId: string) {
+      if (
+        this.job?.task_id !== taskId ||
+        this.bufferResult ||
+        this.submissionContext ||
+        this.submissionLoading
+      ) {
+        return
+      }
+
+      this.submissionLoading = true
+      this.submissionError = null
+      try {
+        const submission = await getRiskAnalysisSubmission(taskId)
+        if (this.job?.task_id !== taskId) return
+
+        this.submissionContext = submission
+        // 当前可编辑 weights 必须复制；只读提交事实始终保留服务端原值。
+        this.weights = submission.request.weights.map((item) => ({ ...item }))
+      } catch {
+        if (this.job?.task_id !== taskId) return
+        this.submissionError = '提交上下文恢复失败，但任务状态和分析结果不受影响'
+      } finally {
+        if (this.job?.task_id === taskId) {
+          this.submissionLoading = false
+        }
       }
     },
     async createBuffer() {
@@ -269,6 +317,9 @@ export const useAnalysisStore = defineStore('analysis', {
       this.job = null
       this.jobStatus = null
       this.result = null
+      this.submissionContext = null
+      this.submissionLoading = false
+      this.submissionError = null
       this.jobSubmitting = true
       this.polling = false
       this.taskError = null

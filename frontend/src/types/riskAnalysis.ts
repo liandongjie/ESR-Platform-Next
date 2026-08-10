@@ -10,6 +10,12 @@ export interface RiskAnalysisJobRequest {
   weights: RiskIndicatorWeightInput[]
 }
 
+export interface RiskAnalysisSubmissionDetail {
+  task_id: string
+  submitted_at: string
+  request: RiskAnalysisJobRequest
+}
+
 export type RiskJobStatus =
   | 'QUEUED'
   | 'RUNNING'

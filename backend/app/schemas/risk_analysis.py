@@ -46,6 +46,16 @@ class RiskAnalysisJobRequest(ApiModel):
             raise ValueError(str(exc)) from exc
         return value
 
+
+class RiskAnalysisSubmissionRecord(ApiModel):
+    """Persisted immutable envelope written before the task is enqueued."""
+
+    task_id: str = Field(min_length=1)
+    status: Literal["QUEUED"]
+    submitted_at: str = Field(min_length=1)
+    request: RiskAnalysisJobRequest
+
+
 class RasterStatisticsOutput(ApiModel):
     """持久化结果中的栅格统计；成功 manifest 缺字段时必须视为无效结果。"""
 

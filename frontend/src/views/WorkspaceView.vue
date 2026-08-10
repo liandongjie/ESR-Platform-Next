@@ -47,7 +47,19 @@ const selectedCoordinateText = computed(() => {
     lat: coordinate[1].toFixed(6),
   }
 })
-const bufferGeometry = computed(() => analysisStore.bufferResult?.buffer.geometry ?? null)
+const bufferGeometry = computed(
+  () =>
+    analysisStore.bufferResult?.buffer.geometry ??
+    analysisStore.submissionContext?.request.geometry ??
+    null,
+)
+const recoveryNoticeText = computed(() => {
+  if (analysisStore.submissionContext) {
+    return '已从服务端恢复实际分析范围和指标权重；原始研究点、缓冲距离及 Buffer 元数据未保存。'
+  }
+  if (analysisStore.submissionLoading) return '已恢复当前任务状态，正在读取服务端提交上下文。'
+  return '已恢复当前任务状态；原始研究点和缓冲区输入尚未恢复。'
+})
 const weightTotal = computed(() =>
   analysisStore.weights.reduce((sum, item) => sum + item.weight_percent, 0),
 )
@@ -212,11 +224,47 @@ onMounted(() => {
 
         <el-alert
           v-if="analysisStore.job && !analysisStore.sourceGeometryWgs84"
-          title="已恢复当前任务状态；本阶段未恢复研究点和缓冲区输入。"
+          :title="recoveryNoticeText"
           type="info"
           :closable="false"
           show-icon
         />
+
+        <el-alert
+          v-if="
+            analysisStore.job &&
+              !analysisStore.sourceGeometryWgs84 &&
+              analysisStore.submissionError
+          "
+          :title="analysisStore.submissionError"
+          type="warning"
+          :closable="false"
+          show-icon
+        />
+
+        <section
+          v-if="!analysisStore.sourceGeometryWgs84 && analysisStore.submissionContext"
+          class="control-section"
+        >
+          <div class="section-title-row">
+            <strong>服务端提交上下文</strong>
+            <el-tag type="info" effect="plain" size="small">WGS84</el-tag>
+          </div>
+          <div class="task-meta">
+            <span>分析范围</span>
+            <strong>{{ analysisStore.submissionContext.request.geometry.type }}</strong>
+          </div>
+          <div class="weight-list">
+            <div
+              v-for="item in analysisStore.submissionContext.request.weights"
+              :key="item.code"
+              class="weight-row"
+            >
+              <span>{{ item.code }}</span>
+              <strong>{{ item.weight_percent }}%</strong>
+            </div>
+          </div>
+        </section>
 
         <template v-if="analysisStore.sourceGeometryWgs84">
           <div class="selection-summary">

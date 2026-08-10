@@ -9,7 +9,11 @@ from pydantic import ValidationError
 from app.api.validation import validation_details
 from app.extensions import celery as celery_app
 from app.repositories.risk_analysis_job_store import RiskAnalysisJobStore
-from app.schemas.risk_analysis import RiskAnalysisJobRequest, RiskAnalysisSuccessResult
+from app.schemas.risk_analysis import (
+    RiskAnalysisJobRequest,
+    RiskAnalysisSubmissionRecord,
+    RiskAnalysisSuccessResult,
+)
 from app.services.risk_analysis_jobs import write_failure_manifest
 
 risk_analysis_bp = Blueprint("risk_analysis", __name__)
@@ -313,6 +317,71 @@ def get_risk_analysis_job(task_id: str):
         return jsonify({"code": "JOB_NOT_FOUND", "message": "风险分析任务不存在"}), 404
 
     response = jsonify(payload)
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+@risk_analysis_bp.get("/jobs/<task_id>/submission")
+def get_risk_analysis_submission(task_id: str):
+    """Return the immutable request persisted before enqueueing the task."""
+
+    store = _job_store()
+    if not store.task_exists(task_id):
+        return jsonify({"code": "JOB_NOT_FOUND", "message": "风险分析任务不存在"}), 404
+
+    try:
+        raw_submission = store.read_submission(task_id)
+        if raw_submission is None:
+            return (
+                jsonify(
+                    {
+                        "code": "SUBMISSION_NOT_FOUND",
+                        "message": "该任务没有可恢复的提交上下文",
+                    }
+                ),
+                404,
+            )
+        submission = RiskAnalysisSubmissionRecord.model_validate(raw_submission)
+    except (OSError, ValueError, ValidationError) as exc:
+        current_app.logger.warning(
+            "Invalid risk-analysis submission manifest for task %s: %s",
+            task_id,
+            exc,
+        )
+        return (
+            jsonify(
+                {
+                    "code": "INVALID_SUBMISSION_MANIFEST",
+                    "message": "风险分析提交记录格式不完整或已损坏",
+                }
+            ),
+            409,
+        )
+
+    if submission.task_id != task_id:
+        current_app.logger.warning(
+            "Risk-analysis submission task id mismatch: route=%s persisted=%s",
+            task_id,
+            submission.task_id,
+        )
+        return (
+            jsonify(
+                {
+                    "code": "INVALID_SUBMISSION_MANIFEST",
+                    "message": "风险分析提交记录与任务不匹配",
+                }
+            ),
+            409,
+        )
+
+    response = jsonify(
+        {
+            "task_id": submission.task_id,
+            "submitted_at": submission.submitted_at,
+            # 初始 QUEUED 只是持久化 envelope，不是当前状态；当前状态仍由 /jobs/{id} 提供。
+            "request": submission.request.model_dump(mode="json"),
+        }
+    )
     response.headers["Cache-Control"] = "no-store"
     return response
 
