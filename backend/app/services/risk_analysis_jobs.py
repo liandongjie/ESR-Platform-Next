@@ -6,6 +6,7 @@ from typing import Any
 
 import numpy as np
 import rasterio
+from affine import Affine
 from rasterio.crs import CRS
 
 from app.gis.geojson import GeoJsonValidationError, parse_geojson_geometry
@@ -132,17 +133,20 @@ class RiskAnalysisJobService:
         return payload
 
 
-def build_risk_analysis_spatial_result(
+def validate_risk_analysis_raster(
     *,
     runtime_dir: Path,
     task_id: str,
     manifest: RiskAnalysisSuccessResult,
-) -> RiskAnalysisSpatialResult:
-    """Convert valid GeoTIFF cells to WGS84 polygons without weakening Affine math."""
+) -> tuple[np.ma.MaskedArray, Affine]:
+    """Read and validate the persisted raster against its success manifest."""
 
     store = RiskAnalysisJobStore(runtime_dir)
     raster_path = store.task_directory(task_id) / "risk.tif"
-    expected_artifact = store.relative_path(raster_path)
+    try:
+        expected_artifact = store.relative_path(raster_path)
+    except ValueError as exc:
+        raise RiskAnalysisArtifactError("风险栅格文件不在当前任务目录") from exc
     if manifest.task_id != task_id or manifest.artifacts.raster != expected_artifact:
         raise RiskAnalysisArtifactError("风险栅格声明与当前任务不一致")
     if not raster_path.is_file():
@@ -164,38 +168,23 @@ def build_risk_analysis_spatial_result(
                 raise RiskAnalysisArtifactError("风险栅格 NoData 与结果清单不一致")
 
             band = dataset.read(1, masked=True)
-            mask = np.ma.getmaskarray(band)
-            features: list[dict[str, Any]] = []
-            valid_values: list[float] = []
-            for row, col in np.ndindex(dataset.shape):
-                value = float(band.data[row, col])
-                if mask[row, col] or not np.isfinite(value):
-                    continue
-                if not 0.0 <= value <= 1.0:
-                    raise RiskAnalysisArtifactError("风险栅格存在超出 [0,1] 的有效值")
-                valid_values.append(value)
-
-                # 使用完整 Affine 对四个像元角运算，旋转/错切项也不会被静默丢弃。
-                corners = [
-                    dataset.transform * (col, row),
-                    dataset.transform * (col + 1, row),
-                    dataset.transform * (col + 1, row + 1),
-                    dataset.transform * (col, row + 1),
-                ]
-                ring = [[float(x), float(y)] for x, y in [*corners, corners[0]]]
-                features.append(
-                    {
-                        "type": "Feature",
-                        "geometry": {"type": "Polygon", "coordinates": [ring]},
-                        "properties": {"value": value},
-                    }
-                )
+            transform = dataset.transform
     except RiskAnalysisArtifactError:
         raise
     except Exception as exc:
         raise RiskAnalysisArtifactError("风险栅格文件无法读取") from exc
 
-    if len(features) != manifest.statistics.valid_pixel_count:
+    mask = np.ma.getmaskarray(band)
+    valid_values: list[float] = []
+    for row, col in np.ndindex(band.shape):
+        value = float(band.data[row, col])
+        if mask[row, col] or not np.isfinite(value):
+            continue
+        if not 0.0 <= value <= 1.0:
+            raise RiskAnalysisArtifactError("风险栅格存在超出 [0,1] 的有效值")
+        valid_values.append(value)
+
+    if len(valid_values) != manifest.statistics.valid_pixel_count:
         raise RiskAnalysisArtifactError("风险栅格有效像元数与结果清单不一致")
     if valid_values:
         actual_statistics = (
@@ -215,6 +204,79 @@ def build_risk_analysis_spatial_result(
             atol=1e-6,
         ):
             raise RiskAnalysisArtifactError("风险栅格统计值与结果清单不一致")
+
+    return band, transform
+
+
+def resolve_risk_analysis_artifact(
+    *,
+    runtime_dir: Path,
+    task_id: str,
+    manifest: RiskAnalysisSuccessResult,
+    artifact_kind: str,
+) -> Path:
+    """Resolve only fixed task artifacts after validating their declarations."""
+
+    store = RiskAnalysisJobStore(runtime_dir)
+    task_dir = store.task_directory(task_id)
+    if artifact_kind == "raster":
+        path = task_dir / "risk.tif"
+        validate_risk_analysis_raster(
+            runtime_dir=runtime_dir,
+            task_id=task_id,
+            manifest=manifest,
+        )
+        return path
+    if artifact_kind != "manifest":
+        raise ValueError("不支持的风险分析 artifact")
+
+    path = task_dir / "result.json"
+    try:
+        expected_artifact = store.relative_path(path)
+    except ValueError as exc:
+        raise RiskAnalysisArtifactError("风险结果清单文件不在当前任务目录") from exc
+    if manifest.task_id != task_id or manifest.artifacts.manifest != expected_artifact:
+        raise RiskAnalysisArtifactError("风险结果清单声明与当前任务不一致")
+    if not path.is_file():
+        raise RiskAnalysisArtifactError("风险结果清单文件不存在")
+    return path
+
+
+def build_risk_analysis_spatial_result(
+    *,
+    runtime_dir: Path,
+    task_id: str,
+    manifest: RiskAnalysisSuccessResult,
+) -> RiskAnalysisSpatialResult:
+    """Convert valid GeoTIFF cells to WGS84 polygons without weakening Affine math."""
+
+    band, transform = validate_risk_analysis_raster(
+        runtime_dir=runtime_dir,
+        task_id=task_id,
+        manifest=manifest,
+    )
+    mask = np.ma.getmaskarray(band)
+    features: list[dict[str, Any]] = []
+    for row, col in np.ndindex(band.shape):
+        value = float(band.data[row, col])
+        if mask[row, col] or not np.isfinite(value):
+            continue
+
+        # 使用完整 Affine 对四个像元角运算，旋转/错切项也不会被静默丢弃。
+        corners = [
+            transform * (col, row),
+            transform * (col + 1, row),
+            transform * (col + 1, row + 1),
+            transform * (col, row + 1),
+        ]
+        ring = [[float(x), float(y)] for x, y in [*corners, corners[0]]]
+        features.append(
+            {
+                "type": "Feature",
+                "geometry": {"type": "Polygon", "coordinates": [ring]},
+                "properties": {"value": value},
+            }
+        )
 
     return RiskAnalysisSpatialResult.model_validate(
         {

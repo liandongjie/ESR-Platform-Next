@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 import numpy as np
+import pytest
 import rasterio
 from rasterio.transform import from_origin
 
@@ -491,6 +492,261 @@ def test_spatial_result_endpoint_returns_404_for_unknown_task(client):
 
     assert response.status_code == 404
     assert response.get_json()["code"] == "JOB_NOT_FOUND"
+
+
+@pytest.mark.parametrize(
+    ("artifact_kind", "filename", "content_type", "download_suffix"),
+    [
+        ("manifest", "result.json", "application/json", "-result.json"),
+        ("raster", "risk.tif", "image/tiff", "-risk.tif"),
+    ],
+)
+def test_result_artifact_download_returns_exact_persisted_bytes(
+    client,
+    app,
+    monkeypatch,
+    artifact_kind,
+    filename,
+    content_type,
+    download_suffix,
+):
+    task_id = _create_job(client, monkeypatch)
+    _write_success_spatial_artifacts(app, task_id)
+    artifact_path = (
+        RiskAnalysisJobStore(app.config["RUNTIME_DATA_DIR"]).task_directory(task_id)
+        / filename
+    )
+    persisted_bytes = artifact_path.read_bytes()
+    if artifact_kind == "manifest":
+        assert b'"schema_version"' not in persisted_bytes
+
+    response = client.get(
+        f"/api/v1/risk-analysis/jobs/{task_id}/result/artifacts/{artifact_kind}"
+    )
+
+    assert response.status_code == 200
+    assert response.data == persisted_bytes
+    assert response.content_type == content_type
+    assert response.headers["Cache-Control"] == "no-store"
+    assert "attachment" in response.headers["Content-Disposition"]
+    assert download_suffix in response.headers["Content-Disposition"]
+
+
+def test_manifest_download_does_not_require_raster(client, app, monkeypatch):
+    task_id = _create_job(client, monkeypatch)
+    store = RiskAnalysisJobStore(app.config["RUNTIME_DATA_DIR"])
+    store.write_json(
+        task_id=task_id,
+        filename="result.json",
+        payload=_valid_success_manifest(task_id),
+    )
+    persisted_bytes = (store.task_directory(task_id) / "result.json").read_bytes()
+
+    response = client.get(
+        f"/api/v1/risk-analysis/jobs/{task_id}/result/artifacts/manifest"
+    )
+
+    assert response.status_code == 200
+    assert response.data == persisted_bytes
+
+    raster_response = client.get(
+        f"/api/v1/risk-analysis/jobs/{task_id}/result/artifacts/raster"
+    )
+    assert raster_response.status_code == 409
+    assert raster_response.get_json()["code"] == "INVALID_RESULT_ARTIFACT"
+
+
+def test_raster_download_rejects_corrupt_geotiff(client, app, monkeypatch):
+    task_id = _create_job(client, monkeypatch)
+    store = RiskAnalysisJobStore(app.config["RUNTIME_DATA_DIR"])
+    store.write_json(
+        task_id=task_id,
+        filename="result.json",
+        payload=_valid_success_manifest(task_id),
+    )
+    (store.task_directory(task_id) / "risk.tif").write_bytes(b"not a geotiff")
+
+    response = client.get(
+        f"/api/v1/risk-analysis/jobs/{task_id}/result/artifacts/raster"
+    )
+
+    assert response.status_code == 409
+    assert response.get_json()["code"] == "INVALID_RESULT_ARTIFACT"
+
+
+@pytest.mark.parametrize("artifact_kind", ["manifest", "raster"])
+@pytest.mark.parametrize("manifest_case", ["invalid-json", "missing-artifacts"])
+def test_result_artifact_download_rejects_invalid_success_manifest(
+    client,
+    app,
+    monkeypatch,
+    artifact_kind,
+    manifest_case,
+):
+    task_id = _create_job(client, monkeypatch)
+    store = RiskAnalysisJobStore(app.config["RUNTIME_DATA_DIR"])
+    if manifest_case == "invalid-json":
+        (store.task_directory(task_id) / "result.json").write_text(
+            "not json",
+            encoding="utf-8",
+        )
+    else:
+        manifest = _valid_success_manifest(task_id)
+        manifest.pop("artifacts")
+        store.write_json(task_id=task_id, filename="result.json", payload=manifest)
+
+    response = client.get(
+        f"/api/v1/risk-analysis/jobs/{task_id}/result/artifacts/{artifact_kind}"
+    )
+
+    assert response.status_code == 409
+    assert response.get_json()["code"] == "INVALID_RESULT_MANIFEST"
+
+
+@pytest.mark.parametrize("artifact_kind", ["manifest", "raster"])
+def test_result_artifact_download_rejects_declaration_mismatch(
+    client,
+    app,
+    monkeypatch,
+    artifact_kind,
+):
+    task_id = _create_job(client, monkeypatch)
+    _write_success_spatial_artifacts(app, task_id)
+    store = RiskAnalysisJobStore(app.config["RUNTIME_DATA_DIR"])
+    manifest = store.read_result(task_id)
+    assert manifest is not None
+    manifest["artifacts"][artifact_kind] = (
+        "risk-analysis/other-task/result.json"
+        if artifact_kind == "manifest"
+        else "risk-analysis/other-task/risk.tif"
+    )
+    store.write_json(task_id=task_id, filename="result.json", payload=manifest)
+
+    response = client.get(
+        f"/api/v1/risk-analysis/jobs/{task_id}/result/artifacts/{artifact_kind}"
+    )
+
+    assert response.status_code == 409
+    assert response.get_json()["code"] == "INVALID_RESULT_ARTIFACT"
+
+
+@pytest.mark.parametrize("artifact_kind", ["manifest", "raster"])
+def test_result_artifact_download_returns_202_while_running(
+    client,
+    monkeypatch,
+    artifact_kind,
+):
+    task_id = _create_job(client, monkeypatch)
+    monkeypatch.setattr(
+        "app.api.v1.risk_analysis.celery_app.AsyncResult",
+        lambda _: FakeAsyncResult("PROGRESS", {"stage": "ANALYZING", "progress": 35}),
+    )
+
+    response = client.get(
+        f"/api/v1/risk-analysis/jobs/{task_id}/result/artifacts/{artifact_kind}"
+    )
+
+    assert response.status_code == 202
+    assert response.get_json()["code"] == "RESULT_NOT_READY"
+    assert response.get_json()["status"] == "RUNNING"
+    assert response.headers["Retry-After"] == "2"
+
+
+@pytest.mark.parametrize("artifact_kind", ["manifest", "raster"])
+def test_result_artifact_download_returns_canceled_as_409(
+    client,
+    monkeypatch,
+    artifact_kind,
+):
+    task_id = _create_job(client, monkeypatch)
+    monkeypatch.setattr(
+        "app.api.v1.risk_analysis.celery_app.AsyncResult",
+        lambda _: FakeAsyncResult("REVOKED"),
+    )
+
+    response = client.get(
+        f"/api/v1/risk-analysis/jobs/{task_id}/result/artifacts/{artifact_kind}"
+    )
+
+    assert response.status_code == 409
+    assert response.get_json()["status"] == "CANCELED"
+
+
+@pytest.mark.parametrize("artifact_kind", ["manifest", "raster"])
+def test_result_artifact_download_returns_failed_manifest_as_409(
+    client,
+    app,
+    monkeypatch,
+    artifact_kind,
+):
+    task_id = _create_job(client, monkeypatch)
+    RiskAnalysisJobStore(app.config["RUNTIME_DATA_DIR"]).write_json(
+        task_id=task_id,
+        filename="result.json",
+        payload={
+            "task_id": task_id,
+            "status": "FAILED",
+            "error": {"code": "ANALYSIS_ERROR", "message": "分析失败"},
+        },
+    )
+
+    response = client.get(
+        f"/api/v1/risk-analysis/jobs/{task_id}/result/artifacts/{artifact_kind}"
+    )
+
+    assert response.status_code == 409
+    assert response.get_json()["status"] == "FAILED"
+
+
+@pytest.mark.parametrize("artifact_kind", ["manifest", "raster"])
+def test_result_artifact_download_returns_404_for_unknown_task(client, artifact_kind):
+    response = client.get(
+        f"/api/v1/risk-analysis/jobs/unknown-task/result/artifacts/{artifact_kind}"
+    )
+
+    assert response.status_code == 404
+    assert response.get_json()["code"] == "JOB_NOT_FOUND"
+
+
+def test_result_artifact_download_rejects_invalid_or_traversal_paths(
+    client,
+    app,
+    monkeypatch,
+):
+    task_id = _create_job(client, monkeypatch)
+    outside_bytes = b"must not be downloadable"
+    outside_path = app.config["RUNTIME_DATA_DIR"] / "outside-secret.txt"
+    outside_path.write_bytes(outside_bytes)
+    urls = [
+        f"/api/v1/risk-analysis/jobs/{task_id}/result/artifacts/submission",
+        f"/api/v1/risk-analysis/jobs/{task_id}/result/artifacts/%2e%2e%2foutside-secret.txt",
+        "/api/v1/risk-analysis/jobs/%2e%2e%2foutside/result/artifacts/manifest",
+    ]
+
+    for url in urls:
+        response = client.get(url)
+        assert response.status_code == 404
+        assert outside_bytes not in response.data
+
+
+@pytest.mark.parametrize("artifact_kind", ["manifest", "raster"])
+def test_succeeded_job_without_manifest_returns_artifact_conflict(
+    client,
+    monkeypatch,
+    artifact_kind,
+):
+    task_id = _create_job(client, monkeypatch)
+    monkeypatch.setattr(
+        "app.api.v1.risk_analysis.celery_app.AsyncResult",
+        lambda _: FakeAsyncResult("SUCCESS"),
+    )
+
+    response = client.get(
+        f"/api/v1/risk-analysis/jobs/{task_id}/result/artifacts/{artifact_kind}"
+    )
+
+    assert response.status_code == 409
+    assert response.get_json()["code"] == "INVALID_RESULT_ARTIFACT"
 
 
 def test_queue_failure_returns_503_and_persists_failure(client, app, monkeypatch):

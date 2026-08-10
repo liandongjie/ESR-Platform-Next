@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 from uuid import uuid4
 
-from flask import Blueprint, current_app, jsonify, request, url_for
+from flask import Blueprint, current_app, jsonify, request, send_file, url_for
 from pydantic import ValidationError
 
 from app.api.validation import validation_details
@@ -17,6 +17,7 @@ from app.schemas.risk_analysis import (
 from app.services.risk_analysis_jobs import (
     RiskAnalysisArtifactError,
     build_risk_analysis_spatial_result,
+    resolve_risk_analysis_artifact,
     write_failure_manifest,
 )
 
@@ -445,6 +446,126 @@ def get_risk_analysis_result(task_id: str):
     )
     response.status_code = 202
     response.headers["Retry-After"] = "2"
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+@risk_analysis_bp.get("/jobs/<task_id>/result/artifacts/<artifact_kind>")
+def download_risk_analysis_artifact(task_id: str, artifact_kind: str):
+    """Download a validated persisted result artifact without regenerating it."""
+
+    artifact_responses = {
+        "manifest": ("application/json", f"risk-analysis-{task_id}-result.json"),
+        "raster": ("image/tiff", f"risk-analysis-{task_id}-risk.tif"),
+    }
+    if artifact_kind not in artifact_responses:
+        return jsonify({"code": "ARTIFACT_NOT_FOUND", "message": "结果文件不存在"}), 404
+
+    store = _job_store()
+    if not store.task_exists(task_id):
+        return jsonify({"code": "JOB_NOT_FOUND", "message": "风险分析任务不存在"}), 404
+
+    try:
+        result = store.read_result(task_id)
+    except (OSError, ValueError) as exc:
+        current_app.logger.warning(
+            "Invalid risk-analysis result manifest for artifact task %s: %s",
+            task_id,
+            exc,
+        )
+        response = jsonify(
+            {
+                "code": "INVALID_RESULT_MANIFEST",
+                "message": "风险分析结果文件格式不完整或已损坏",
+            }
+        )
+        response.headers["Cache-Control"] = "no-store"
+        return response, 409
+
+    if result is None:
+        try:
+            status = _job_status_payload(store, task_id)
+        except TaskStatusBackendUnavailable as exc:
+            current_app.logger.warning("Risk-analysis status backend unavailable: %s", exc)
+            return jsonify({"code": "STATUS_UNAVAILABLE", "message": str(exc)}), 503
+
+        if status and status["status"] in {"FAILED", "CANCELED"}:
+            response = jsonify(status)
+            response.headers["Cache-Control"] = "no-store"
+            return response, 409
+        if status and status["status"] == "SUCCEEDED":
+            response = jsonify(
+                {
+                    "code": "INVALID_RESULT_ARTIFACT",
+                    "message": "成功任务缺少结果文件",
+                    "task_id": task_id,
+                }
+            )
+            response.headers["Cache-Control"] = "no-store"
+            return response, 409
+
+        response = jsonify(
+            {
+                "code": "RESULT_NOT_READY",
+                "message": "风险分析任务尚未产生最终结果",
+                "task_id": task_id,
+                "status": status["status"] if status else "QUEUED",
+            }
+        )
+        response.headers["Retry-After"] = "2"
+        response.headers["Cache-Control"] = "no-store"
+        return response, 202
+
+    if result.get("status") != "SUCCEEDED":
+        response = jsonify(result)
+        response.headers["Cache-Control"] = "no-store"
+        return response, 409
+
+    try:
+        manifest = RiskAnalysisSuccessResult.model_validate(result)
+    except ValidationError as exc:
+        current_app.logger.warning(
+            "Invalid risk-analysis result manifest for artifact task %s: %s",
+            task_id,
+            exc,
+        )
+        response = jsonify(
+            {
+                "code": "INVALID_RESULT_MANIFEST",
+                "message": "风险分析结果文件格式不完整或已损坏",
+            }
+        )
+        response.headers["Cache-Control"] = "no-store"
+        return response, 409
+
+    try:
+        artifact_path = resolve_risk_analysis_artifact(
+            runtime_dir=current_app.config["RUNTIME_DATA_DIR"],
+            task_id=task_id,
+            manifest=manifest,
+            artifact_kind=artifact_kind,
+        )
+    except RiskAnalysisArtifactError as exc:
+        current_app.logger.warning(
+            "Invalid risk-analysis result artifact for task %s: %s", task_id, exc
+        )
+        response = jsonify(
+            {
+                "code": "INVALID_RESULT_ARTIFACT",
+                "message": str(exc),
+                "task_id": task_id,
+            }
+        )
+        response.headers["Cache-Control"] = "no-store"
+        return response, 409
+
+    mimetype, download_name = artifact_responses[artifact_kind]
+    response = send_file(
+        artifact_path,
+        mimetype=mimetype,
+        as_attachment=True,
+        download_name=download_name,
+    )
     response.headers["Cache-Control"] = "no-store"
     return response
 
