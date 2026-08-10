@@ -204,6 +204,7 @@ onMounted(() => {
       <MapCanvas
         :source-point="analysisStore.sourceGeometryWgs84"
         :buffer-geometry="bufferGeometry"
+        :risk-spatial-result="analysisStore.spatialResult"
         :selection-disabled="analysisStore.analysisLocked"
         @select-point="handlePointSelected"
       />
@@ -410,6 +411,17 @@ onMounted(() => {
             <strong>分析结果</strong>
             <el-tag type="success" effect="dark" size="small">SUCCEEDED</el-tag>
           </div>
+
+          <small v-if="analysisStore.spatialLoading" class="section-hint">
+            正在加载空间风险分布…
+          </small>
+          <el-alert
+            v-if="analysisStore.spatialWarning"
+            :title="analysisStore.spatialWarning"
+            type="warning"
+            :closable="false"
+            show-icon
+          />
 
           <div class="statistics-grid">
             <div>

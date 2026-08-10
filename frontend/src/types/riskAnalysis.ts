@@ -1,4 +1,4 @@
-import type { BufferGeometry } from '@/types/analysisArea'
+import type { BufferGeometry, PolygonGeometry } from '@/types/analysisArea'
 
 export interface RiskIndicatorWeightInput {
   code: string
@@ -94,5 +94,27 @@ export interface RiskAnalysisResult {
   artifacts: {
     raster: string
     manifest: string
+  }
+}
+
+export interface RiskAnalysisSpatialFeature {
+  type: 'Feature'
+  geometry: PolygonGeometry
+  properties: {
+    value: number
+  }
+}
+
+export interface RiskAnalysisSpatialResult {
+  schema_version: 1
+  task_id: string
+  crs: 'EPSG:4326'
+  value_range: {
+    minimum: 0
+    maximum: 1
+  }
+  feature_collection: {
+    type: 'FeatureCollection'
+    features: RiskAnalysisSpatialFeature[]
   }
 }

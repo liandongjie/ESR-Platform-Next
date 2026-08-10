@@ -1,10 +1,15 @@
 import { defineStore } from 'pinia'
 
 import { getApiErrorMessage } from '@/api/errors'
-import { getRiskAnalysisResult, listRiskAnalysisJobs } from '@/api/riskAnalysis'
+import {
+  getRiskAnalysisResult,
+  getRiskAnalysisSpatialResult,
+  listRiskAnalysisJobs,
+} from '@/api/riskAnalysis'
 import type {
   RiskAnalysisJobHistoryItem,
   RiskAnalysisResult,
+  RiskAnalysisSpatialResult,
   RiskJobStatus,
 } from '@/types/riskAnalysis'
 
@@ -22,9 +27,13 @@ interface TaskHistoryState {
   polling: boolean
   refreshRevision: number
   selectedTaskId: string | null
+  detailRevision: number
   selectedResult: RiskAnalysisResult | null
   detailLoading: boolean
   detailError: string | null
+  selectedSpatialResult: RiskAnalysisSpatialResult | null
+  spatialLoadingTaskId: string | null
+  spatialError: string | null
 }
 
 function wait(milliseconds: number): Promise<void> {
@@ -49,9 +58,13 @@ export const useTaskHistoryStore = defineStore('taskHistory', {
     polling: false,
     refreshRevision: 0,
     selectedTaskId: null,
+    detailRevision: 0,
     selectedResult: null,
     detailLoading: false,
     detailError: null,
+    selectedSpatialResult: null,
+    spatialLoadingTaskId: null,
+    spatialError: null,
   }),
   getters: {
     offset: (state): number => (state.page - 1) * state.limit,
@@ -59,6 +72,7 @@ export const useTaskHistoryStore = defineStore('taskHistory', {
       state.items.some((item) => needsRefresh(item.status, item.result_available)),
     selectedTask: (state): RiskAnalysisJobHistoryItem | null =>
       state.items.find((item) => item.task_id === state.selectedTaskId) ?? null,
+    spatialLoading: (state): boolean => state.spatialLoadingTaskId !== null,
   },
   actions: {
     async loadJobs(initial = false): Promise<boolean> {
@@ -147,31 +161,86 @@ export const useTaskHistoryStore = defineStore('taskHistory', {
       }
     },
     async openTask(task: RiskAnalysisJobHistoryItem) {
-      this.selectedTaskId = task.task_id
-      this.selectedResult = null
+      const resultAvailable = task.status === 'SUCCEEDED' && task.result_available
+      const sameDetailSession = this.selectedTaskId === task.task_id
+      if (sameDetailSession) {
+        if (
+          !resultAvailable ||
+          this.detailLoading ||
+          this.selectedResult ||
+          this.spatialLoadingTaskId === task.task_id ||
+          this.selectedSpatialResult
+        ) {
+          return
+        }
+      } else {
+        this.detailRevision += 1
+        this.selectedTaskId = task.task_id
+        this.selectedResult = null
+        this.detailLoading = false
+        this.detailError = null
+        this.selectedSpatialResult = null
+        this.spatialLoadingTaskId = null
+        this.spatialError = null
+      }
+
+      if (!resultAvailable) return
+
+      const revision = this.detailRevision
       this.detailError = null
-
-      if (task.status !== 'SUCCEEDED' || !task.result_available) return
-
       this.detailLoading = true
+      void this.loadSpatialResult(task.task_id, revision)
       try {
         const result = await getRiskAnalysisResult(task.task_id)
-        if (this.selectedTaskId !== task.task_id) return
+        if (this.selectedTaskId !== task.task_id || this.detailRevision !== revision) return
         this.selectedResult = result
       } catch (error: unknown) {
-        if (this.selectedTaskId !== task.task_id) return
+        if (this.selectedTaskId !== task.task_id || this.detailRevision !== revision) return
         this.detailError = getApiErrorMessage(error, '读取任务结果失败')
       } finally {
-        if (this.selectedTaskId === task.task_id) {
+        if (this.selectedTaskId === task.task_id && this.detailRevision === revision) {
           this.detailLoading = false
         }
       }
     },
+    async loadSpatialResult(taskId: string, revision: number) {
+      if (
+        this.selectedTaskId !== taskId ||
+        this.detailRevision !== revision ||
+        this.selectedSpatialResult?.task_id === taskId ||
+        this.spatialLoadingTaskId === taskId
+      ) {
+        return
+      }
+
+      this.spatialLoadingTaskId = taskId
+      this.spatialError = null
+      try {
+        const spatialResult = await getRiskAnalysisSpatialResult(taskId)
+        if (this.selectedTaskId !== taskId || this.detailRevision !== revision) return
+        this.selectedSpatialResult = spatialResult
+      } catch (error: unknown) {
+        if (this.selectedTaskId !== taskId || this.detailRevision !== revision) return
+        this.spatialError = getApiErrorMessage(error, '读取空间风险结果失败')
+      } finally {
+        if (
+          this.selectedTaskId === taskId &&
+          this.detailRevision === revision &&
+          this.spatialLoadingTaskId === taskId
+        ) {
+          this.spatialLoadingTaskId = null
+        }
+      }
+    },
     closeDetail() {
+      this.detailRevision += 1
       this.selectedTaskId = null
       this.selectedResult = null
       this.detailLoading = false
       this.detailError = null
+      this.selectedSpatialResult = null
+      this.spatialLoadingTaskId = null
+      this.spatialError = null
     },
   },
 })

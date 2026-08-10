@@ -4,16 +4,28 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
 
+import numpy as np
+import rasterio
+from rasterio.crs import CRS
+
 from app.gis.geojson import GeoJsonValidationError, parse_geojson_geometry
 from app.gis.indicators import INDICATORS, IndicatorDefinition
 from app.gis.risk_models import IndicatorWeight, RiskAnalysisValidationError
 from app.gis.risk_pipeline import RiskAnalysisPipeline, write_risk_geotiff
 from app.repositories.risk_analysis_job_store import RiskAnalysisJobStore
-from app.schemas.risk_analysis import RiskAnalysisJobRequest
+from app.schemas.risk_analysis import (
+    RiskAnalysisJobRequest,
+    RiskAnalysisSpatialResult,
+    RiskAnalysisSuccessResult,
+)
 
 _ALGORITHM_VERSION = "weighted-overlay-v1"
 
 type ProgressCallback = Callable[[str, int], None]
+
+
+class RiskAnalysisArtifactError(RuntimeError):
+    """Persisted result artifacts are missing or contradict their manifest."""
 
 
 def _notify(callback: ProgressCallback | None, stage: str, progress: int) -> None:
@@ -118,6 +130,101 @@ class RiskAnalysisJobService:
         self.store.write_json(task_id=task_id, filename="result.json", payload=payload)
         _notify(on_progress, "COMPLETED", 100)
         return payload
+
+
+def build_risk_analysis_spatial_result(
+    *,
+    runtime_dir: Path,
+    task_id: str,
+    manifest: RiskAnalysisSuccessResult,
+) -> RiskAnalysisSpatialResult:
+    """Convert valid GeoTIFF cells to WGS84 polygons without weakening Affine math."""
+
+    store = RiskAnalysisJobStore(runtime_dir)
+    raster_path = store.task_directory(task_id) / "risk.tif"
+    expected_artifact = store.relative_path(raster_path)
+    if manifest.task_id != task_id or manifest.artifacts.raster != expected_artifact:
+        raise RiskAnalysisArtifactError("风险栅格声明与当前任务不一致")
+    if not raster_path.is_file():
+        raise RiskAnalysisArtifactError("风险栅格文件不存在")
+
+    try:
+        with rasterio.open(raster_path) as dataset:
+            if dataset.count != 1:
+                raise RiskAnalysisArtifactError("风险栅格必须是单波段")
+            if dataset.crs != CRS.from_epsg(4326):
+                raise RiskAnalysisArtifactError("风险栅格 CRS 必须是 EPSG:4326")
+            if manifest.grid.crs != dataset.crs.to_string():
+                raise RiskAnalysisArtifactError("风险栅格 CRS 与结果清单不一致")
+            if dataset.dtypes[0] != "float32":
+                raise RiskAnalysisArtifactError("风险栅格 dtype 必须是 float32")
+            if dataset.shape != tuple(manifest.grid.shape):
+                raise RiskAnalysisArtifactError("风险栅格 shape 与结果清单不一致")
+            if dataset.nodata != float(manifest.grid.nodata):
+                raise RiskAnalysisArtifactError("风险栅格 NoData 与结果清单不一致")
+
+            band = dataset.read(1, masked=True)
+            mask = np.ma.getmaskarray(band)
+            features: list[dict[str, Any]] = []
+            valid_values: list[float] = []
+            for row, col in np.ndindex(dataset.shape):
+                value = float(band.data[row, col])
+                if mask[row, col] or not np.isfinite(value):
+                    continue
+                if not 0.0 <= value <= 1.0:
+                    raise RiskAnalysisArtifactError("风险栅格存在超出 [0,1] 的有效值")
+                valid_values.append(value)
+
+                # 使用完整 Affine 对四个像元角运算，旋转/错切项也不会被静默丢弃。
+                corners = [
+                    dataset.transform * (col, row),
+                    dataset.transform * (col + 1, row),
+                    dataset.transform * (col + 1, row + 1),
+                    dataset.transform * (col, row + 1),
+                ]
+                ring = [[float(x), float(y)] for x, y in [*corners, corners[0]]]
+                features.append(
+                    {
+                        "type": "Feature",
+                        "geometry": {"type": "Polygon", "coordinates": [ring]},
+                        "properties": {"value": value},
+                    }
+                )
+    except RiskAnalysisArtifactError:
+        raise
+    except Exception as exc:
+        raise RiskAnalysisArtifactError("风险栅格文件无法读取") from exc
+
+    if len(features) != manifest.statistics.valid_pixel_count:
+        raise RiskAnalysisArtifactError("风险栅格有效像元数与结果清单不一致")
+    if valid_values:
+        actual_statistics = (
+            min(valid_values),
+            max(valid_values),
+            float(np.mean(valid_values, dtype=np.float64)),
+        )
+        expected_statistics = (
+            float(manifest.statistics.minimum),
+            float(manifest.statistics.maximum),
+            float(manifest.statistics.mean),
+        )
+        if not np.allclose(
+            actual_statistics,
+            expected_statistics,
+            rtol=0.0,
+            atol=1e-6,
+        ):
+            raise RiskAnalysisArtifactError("风险栅格统计值与结果清单不一致")
+
+    return RiskAnalysisSpatialResult.model_validate(
+        {
+            "schema_version": 1,
+            "task_id": task_id,
+            "crs": "EPSG:4326",
+            "value_range": {"minimum": 0.0, "maximum": 1.0},
+            "feature_collection": {"type": "FeatureCollection", "features": features},
+        }
+    )
 
 def write_failure_manifest(
     *,

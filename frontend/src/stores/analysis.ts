@@ -6,6 +6,7 @@ import {
   createRiskAnalysisJob,
   getRiskAnalysisJob,
   getRiskAnalysisResult,
+  getRiskAnalysisSpatialResult,
   getRiskAnalysisSubmission,
 } from '@/api/riskAnalysis'
 import type {
@@ -16,6 +17,7 @@ import type {
 import type {
   RiskAnalysisJobStatus,
   RiskAnalysisResult,
+  RiskAnalysisSpatialResult,
   RiskAnalysisSubmissionDetail,
   RiskIndicatorWeightInput,
 } from '@/types/riskAnalysis'
@@ -48,6 +50,9 @@ interface AnalysisState {
   job: RiskAnalysisJobReference | null
   jobStatus: RiskAnalysisJobStatus | null
   result: RiskAnalysisResult | null
+  spatialResult: RiskAnalysisSpatialResult | null
+  spatialLoadingTaskId: string | null
+  spatialWarning: string | null
   submissionContext: RiskAnalysisSubmissionDetail | null
   submissionLoading: boolean
   submissionError: string | null
@@ -194,6 +199,9 @@ export const useAnalysisStore = defineStore('analysis', {
     job: null,
     jobStatus: null,
     result: null,
+    spatialResult: null,
+    spatialLoadingTaskId: null,
+    spatialWarning: null,
     submissionContext: null,
     submissionLoading: false,
     submissionError: null,
@@ -217,6 +225,7 @@ export const useAnalysisStore = defineStore('analysis', {
       const status = state.jobStatus?.status
       return status !== 'FAILED' && status !== 'CANCELED'
     },
+    spatialLoading: (state): boolean => state.spatialLoadingTaskId !== null,
   },
   actions: {
     resetRiskAnalysis() {
@@ -226,6 +235,9 @@ export const useAnalysisStore = defineStore('analysis', {
       this.job = null
       this.jobStatus = null
       this.result = null
+      this.spatialResult = null
+      this.spatialLoadingTaskId = null
+      this.spatialWarning = null
       this.submissionContext = null
       this.submissionLoading = false
       this.submissionError = null
@@ -327,6 +339,9 @@ export const useAnalysisStore = defineStore('analysis', {
       this.job = { task_id: taskId }
       this.jobStatus = null
       this.result = null
+      this.spatialResult = null
+      this.spatialLoadingTaskId = null
+      this.spatialWarning = null
       this.submissionContext = null
       this.submissionLoading = false
       this.submissionError = null
@@ -354,6 +369,7 @@ export const useAnalysisStore = defineStore('analysis', {
           const result = await getRiskAnalysisResult(taskId)
           if (revision !== this.jobRevision) return
           this.result = result
+          void this.loadRiskAnalysisSpatialResult(taskId, revision)
           return
         }
 
@@ -390,6 +406,48 @@ export const useAnalysisStore = defineStore('analysis', {
       } finally {
         if (this.job?.task_id === taskId) {
           this.submissionLoading = false
+        }
+      }
+    },
+    async loadRiskAnalysisSpatialResult(taskId: string, revision: number) {
+      if (
+        revision !== this.jobRevision ||
+        this.job?.task_id !== taskId ||
+        this.result?.task_id !== taskId ||
+        this.spatialResult?.task_id === taskId ||
+        this.spatialLoadingTaskId === taskId
+      ) {
+        return
+      }
+
+      this.spatialLoadingTaskId = taskId
+      this.spatialWarning = null
+      try {
+        const spatialResult = await getRiskAnalysisSpatialResult(taskId)
+        if (
+          revision !== this.jobRevision ||
+          this.job?.task_id !== taskId ||
+          this.result?.task_id !== taskId
+        ) {
+          return
+        }
+        this.spatialResult = spatialResult
+      } catch (error: unknown) {
+        if (
+          revision !== this.jobRevision ||
+          this.job?.task_id !== taskId ||
+          this.result?.task_id !== taskId
+        ) {
+          return
+        }
+        this.spatialWarning = getApiErrorMessage(error, '空间风险结果加载失败')
+      } finally {
+        if (
+          revision === this.jobRevision &&
+          this.job?.task_id === taskId &&
+          this.spatialLoadingTaskId === taskId
+        ) {
+          this.spatialLoadingTaskId = null
         }
       }
     },
@@ -457,6 +515,9 @@ export const useAnalysisStore = defineStore('analysis', {
       this.job = null
       this.jobStatus = null
       this.result = null
+      this.spatialResult = null
+      this.spatialLoadingTaskId = null
+      this.spatialWarning = null
       this.submissionContext = null
       this.submissionLoading = false
       this.submissionError = null
@@ -521,6 +582,7 @@ export const useAnalysisStore = defineStore('analysis', {
             this.result = result
             this.polling = false
             this.taskError = null
+            void this.loadRiskAnalysisSpatialResult(taskId, revision)
             return
           }
           // Celery 极端情况下可能已 SUCCESS，但 result.json 尚未可见。

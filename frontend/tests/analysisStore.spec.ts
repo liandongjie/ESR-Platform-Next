@@ -6,6 +6,7 @@ import {
   createRiskAnalysisJob,
   getRiskAnalysisJob,
   getRiskAnalysisResult,
+  getRiskAnalysisSpatialResult,
   getRiskAnalysisSubmission,
 } from '@/api/riskAnalysis'
 import { useAnalysisStore } from '@/stores/analysis'
@@ -13,6 +14,7 @@ import type { AnalysisAreaBufferResponse } from '@/types/analysisArea'
 import type {
   RiskAnalysisJobStatus,
   RiskAnalysisResult,
+  RiskAnalysisSpatialResult,
   RiskAnalysisSubmissionDetail,
 } from '@/types/riskAnalysis'
 
@@ -24,6 +26,7 @@ vi.mock('@/api/riskAnalysis', () => ({
   createRiskAnalysisJob: vi.fn(),
   getRiskAnalysisJob: vi.fn(),
   getRiskAnalysisResult: vi.fn(),
+  getRiskAnalysisSpatialResult: vi.fn(),
   getRiskAnalysisSubmission: vi.fn(),
 }))
 
@@ -31,6 +34,7 @@ const mockedCreateBuffer = vi.mocked(createAnalysisAreaBuffer)
 const mockedCreateJob = vi.mocked(createRiskAnalysisJob)
 const mockedGetJob = vi.mocked(getRiskAnalysisJob)
 const mockedGetResult = vi.mocked(getRiskAnalysisResult)
+const mockedGetSpatialResult = vi.mocked(getRiskAnalysisSpatialResult)
 const mockedGetSubmission = vi.mocked(getRiskAnalysisSubmission)
 const workspaceTaskStorageKey = 'esr:risk-analysis:workspace-task-id'
 const workspaceDraftStorageKey = 'esr:risk-analysis:workspace-draft'
@@ -118,6 +122,36 @@ function makeRiskResult(): RiskAnalysisResult {
   }
 }
 
+function makeSpatialResult(taskId = 'task-1'): RiskAnalysisSpatialResult {
+  return {
+    schema_version: 1,
+    task_id: taskId,
+    crs: 'EPSG:4326',
+    value_range: { minimum: 0, maximum: 1 },
+    feature_collection: {
+      type: 'FeatureCollection',
+      features: [
+        {
+          type: 'Feature',
+          geometry: {
+            type: 'Polygon',
+            coordinates: [
+              [
+                [118.86, 32.07],
+                [118.87, 32.07],
+                [118.87, 32.08],
+                [118.86, 32.08],
+                [118.86, 32.07],
+              ],
+            ],
+          },
+          properties: { value: 0 },
+        },
+      ],
+    },
+  }
+}
+
 function makeSubmission(): RiskAnalysisSubmissionDetail {
   return {
     task_id: 'task-1',
@@ -146,6 +180,8 @@ describe('analysis store', () => {
     mockedCreateJob.mockReset()
     mockedGetJob.mockReset()
     mockedGetResult.mockReset()
+    mockedGetSpatialResult.mockReset()
+    mockedGetSpatialResult.mockResolvedValue(makeSpatialResult())
     mockedGetSubmission.mockReset()
     mockedGetSubmission.mockResolvedValue(makeSubmission())
     window.sessionStorage.clear()
@@ -361,10 +397,86 @@ describe('analysis store', () => {
 
     expect(mockedGetJob).toHaveBeenCalledWith('task-1')
     expect(mockedGetResult).toHaveBeenCalledWith('task-1')
+    expect(mockedGetSpatialResult).toHaveBeenCalledWith('task-1')
     expect(store.result?.statistics.valid_pixel_count).toBe(28)
+    expect(store.spatialResult?.task_id).toBe('task-1')
     expect(store.jobStatus?.status).toBe('SUCCEEDED')
     expect(store.polling).toBe(false)
   })
+
+  it('deduplicates spatial requests while the same task is loading and after it succeeds', async () => {
+    const store = useAnalysisStore()
+    store.job = { task_id: 'task-1' }
+    store.result = makeRiskResult()
+    let resolveSpatial: ((value: RiskAnalysisSpatialResult) => void) | undefined
+    mockedGetSpatialResult.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveSpatial = resolve
+        }),
+    )
+
+    const first = store.loadRiskAnalysisSpatialResult('task-1', store.jobRevision)
+    await store.loadRiskAnalysisSpatialResult('task-1', store.jobRevision)
+    expect(mockedGetSpatialResult).toHaveBeenCalledTimes(1)
+
+    resolveSpatial?.(makeSpatialResult())
+    await first
+    await store.loadRiskAnalysisSpatialResult('task-1', store.jobRevision)
+
+    expect(mockedGetSpatialResult).toHaveBeenCalledTimes(1)
+    expect(store.spatialResult?.task_id).toBe('task-1')
+  })
+
+  it('keeps a succeeded result when the independent spatial request fails', async () => {
+    const store = useAnalysisStore()
+    store.job = { task_id: 'task-1' }
+    store.jobStatus = {
+      task_id: 'task-1',
+      status: 'SUCCEEDED',
+      stage: 'COMPLETED',
+      progress: 100,
+      result_available: true,
+      submitted_at: '2026-08-07T12:00:00Z',
+    }
+    store.result = makeRiskResult()
+    mockedGetSpatialResult.mockRejectedValueOnce(new Error('spatial unavailable'))
+
+    await store.loadRiskAnalysisSpatialResult('task-1', store.jobRevision)
+
+    expect(store.result?.task_id).toBe('task-1')
+    expect(store.jobStatus.status).toBe('SUCCEEDED')
+    expect(store.taskError).toBeNull()
+    expect(store.spatialWarning).toBe('spatial unavailable')
+  })
+
+  it.each(['success', 'error'] as const)(
+    'ignores a late spatial %s after reset',
+    async (outcome) => {
+      const store = useAnalysisStore()
+      store.job = { task_id: 'task-1' }
+      store.result = makeRiskResult()
+      let resolveSpatial: ((value: RiskAnalysisSpatialResult) => void) | undefined
+      let rejectSpatial: ((reason: Error) => void) | undefined
+      mockedGetSpatialResult.mockImplementationOnce(
+        () =>
+          new Promise((resolve, reject) => {
+            resolveSpatial = resolve
+            rejectSpatial = reject
+          }),
+      )
+
+      const request = store.loadRiskAnalysisSpatialResult('task-1', store.jobRevision)
+      store.resetRiskAnalysis()
+      if (outcome === 'success') resolveSpatial?.(makeSpatialResult())
+      else rejectSpatial?.(new Error('late failure'))
+      await request
+
+      expect(store.spatialResult).toBeNull()
+      expect(store.spatialWarning).toBeNull()
+      expect(store.spatialLoading).toBe(false)
+    },
+  )
 
   it(
     'does not fetch result while Celery is SUCCEEDED but result manifest is not visible yet',
