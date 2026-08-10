@@ -521,7 +521,7 @@ describe('analysis store', () => {
 
     expect(store.result?.task_id).toBe('task-1')
     expect(store.submissionContext).toBeNull()
-    expect(store.submissionError).toBe('submission unavailable')
+    expect(store.submissionError).toBe('提交上下文恢复失败，但任务状态和分析结果不受影响')
     expect(store.taskError).toBeNull()
   })
 

@@ -250,9 +250,9 @@ export const useAnalysisStore = defineStore('analysis', {
         this.submissionContext = submission
         // 当前可编辑 weights 必须复制；只读提交事实始终保留服务端原值。
         this.weights = submission.request.weights.map((item) => ({ ...item }))
-      } catch (error: unknown) {
+      } catch {
         if (this.job?.task_id !== taskId) return
-        this.submissionError = getApiErrorMessage(error, '恢复任务提交上下文失败')
+        this.submissionError = '提交上下文恢复失败，但任务状态和分析结果不受影响'
       } finally {
         if (this.job?.task_id === taskId) {
           this.submissionLoading = false
