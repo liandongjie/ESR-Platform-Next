@@ -33,6 +33,20 @@ const mockedGetJob = vi.mocked(getRiskAnalysisJob)
 const mockedGetResult = vi.mocked(getRiskAnalysisResult)
 const mockedGetSubmission = vi.mocked(getRiskAnalysisSubmission)
 const workspaceTaskStorageKey = 'esr:risk-analysis:workspace-task-id'
+const workspaceDraftStorageKey = 'esr:risk-analysis:workspace-draft'
+
+function makeDraft(bufferReady: boolean) {
+  return {
+    source_point_wgs84: [118.9, 32.1],
+    buffer_distance_m: 3000,
+    weights: [
+      { code: 'PM25', weight_percent: 35 },
+      { code: 'AQI', weight_percent: 35 },
+      { code: 'NDVI', weight_percent: 30 },
+    ],
+    buffer_ready: bufferReady,
+  }
+}
 
 function makeBufferResponse(distanceM = 3000): AnalysisAreaBufferResponse {
   return {
@@ -204,6 +218,115 @@ describe('analysis store', () => {
       expect(store.result).toBeNull()
     },
   )
+
+  it('persists only draft inputs and marks the buffer ready after an accepted response', async () => {
+    mockedCreateBuffer.mockResolvedValueOnce(makeBufferResponse())
+    const store = useAnalysisStore()
+
+    store.setSourcePoint([118.9, 32.1])
+    store.setBufferDistance(4000)
+    await store.createBuffer()
+    store.setWeight('PM25', 35)
+
+    const draft = JSON.parse(window.sessionStorage.getItem(workspaceDraftStorageKey) ?? '{}')
+    expect(draft).toEqual({
+      source_point_wgs84: [118.9, 32.1],
+      buffer_distance_m: 4000,
+      weights: [
+        { code: 'PM25', weight_percent: 35 },
+        { code: 'AQI', weight_percent: 40 },
+        { code: 'NDVI', weight_percent: 30 },
+      ],
+      buffer_ready: true,
+    })
+    expect(JSON.stringify(draft)).not.toMatch(/geometry|area|working_crs|gcj|viewport/i)
+
+    store.setBufferDistance(5000)
+    expect(JSON.parse(window.sessionStorage.getItem(workspaceDraftStorageKey) ?? '{}')).toMatchObject(
+      { buffer_distance_m: 5000, buffer_ready: false },
+    )
+  })
+
+  it('restores draft inputs without creating a buffer when none had succeeded', async () => {
+    window.sessionStorage.setItem(workspaceDraftStorageKey, JSON.stringify(makeDraft(false)))
+    const store = useAnalysisStore()
+
+    await store.restoreRiskAnalysis()
+
+    expect(store.sourceGeometryWgs84?.coordinates).toEqual([118.9, 32.1])
+    expect(store.bufferDistanceMeters).toBe(3000)
+    expect(store.weights).toEqual(makeDraft(false).weights)
+    expect(store.bufferResult).toBeNull()
+    expect(mockedCreateBuffer).not.toHaveBeenCalled()
+  })
+
+  it('recreates a previously ready buffer through the existing Buffer API', async () => {
+    window.sessionStorage.setItem(workspaceDraftStorageKey, JSON.stringify(makeDraft(true)))
+    mockedCreateBuffer.mockResolvedValueOnce(makeBufferResponse())
+    const store = useAnalysisStore()
+
+    await store.restoreRiskAnalysis()
+
+    expect(mockedCreateBuffer).toHaveBeenCalledWith({
+      geometry: { type: 'Point', coordinates: [118.9, 32.1] },
+      distance_m: 3000,
+    })
+    expect(store.bufferResult).toEqual(makeBufferResponse())
+    expect(JSON.parse(window.sessionStorage.getItem(workspaceDraftStorageKey) ?? '{}')).toMatchObject(
+      { buffer_ready: true },
+    )
+  })
+
+  it('keeps a ready draft when automatic Buffer recovery fails', async () => {
+    window.sessionStorage.setItem(workspaceDraftStorageKey, JSON.stringify(makeDraft(true)))
+    mockedCreateBuffer.mockRejectedValueOnce(new Error('buffer unavailable'))
+    const store = useAnalysisStore()
+
+    await store.restoreRiskAnalysis()
+
+    expect(store.sourceGeometryWgs84?.coordinates).toEqual([118.9, 32.1])
+    expect(store.bufferResult).toBeNull()
+    expect(store.bufferError).toBe('buffer unavailable')
+    expect(JSON.parse(window.sessionStorage.getItem(workspaceDraftStorageKey) ?? '{}')).toMatchObject(
+      { buffer_ready: true },
+    )
+  })
+
+  it('does not let a late draft buffer response mark new inputs ready', async () => {
+    window.sessionStorage.setItem(workspaceDraftStorageKey, JSON.stringify(makeDraft(true)))
+    let resolveRequest: ((value: AnalysisAreaBufferResponse) => void) | undefined
+    mockedCreateBuffer.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveRequest = resolve
+        }),
+    )
+    const store = useAnalysisStore()
+
+    const restoration = store.restoreRiskAnalysis()
+    store.setSourcePoint([118.92, 32.12])
+    resolveRequest?.(makeBufferResponse())
+    await restoration
+
+    expect(store.bufferResult).toBeNull()
+    expect(JSON.parse(window.sessionStorage.getItem(workspaceDraftStorageKey) ?? '{}')).toMatchObject(
+      { source_point_wgs84: [118.92, 32.12], buffer_ready: false },
+    )
+  })
+
+  it('discards a malformed draft without calling the Buffer API', async () => {
+    window.sessionStorage.setItem(
+      workspaceDraftStorageKey,
+      JSON.stringify({ ...makeDraft(true), source_point_wgs84: [999, 32.1] }),
+    )
+    const store = useAnalysisStore()
+
+    await store.restoreRiskAnalysis()
+
+    expect(store.sourceGeometryWgs84).toBeNull()
+    expect(mockedCreateBuffer).not.toHaveBeenCalled()
+    expect(window.sessionStorage.getItem(workspaceDraftStorageKey)).toBeNull()
+  })
 
   it('polls until SUCCEEDED with result_available and then loads the real result', async () => {
     vi.useFakeTimers()
@@ -402,6 +525,7 @@ describe('analysis store', () => {
 
     const submission = store.submitRiskAnalysis()
     expect(window.sessionStorage.getItem(workspaceTaskStorageKey)).toBeNull()
+    expect(window.sessionStorage.getItem(workspaceDraftStorageKey)).not.toBeNull()
 
     resolveCreate?.({
       job: {
@@ -416,13 +540,60 @@ describe('analysis store', () => {
     await submission
 
     expect(window.sessionStorage.getItem(workspaceTaskStorageKey)).toBe('task-2')
+    expect(window.sessionStorage.getItem(workspaceDraftStorageKey)).toBeNull()
     store.resetRiskAnalysis()
     expect(window.sessionStorage.getItem(workspaceTaskStorageKey)).toBeNull()
+  })
+
+  it('keeps the draft when submission fails', async () => {
+    const store = useAnalysisStore()
+    await prepareBuffer(store)
+    mockedCreateJob.mockRejectedValueOnce(new Error('submit unavailable'))
+
+    await store.submitRiskAnalysis()
+
+    expect(store.job).toBeNull()
+    expect(store.taskError).toBe('submit unavailable')
+    expect(window.sessionStorage.getItem(workspaceDraftStorageKey)).not.toBeNull()
+  })
+
+  it('keeps the draft when the created task pointer cannot be persisted', async () => {
+    vi.useFakeTimers()
+    const store = useAnalysisStore()
+    await prepareBuffer(store)
+    mockedCreateJob.mockResolvedValueOnce({
+      job: {
+        task_id: 'task-1',
+        status: 'QUEUED',
+        submitted_at: '2026-08-07T12:00:00Z',
+        status_url: '/api/v1/risk-analysis/jobs/task-1',
+        result_url: '/api/v1/risk-analysis/jobs/task-1/result',
+      },
+      retryAfterMs: 2000,
+    })
+    const originalSetItem = Storage.prototype.setItem
+    const setItem = vi
+      .spyOn(Storage.prototype, 'setItem')
+      .mockImplementation(function (this: Storage, key, value) {
+        if (key === workspaceTaskStorageKey) throw new Error('storage unavailable')
+        originalSetItem.call(this, key, value)
+      })
+
+    try {
+      await store.submitRiskAnalysis()
+
+      expect(store.job?.task_id).toBe('task-1')
+      expect(window.sessionStorage.getItem(workspaceTaskStorageKey)).toBeNull()
+      expect(window.sessionStorage.getItem(workspaceDraftStorageKey)).not.toBeNull()
+    } finally {
+      setItem.mockRestore()
+    }
   })
 
   it('restores a running task once and reuses the existing polling loop', async () => {
     vi.useFakeTimers()
     window.sessionStorage.setItem(workspaceTaskStorageKey, 'task-1')
+    window.sessionStorage.setItem(workspaceDraftStorageKey, JSON.stringify(makeDraft(true)))
     const store = useAnalysisStore()
     let resolveSubmission: ((value: RiskAnalysisSubmissionDetail) => void) | undefined
     mockedGetSubmission.mockImplementationOnce(
@@ -460,6 +631,8 @@ describe('analysis store', () => {
     expect(store.submissionLoading).toBe(true)
     expect(mockedGetJob).toHaveBeenCalledTimes(1)
     expect(mockedGetSubmission).toHaveBeenCalledTimes(1)
+    expect(mockedCreateBuffer).not.toHaveBeenCalled()
+    expect(window.sessionStorage.getItem(workspaceDraftStorageKey)).toBeNull()
 
     await store.restoreRiskAnalysis()
     expect(mockedGetJob).toHaveBeenCalledTimes(1)
@@ -523,6 +696,20 @@ describe('analysis store', () => {
     expect(store.submissionContext).toBeNull()
     expect(store.submissionError).toBe('提交上下文恢复失败，但任务状态和分析结果不受影响')
     expect(store.taskError).toBeNull()
+  })
+
+  it('keeps a draft when a stale task pointer cannot be confirmed', async () => {
+    window.sessionStorage.setItem(workspaceTaskStorageKey, 'stale-task')
+    window.sessionStorage.setItem(workspaceDraftStorageKey, JSON.stringify(makeDraft(true)))
+    mockedGetSubmission.mockRejectedValueOnce(new Error('submission unavailable'))
+    mockedGetJob.mockRejectedValueOnce(new Error('task unavailable'))
+    const store = useAnalysisStore()
+
+    await store.restoreRiskAnalysis()
+
+    expect(store.sourceGeometryWgs84).toBeNull()
+    expect(mockedCreateBuffer).not.toHaveBeenCalled()
+    expect(window.sessionStorage.getItem(workspaceDraftStorageKey)).not.toBeNull()
   })
 
   it.each([

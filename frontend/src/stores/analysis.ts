@@ -23,9 +23,18 @@ import type {
 const MAX_CONSECUTIVE_POLL_FAILURES = 3
 const DEFAULT_POLL_INTERVAL_MS = 2000
 const WORKSPACE_TASK_ID_STORAGE_KEY = 'esr:risk-analysis:workspace-task-id'
+const WORKSPACE_DRAFT_STORAGE_KEY = 'esr:risk-analysis:workspace-draft'
+const WORKSPACE_WEIGHT_CODES = ['PM25', 'AQI', 'NDVI'] as const
 
 interface RiskAnalysisJobReference {
   task_id: string
+}
+
+interface WorkspaceDraft {
+  source_point_wgs84: Coordinate
+  buffer_distance_m: number
+  weights: RiskIndicatorWeightInput[]
+  buffer_ready: boolean
 }
 
 interface AnalysisState {
@@ -62,11 +71,13 @@ function readWorkspaceTaskId(): string | null {
   }
 }
 
-function saveWorkspaceTaskId(taskId: string): void {
+function saveWorkspaceTaskId(taskId: string): boolean {
   try {
     window.sessionStorage.setItem(WORKSPACE_TASK_ID_STORAGE_KEY, taskId)
+    return window.sessionStorage.getItem(WORKSPACE_TASK_ID_STORAGE_KEY) === taskId
   } catch {
     // sessionStorage 不可用时仅失去同标签页 F5 恢复能力，不影响任务提交和轮询。
+    return false
   }
 }
 
@@ -75,6 +86,95 @@ function clearWorkspaceTaskId(): void {
     window.sessionStorage.removeItem(WORKSPACE_TASK_ID_STORAGE_KEY)
   } catch {
     // 与写入失败相同，存储不可用不应阻断正常分析流程。
+  }
+}
+
+function clearWorkspaceDraft(): void {
+  try {
+    window.sessionStorage.removeItem(WORKSPACE_DRAFT_STORAGE_KEY)
+  } catch {
+    // Draft 只是同标签页恢复能力，清理失败不能阻断当前 Workspace。
+  }
+}
+
+function readWorkspaceDraft(): WorkspaceDraft | null {
+  try {
+    const raw = window.sessionStorage.getItem(WORKSPACE_DRAFT_STORAGE_KEY)
+    if (!raw) return null
+
+    const value: unknown = JSON.parse(raw)
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) throw new Error()
+
+    const draft = value as Record<string, unknown>
+    const point = draft.source_point_wgs84
+    const distance = draft.buffer_distance_m
+    const weights = draft.weights
+    if (
+      !Array.isArray(point) ||
+      point.length !== 2 ||
+      !point.every((item) => typeof item === 'number' && Number.isFinite(item)) ||
+      point[0] < -180 ||
+      point[0] > 180 ||
+      point[1] < -90 ||
+      point[1] > 90 ||
+      typeof distance !== 'number' ||
+      !Number.isFinite(distance) ||
+      distance <= 0 ||
+      typeof draft.buffer_ready !== 'boolean' ||
+      !Array.isArray(weights) ||
+      weights.length !== WORKSPACE_WEIGHT_CODES.length
+    ) {
+      throw new Error()
+    }
+
+    const parsedWeights = weights.map((item) => {
+      if (typeof item !== 'object' || item === null || Array.isArray(item)) throw new Error()
+      const weight = item as Record<string, unknown>
+      if (
+        typeof weight.code !== 'string' ||
+        !WORKSPACE_WEIGHT_CODES.includes(weight.code as (typeof WORKSPACE_WEIGHT_CODES)[number]) ||
+        typeof weight.weight_percent !== 'number' ||
+        !Number.isFinite(weight.weight_percent) ||
+        weight.weight_percent < 0 ||
+        weight.weight_percent > 100
+      ) {
+        throw new Error()
+      }
+      return { code: weight.code, weight_percent: weight.weight_percent }
+    })
+    if (new Set(parsedWeights.map((item) => item.code)).size !== WORKSPACE_WEIGHT_CODES.length) {
+      throw new Error()
+    }
+
+    return {
+      source_point_wgs84: [point[0], point[1]],
+      buffer_distance_m: distance,
+      weights: parsedWeights,
+      buffer_ready: draft.buffer_ready,
+    }
+  } catch {
+    clearWorkspaceDraft()
+    return null
+  }
+}
+
+function saveWorkspaceDraft(
+  sourcePoint: PointGeometry | null,
+  bufferDistanceMeters: number,
+  weights: RiskIndicatorWeightInput[],
+  bufferReady: boolean,
+): void {
+  if (!sourcePoint) return
+  const draft: WorkspaceDraft = {
+    source_point_wgs84: [...sourcePoint.coordinates],
+    buffer_distance_m: bufferDistanceMeters,
+    weights: weights.map((item) => ({ ...item })),
+    buffer_ready: bufferReady,
+  }
+  try {
+    window.sessionStorage.setItem(WORKSPACE_DRAFT_STORAGE_KEY, JSON.stringify(draft))
+  } catch {
+    // 存储不可用时不影响当前内存中的编辑和提交。
   }
 }
 
@@ -146,6 +246,12 @@ export const useAnalysisStore = defineStore('analysis', {
       this.bufferLoading = false
       this.bufferError = null
       this.resetRiskAnalysis()
+      saveWorkspaceDraft(
+        this.sourceGeometryWgs84,
+        this.bufferDistanceMeters,
+        this.weights,
+        false,
+      )
     },
     setBufferDistance(distanceMeters: number) {
       if (this.analysisLocked || this.bufferDistanceMeters === distanceMeters) return
@@ -155,6 +261,12 @@ export const useAnalysisStore = defineStore('analysis', {
       this.bufferLoading = false
       this.bufferError = null
       this.resetRiskAnalysis()
+      saveWorkspaceDraft(
+        this.sourceGeometryWgs84,
+        this.bufferDistanceMeters,
+        this.weights,
+        false,
+      )
     },
     setWeight(code: string, weightPercent: number) {
       if (this.analysisLocked) return
@@ -162,6 +274,12 @@ export const useAnalysisStore = defineStore('analysis', {
       if (!item || item.weight_percent === weightPercent) return
       item.weight_percent = weightPercent
       this.resetRiskAnalysis()
+      saveWorkspaceDraft(
+        this.sourceGeometryWgs84,
+        this.bufferDistanceMeters,
+        this.weights,
+        !!this.bufferResult,
+      )
     },
     clearSelection() {
       if (this.analysisLocked) return
@@ -171,6 +289,7 @@ export const useAnalysisStore = defineStore('analysis', {
       this.bufferLoading = false
       this.bufferError = null
       this.resetRiskAnalysis()
+      clearWorkspaceDraft()
     },
     resumeRiskAnalysisPolling() {
       if (!this.canResumePolling) return
@@ -189,7 +308,20 @@ export const useAnalysisStore = defineStore('analysis', {
       if (this.jobSubmitting || this.polling) return
 
       const taskId = readWorkspaceTaskId()
-      if (!taskId) return
+      if (!taskId) {
+        if (this.sourceGeometryWgs84) return
+        const draft = readWorkspaceDraft()
+        if (!draft) return
+
+        this.sourceGeometryWgs84 = {
+          type: 'Point',
+          coordinates: [...draft.source_point_wgs84],
+        }
+        this.bufferDistanceMeters = draft.buffer_distance_m
+        this.weights = draft.weights.map((item) => ({ ...item }))
+        if (draft.buffer_ready) await this.createBuffer()
+        return
+      }
 
       const revision = ++this.jobRevision
       this.job = { task_id: taskId }
@@ -209,6 +341,8 @@ export const useAnalysisStore = defineStore('analysis', {
         const status = await getRiskAnalysisJob(taskId)
         if (revision !== this.jobRevision) return
 
+        // 服务端已确认正式 Task 可接管后，才能清理可能因崩溃残留的 Draft。
+        clearWorkspaceDraft()
         this.jobStatus = status
         if (status.status === 'FAILED' || status.status === 'CANCELED') {
           this.taskError =
@@ -286,6 +420,12 @@ export const useAnalysisStore = defineStore('analysis', {
         // 用户可能在请求期间重新选点或修改距离；旧响应必须丢弃，否则地图会显示与当前参数不一致的 Polygon。
         if (revision !== this.bufferRequestRevision) return
         this.bufferResult = result
+        saveWorkspaceDraft(
+          this.sourceGeometryWgs84,
+          this.bufferDistanceMeters,
+          this.weights,
+          true,
+        )
       } catch (error: unknown) {
         if (revision !== this.bufferRequestRevision) return
         this.bufferError = getApiErrorMessage(error, '生成缓冲区失败')
@@ -332,7 +472,8 @@ export const useAnalysisStore = defineStore('analysis', {
         if (revision !== this.jobRevision) return
 
         this.job = created.job
-        saveWorkspaceTaskId(created.job.task_id)
+        const taskPointerSaved = saveWorkspaceTaskId(created.job.task_id)
+        if (taskPointerSaved) clearWorkspaceDraft()
         this.jobStatus = {
           task_id: created.job.task_id,
           status: created.job.status,
