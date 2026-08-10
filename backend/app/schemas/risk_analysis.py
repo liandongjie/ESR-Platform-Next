@@ -100,3 +100,42 @@ class RiskAnalysisSuccessResult(ApiModel):
     statistics: RasterStatisticsOutput
     indicators: list[RiskAnalysisIndicatorOutput] = Field(min_length=1, max_length=12)
     artifacts: RiskAnalysisArtifactOutput
+
+
+class RiskAnalysisSpatialValueScale(ApiModel):
+    """固定归一化数值范围；不在没有业务依据时附加风险等级名称。"""
+
+    minimum: Literal[0.0] = 0.0
+    maximum: Literal[1.0] = 1.0
+
+
+class RiskAnalysisSpatialFeatureProperties(ApiModel):
+    value: FiniteFloat = Field(ge=0.0, le=1.0)
+
+
+class RiskAnalysisSpatialPolygon(ApiModel):
+    type: Literal["Polygon"]
+    coordinates: list[list[tuple[FiniteFloat, FiniteFloat]]]
+
+
+class RiskAnalysisSpatialFeature(ApiModel):
+    type: Literal["Feature"]
+    geometry: RiskAnalysisSpatialPolygon
+    properties: RiskAnalysisSpatialFeatureProperties
+
+
+class RiskAnalysisSpatialFeatureCollection(ApiModel):
+    """标准 GeoJSON 内容；项目元数据保留在外层 SpatialResult。"""
+
+    type: Literal["FeatureCollection"]
+    features: list[RiskAnalysisSpatialFeature]
+
+
+class RiskAnalysisSpatialResult(ApiModel):
+    """由任务 GeoTIFF 按需派生的前端空间展示 Contract。"""
+
+    schema_version: Literal[1] = 1
+    task_id: str = Field(min_length=1)
+    crs: Literal["EPSG:4326"]
+    value_range: RiskAnalysisSpatialValueScale
+    feature_collection: RiskAnalysisSpatialFeatureCollection

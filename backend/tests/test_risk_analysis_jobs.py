@@ -4,12 +4,18 @@ from pathlib import Path
 import numpy as np
 import pytest
 import rasterio
+from affine import Affine
 from rasterio.transform import from_origin
 from shapely.geometry import box, mapping
 
 from app.gis.indicators import IndicatorDefinition
-from app.schemas.risk_analysis import RiskAnalysisJobRequest
-from app.services.risk_analysis_jobs import RiskAnalysisJobService, write_failure_manifest
+from app.schemas.risk_analysis import RiskAnalysisJobRequest, RiskAnalysisSuccessResult
+from app.services.risk_analysis_jobs import (
+    RiskAnalysisArtifactError,
+    RiskAnalysisJobService,
+    build_risk_analysis_spatial_result,
+    write_failure_manifest,
+)
 
 
 def _write_raster(path: Path, values: np.ndarray, *, nodata: float = -9999.0) -> None:
@@ -99,6 +105,209 @@ def test_job_service_reports_ordered_coarse_progress(tmp_path: Path):
         ("PERSISTING", 85),
         ("COMPLETED", 100),
     ]
+
+
+def test_spatial_result_uses_full_affine_and_keeps_zero_distinct_from_nodata(
+    tmp_path: Path,
+):
+    runtime_dir = tmp_path / "runtime"
+    task_id = "task-spatial"
+    task_dir = runtime_dir / "risk-analysis" / task_id
+    task_dir.mkdir(parents=True)
+    nodata = -9999.0
+    transform = Affine(0.01, 0.002, 118.0, 0.001, -0.01, 32.0)
+    values = np.array([[0.0, nodata], [np.nan, 0.75]], dtype="float32")
+    with rasterio.open(
+        task_dir / "risk.tif",
+        "w",
+        driver="GTiff",
+        width=2,
+        height=2,
+        count=1,
+        dtype="float32",
+        crs="EPSG:4326",
+        transform=transform,
+        nodata=nodata,
+    ) as dataset:
+        dataset.write(values, 1)
+
+    manifest = RiskAnalysisSuccessResult.model_validate(
+        {
+            "task_id": task_id,
+            "status": "SUCCEEDED",
+            "algorithm_version": "weighted-overlay-v1",
+            "geometry": {"type": "Polygon", "bounds": [118.0, 31.9, 118.1, 32.0]},
+            "grid": {"crs": "EPSG:4326", "shape": [2, 2], "nodata": nodata},
+            "statistics": {
+                "valid_pixel_count": 2,
+                "minimum": 0.0,
+                "maximum": 0.75,
+                "mean": 0.375,
+            },
+            "indicators": [
+                {
+                    "code": "a",
+                    "name": "指标A",
+                    "weight_percent": 100.0,
+                    "statistics": {
+                        "valid_pixel_count": 2,
+                        "minimum": 0.0,
+                        "maximum": 0.75,
+                        "mean": 0.375,
+                    },
+                }
+            ],
+            "artifacts": {
+                "raster": f"risk-analysis/{task_id}/risk.tif",
+                "manifest": f"risk-analysis/{task_id}/result.json",
+            },
+        }
+    )
+
+    spatial = build_risk_analysis_spatial_result(
+        runtime_dir=runtime_dir,
+        task_id=task_id,
+        manifest=manifest,
+    ).model_dump(mode="json")
+
+    assert spatial["value_range"] == {"minimum": 0.0, "maximum": 1.0}
+    assert "levels" not in spatial and "labels" not in spatial
+    features = spatial["feature_collection"]["features"]
+    assert [feature["properties"]["value"] for feature in features] == [0.0, 0.75]
+    assert features[0]["geometry"]["coordinates"][0] == [
+        list(transform * (0, 0)),
+        list(transform * (1, 0)),
+        list(transform * (1, 1)),
+        list(transform * (0, 1)),
+        list(transform * (0, 0)),
+    ]
+
+
+def test_spatial_result_rejects_manifest_artifact_mismatch(tmp_path: Path):
+    manifest = RiskAnalysisSuccessResult.model_validate(
+        {
+            "task_id": "task-spatial",
+            "status": "SUCCEEDED",
+            "algorithm_version": "weighted-overlay-v1",
+            "geometry": {"type": "Polygon", "bounds": [118.0, 31.9, 118.1, 32.0]},
+            "grid": {"crs": "EPSG:4326", "shape": [1, 1], "nodata": -9999.0},
+            "statistics": {
+                "valid_pixel_count": 1,
+                "minimum": 0.5,
+                "maximum": 0.5,
+                "mean": 0.5,
+            },
+            "indicators": [
+                {
+                    "code": "a",
+                    "name": "指标A",
+                    "weight_percent": 100.0,
+                    "statistics": {
+                        "valid_pixel_count": 1,
+                        "minimum": 0.5,
+                        "maximum": 0.5,
+                        "mean": 0.5,
+                    },
+                }
+            ],
+            "artifacts": {
+                "raster": "risk-analysis/other-task/risk.tif",
+                "manifest": "risk-analysis/task-spatial/result.json",
+            },
+        }
+    )
+
+    with pytest.raises(RiskAnalysisArtifactError, match="声明"):
+        build_risk_analysis_spatial_result(
+            runtime_dir=tmp_path / "runtime",
+            task_id="task-spatial",
+            manifest=manifest,
+        )
+
+
+@pytest.mark.parametrize(
+    ("case", "error_message"),
+    [
+        ("crs", "CRS 必须是 EPSG:4326"),
+        ("dtype", "dtype 必须是 float32"),
+        ("shape", "shape 与结果清单不一致"),
+        ("nodata", "NoData 与结果清单不一致"),
+        ("range", "超出 \\[0,1\\]"),
+        ("unreadable", "文件无法读取"),
+    ],
+)
+def test_spatial_result_rejects_invalid_raster_contract(
+    tmp_path: Path,
+    case: str,
+    error_message: str,
+):
+    runtime_dir = tmp_path / "runtime"
+    task_id = f"task-{case}"
+    task_dir = runtime_dir / "risk-analysis" / task_id
+    task_dir.mkdir(parents=True)
+    raster_path = task_dir / "risk.tif"
+    nodata = -9999.0
+
+    if case == "unreadable":
+        raster_path.write_bytes(b"not a GeoTIFF")
+    else:
+        values = np.array(
+            [[1.1 if case == "range" else 0.5] * (2 if case == "shape" else 1)],
+            dtype="int16" if case == "dtype" else "float32",
+        )
+        with rasterio.open(
+            raster_path,
+            "w",
+            driver="GTiff",
+            width=values.shape[1],
+            height=values.shape[0],
+            count=1,
+            dtype=values.dtype,
+            crs="EPSG:3857" if case == "crs" else "EPSG:4326",
+            transform=from_origin(118.0, 32.0, 0.01, 0.01),
+            nodata=-9998.0 if case == "nodata" else nodata,
+        ) as dataset:
+            dataset.write(values, 1)
+
+    manifest = RiskAnalysisSuccessResult.model_validate(
+        {
+            "task_id": task_id,
+            "status": "SUCCEEDED",
+            "algorithm_version": "weighted-overlay-v1",
+            "geometry": {"type": "Polygon", "bounds": [118.0, 31.9, 118.1, 32.0]},
+            "grid": {"crs": "EPSG:4326", "shape": [1, 1], "nodata": nodata},
+            "statistics": {
+                "valid_pixel_count": 1,
+                "minimum": 0.5,
+                "maximum": 0.5,
+                "mean": 0.5,
+            },
+            "indicators": [
+                {
+                    "code": "a",
+                    "name": "指标A",
+                    "weight_percent": 100.0,
+                    "statistics": {
+                        "valid_pixel_count": 1,
+                        "minimum": 0.5,
+                        "maximum": 0.5,
+                        "mean": 0.5,
+                    },
+                }
+            ],
+            "artifacts": {
+                "raster": f"risk-analysis/{task_id}/risk.tif",
+                "manifest": f"risk-analysis/{task_id}/result.json",
+            },
+        }
+    )
+
+    with pytest.raises(RiskAnalysisArtifactError, match=error_message):
+        build_risk_analysis_spatial_result(
+            runtime_dir=runtime_dir,
+            task_id=task_id,
+            manifest=manifest,
+        )
 
 
 def test_task_id_cannot_escape_runtime_directory(tmp_path: Path):

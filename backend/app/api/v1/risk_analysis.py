@@ -14,7 +14,11 @@ from app.schemas.risk_analysis import (
     RiskAnalysisSubmissionRecord,
     RiskAnalysisSuccessResult,
 )
-from app.services.risk_analysis_jobs import write_failure_manifest
+from app.services.risk_analysis_jobs import (
+    RiskAnalysisArtifactError,
+    build_risk_analysis_spatial_result,
+    write_failure_manifest,
+)
 
 risk_analysis_bp = Blueprint("risk_analysis", __name__)
 _RISK_ANALYSIS_TASK_NAME = "app.tasks.risk_analysis.run"
@@ -443,3 +447,96 @@ def get_risk_analysis_result(task_id: str):
     response.headers["Retry-After"] = "2"
     response.headers["Cache-Control"] = "no-store"
     return response
+
+
+@risk_analysis_bp.get("/jobs/<task_id>/result/spatial")
+def get_risk_analysis_spatial_result(task_id: str):
+    """Return valid risk raster cells as WGS84 GeoJSON polygons."""
+
+    store = _job_store()
+    if not store.task_exists(task_id):
+        return jsonify({"code": "JOB_NOT_FOUND", "message": "风险分析任务不存在"}), 404
+
+    try:
+        result = store.read_result(task_id)
+    except (OSError, ValueError) as exc:
+        current_app.logger.warning(
+            "Invalid risk-analysis result manifest for spatial task %s: %s",
+            task_id,
+            exc,
+        )
+        response = jsonify(
+            {
+                "code": "INVALID_RESULT_MANIFEST",
+                "message": "风险分析结果文件格式不完整或已损坏",
+            }
+        )
+        response.headers["Cache-Control"] = "no-store"
+        return response, 409
+    if result is None:
+        try:
+            status = _job_status_payload(store, task_id)
+        except TaskStatusBackendUnavailable as exc:
+            current_app.logger.warning("Risk-analysis status backend unavailable: %s", exc)
+            return jsonify({"code": "STATUS_UNAVAILABLE", "message": str(exc)}), 503
+
+        if status and status["status"] in {"FAILED", "CANCELED"}:
+            response = jsonify(status)
+            response.headers["Cache-Control"] = "no-store"
+            return response, 409
+
+        response = jsonify(
+            {
+                "code": "RESULT_NOT_READY",
+                "message": "风险分析任务尚未产生最终结果",
+                "task_id": task_id,
+                "status": status["status"] if status else "QUEUED",
+            }
+        )
+        response.headers["Retry-After"] = "2"
+        response.headers["Cache-Control"] = "no-store"
+        return response, 202
+
+    if result.get("status") != "SUCCEEDED":
+        response = jsonify(result)
+        response.headers["Cache-Control"] = "no-store"
+        return response, 409
+
+    try:
+        manifest = RiskAnalysisSuccessResult.model_validate(result)
+        spatial = build_risk_analysis_spatial_result(
+            runtime_dir=current_app.config["RUNTIME_DATA_DIR"],
+            task_id=task_id,
+            manifest=manifest,
+        )
+    except ValidationError as exc:
+        current_app.logger.warning(
+            "Invalid risk-analysis result manifest for spatial task %s: %s",
+            task_id,
+            exc,
+        )
+        response = jsonify(
+            {
+                "code": "INVALID_RESULT_MANIFEST",
+                "message": "风险分析结果文件格式不完整或已损坏",
+            }
+        )
+        response.headers["Cache-Control"] = "no-store"
+        return response, 409
+    except RiskAnalysisArtifactError as exc:
+        current_app.logger.warning(
+            "Invalid risk-analysis spatial artifact for task %s: %s", task_id, exc
+        )
+        response = jsonify(
+            {
+                "code": "INVALID_RESULT_ARTIFACT",
+                "message": str(exc),
+                "task_id": task_id,
+            }
+        )
+        response.headers["Cache-Control"] = "no-store"
+        return response, 409
+
+    response = jsonify(spatial.model_dump(mode="json"))
+    response.headers["Cache-Control"] = "no-store"
+    return response, 200

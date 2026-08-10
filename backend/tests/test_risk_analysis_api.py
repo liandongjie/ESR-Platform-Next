@@ -2,6 +2,10 @@ from __future__ import annotations
 
 from typing import Any
 
+import numpy as np
+import rasterio
+from rasterio.transform import from_origin
+
 from app.repositories.risk_analysis_job_store import RiskAnalysisJobStore
 
 
@@ -83,6 +87,33 @@ def _create_job(client, monkeypatch) -> str:
     response = client.post("/api/v1/risk-analysis/jobs", json=_valid_payload())
     assert response.status_code == 202
     return response.get_json()["task_id"]
+
+
+def _write_success_spatial_artifacts(app, task_id: str) -> None:
+    store = RiskAnalysisJobStore(app.config["RUNTIME_DATA_DIR"])
+    manifest = _valid_success_manifest(task_id)
+    manifest["statistics"] = {
+        "valid_pixel_count": 9,
+        "minimum": 0.0,
+        "maximum": 0.8,
+        "mean": 0.4,
+    }
+    store.write_json(task_id=task_id, filename="result.json", payload=manifest)
+    values = np.full((4, 4), -9999.0, dtype="float32")
+    values.flat[:9] = np.linspace(0.0, 0.8, 9, dtype="float32")
+    with rasterio.open(
+        store.task_directory(task_id) / "risk.tif",
+        "w",
+        driver="GTiff",
+        width=4,
+        height=4,
+        count=1,
+        dtype="float32",
+        crs="EPSG:4326",
+        transform=from_origin(118.0, 32.0, 0.01, 0.01),
+        nodata=-9999.0,
+    ) as dataset:
+        dataset.write(values, 1)
 
 
 def test_create_job_returns_202_and_persists_submission(client, app, monkeypatch):
@@ -339,6 +370,127 @@ def test_result_endpoint_returns_409_for_failed_job(client, app, monkeypatch):
 
     assert response.status_code == 409
     assert response.get_json()["error"]["code"] == "ANALYSIS_ERROR"
+
+
+def test_spatial_result_endpoint_returns_custom_contract_with_geojson_cells(
+    client,
+    app,
+    monkeypatch,
+):
+    task_id = _create_job(client, monkeypatch)
+    _write_success_spatial_artifacts(app, task_id)
+
+    response = client.get(f"/api/v1/risk-analysis/jobs/{task_id}/result/spatial")
+
+    assert response.status_code == 200
+    assert response.headers["Cache-Control"] == "no-store"
+    payload = response.get_json()
+    assert payload["schema_version"] == 1
+    assert payload["task_id"] == task_id
+    assert payload["crs"] == "EPSG:4326"
+    assert payload["value_range"] == {"minimum": 0.0, "maximum": 1.0}
+    assert payload["feature_collection"]["type"] == "FeatureCollection"
+    assert len(payload["feature_collection"]["features"]) == 9
+    assert payload["feature_collection"]["features"][0]["properties"]["value"] == 0.0
+
+
+def test_spatial_result_endpoint_returns_202_while_job_is_running(client, monkeypatch):
+    task_id = _create_job(client, monkeypatch)
+    monkeypatch.setattr(
+        "app.api.v1.risk_analysis.celery_app.AsyncResult",
+        lambda _: FakeAsyncResult("PROGRESS", {"stage": "ANALYZING", "progress": 35}),
+    )
+
+    response = client.get(f"/api/v1/risk-analysis/jobs/{task_id}/result/spatial")
+
+    assert response.status_code == 202
+    assert response.get_json()["code"] == "RESULT_NOT_READY"
+    assert response.get_json()["status"] == "RUNNING"
+    assert response.headers["Retry-After"] == "2"
+
+
+def test_spatial_result_endpoint_does_not_treat_canceled_as_not_ready(client, monkeypatch):
+    task_id = _create_job(client, monkeypatch)
+    monkeypatch.setattr(
+        "app.api.v1.risk_analysis.celery_app.AsyncResult",
+        lambda _: FakeAsyncResult("REVOKED"),
+    )
+
+    response = client.get(f"/api/v1/risk-analysis/jobs/{task_id}/result/spatial")
+
+    assert response.status_code == 409
+    assert response.get_json()["status"] == "CANCELED"
+
+
+def test_spatial_result_endpoint_returns_failed_manifest_as_409(client, app, monkeypatch):
+    task_id = _create_job(client, monkeypatch)
+    RiskAnalysisJobStore(app.config["RUNTIME_DATA_DIR"]).write_json(
+        task_id=task_id,
+        filename="result.json",
+        payload={
+            "task_id": task_id,
+            "status": "FAILED",
+            "error": {"code": "ANALYSIS_ERROR", "message": "分析失败"},
+        },
+    )
+
+    response = client.get(f"/api/v1/risk-analysis/jobs/{task_id}/result/spatial")
+
+    assert response.status_code == 409
+    assert response.get_json()["status"] == "FAILED"
+
+
+def test_spatial_result_endpoint_returns_409_for_missing_raster(client, app, monkeypatch):
+    task_id = _create_job(client, monkeypatch)
+    RiskAnalysisJobStore(app.config["RUNTIME_DATA_DIR"]).write_json(
+        task_id=task_id,
+        filename="result.json",
+        payload=_valid_success_manifest(task_id),
+    )
+
+    response = client.get(f"/api/v1/risk-analysis/jobs/{task_id}/result/spatial")
+
+    assert response.status_code == 409
+    assert response.get_json()["code"] == "INVALID_RESULT_ARTIFACT"
+    assert "不存在" in response.get_json()["message"]
+
+
+def test_spatial_result_endpoint_returns_409_for_artifact_declaration_mismatch(
+    client,
+    app,
+    monkeypatch,
+):
+    task_id = _create_job(client, monkeypatch)
+    _write_success_spatial_artifacts(app, task_id)
+    store = RiskAnalysisJobStore(app.config["RUNTIME_DATA_DIR"])
+    manifest = store.read_result(task_id)
+    assert manifest is not None
+    manifest["artifacts"]["raster"] = "risk-analysis/other-task/risk.tif"
+    store.write_json(task_id=task_id, filename="result.json", payload=manifest)
+
+    response = client.get(f"/api/v1/risk-analysis/jobs/{task_id}/result/spatial")
+
+    assert response.status_code == 409
+    assert response.get_json()["code"] == "INVALID_RESULT_ARTIFACT"
+    assert "声明" in response.get_json()["message"]
+
+
+def test_spatial_result_endpoint_returns_409_for_corrupt_manifest(client, app, monkeypatch):
+    task_id = _create_job(client, monkeypatch)
+    store = RiskAnalysisJobStore(app.config["RUNTIME_DATA_DIR"])
+    (store.task_directory(task_id) / "result.json").write_text("not json", encoding="utf-8")
+
+    response = client.get(f"/api/v1/risk-analysis/jobs/{task_id}/result/spatial")
+
+    assert response.status_code == 409
+    assert response.get_json()["code"] == "INVALID_RESULT_MANIFEST"
+
+
+def test_spatial_result_endpoint_returns_404_for_unknown_task(client):
+    response = client.get("/api/v1/risk-analysis/jobs/unknown-task/result/spatial")
+
+    assert response.status_code == 404
+    assert response.get_json()["code"] == "JOB_NOT_FOUND"
 
 
 def test_queue_failure_returns_503_and_persists_failure(client, app, monkeypatch):
