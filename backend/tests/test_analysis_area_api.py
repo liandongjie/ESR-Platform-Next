@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 
 def _point_payload(distance_m: float = 1000.0) -> dict:
     return {
@@ -19,6 +21,46 @@ def test_buffer_endpoint_returns_wgs84_polygon_and_metric_metadata(client):
     assert payload["buffer"]["working_crs"] == "EPSG:32650"
     assert payload["buffer"]["geometry"]["type"] == "Polygon"
     assert payload["buffer"]["area_m2"] > 3_000_000
+
+
+@pytest.mark.parametrize(
+    ("geometry", "geometry_type"),
+    [
+        (
+            {
+                "type": "LineString",
+                "coordinates": [[118.89, 32.09], [118.91, 32.11]],
+            },
+            "LineString",
+        ),
+        (
+            {
+                "type": "Polygon",
+                "coordinates": [
+                    [
+                        [118.89, 32.09],
+                        [118.91, 32.09],
+                        [118.91, 32.11],
+                        [118.89, 32.09],
+                    ]
+                ],
+            },
+            "Polygon",
+        ),
+    ],
+)
+def test_buffer_endpoint_accepts_line_and_polygon(client, geometry, geometry_type):
+    response = client.post(
+        "/api/v1/analysis-areas/buffer",
+        json={"geometry": geometry, "distance_m": 1000.0},
+    )
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["source"]["geometry_type"] == geometry_type
+    assert payload["source"]["crs"] == "EPSG:4326"
+    assert payload["buffer"]["geometry"]["type"] == "Polygon"
+    assert payload["buffer"]["crs"] == "EPSG:4326"
 
 
 def test_buffer_endpoint_rejects_malformed_geojson(client):

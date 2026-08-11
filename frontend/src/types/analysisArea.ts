@@ -5,6 +5,11 @@ export interface PointGeometry {
   coordinates: Coordinate
 }
 
+export interface LineStringGeometry {
+  type: 'LineString'
+  coordinates: Coordinate[]
+}
+
 export interface PolygonGeometry {
   type: 'Polygon'
   coordinates: Coordinate[][]
@@ -16,9 +21,10 @@ export interface MultiPolygonGeometry {
 }
 
 export type BufferGeometry = PolygonGeometry | MultiPolygonGeometry
+export type SourceGeometry = PointGeometry | LineStringGeometry | PolygonGeometry
 
 export interface AnalysisAreaBufferRequest {
-  geometry: PointGeometry
+  geometry: SourceGeometry
   distance_m: number
 }
 
