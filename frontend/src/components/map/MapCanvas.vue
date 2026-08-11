@@ -11,11 +11,13 @@ import type {
   PolygonGeometry,
 } from '@/types/analysisArea'
 import type { RiskAnalysisSpatialResult } from '@/types/riskAnalysis'
+import type { PoiDto } from '@/types/poi'
 
 interface Props {
   sourcePoint?: PointGeometry | null
   bufferGeometry?: BufferGeometry | null
   riskSpatialResult?: RiskAnalysisSpatialResult | null
+  poiItems?: PoiDto[]
   readOnly?: boolean
   selectionDisabled?: boolean
 }
@@ -45,7 +47,7 @@ interface AMapNamespace {
     container: HTMLElement,
     options: { zoom: number; center: Coordinate; viewMode: string },
   ) => MapInstance
-  Marker: new (options: { position: Coordinate }) => OverlayInstance
+  Marker: new (options: { position: Coordinate; title?: string }) => OverlayInstance
   Polygon: new (options: {
     path: Coordinate[][]
     strokeColor: string
@@ -60,6 +62,7 @@ const props = withDefaults(defineProps<Props>(), {
   sourcePoint: null,
   bufferGeometry: null,
   riskSpatialResult: null,
+  poiItems: () => [],
   readOnly: false,
   selectionDisabled: false,
 })
@@ -75,6 +78,7 @@ let amap: AMapNamespace | null = null
 let marker: OverlayInstance | null = null
 let bufferOverlays: OverlayInstance[] = []
 let riskCellOverlays: OverlayInstance[] = []
+let poiMarkers: OverlayInstance[] = []
 const fittedRiskTaskIds = new Set<string>()
 
 function parseNumber(value: string | undefined, fallback: number): number {
@@ -95,6 +99,25 @@ function removeBufferOverlays() {
 function removeRiskCellOverlays() {
   riskCellOverlays.forEach((overlay) => overlay.setMap(null))
   riskCellOverlays = []
+}
+
+function removePoiMarkers() {
+  poiMarkers.forEach((poiMarker) => poiMarker.setMap(null))
+  poiMarkers = []
+}
+
+function renderPoiMarkers() {
+  removePoiMarkers()
+  if (!map || !amap) return
+
+  for (const poi of props.poiItems) {
+    const poiMarker = new amap.Marker({
+      position: wgs84ToGcj02(poi.locationWgs84),
+      title: poi.name,
+    })
+    poiMarker.setMap(map)
+    poiMarkers.push(poiMarker)
+  }
 }
 
 function renderSourcePoint() {
@@ -202,6 +225,7 @@ function handleMapClick(event: AMapMouseEvent) {
 watch(() => props.sourcePoint, renderSourcePoint, { deep: true })
 watch(() => props.bufferGeometry, renderBufferGeometry, { deep: true })
 watch(() => props.riskSpatialResult, renderRiskCells, { deep: true })
+watch(() => props.poiItems, renderPoiMarkers, { deep: true })
 
 onMounted(async () => {
   if (!hasAmapConfiguration()) {
@@ -230,6 +254,7 @@ onMounted(async () => {
     renderSourcePoint()
     renderBufferGeometry()
     renderRiskCells()
+    renderPoiMarkers()
   } catch (error: unknown) {
     state.value = 'error'
     errorMessage.value = error instanceof Error ? error.message : '地图初始化失败'
@@ -244,6 +269,7 @@ onBeforeUnmount(() => {
   removeMarker()
   removeBufferOverlays()
   removeRiskCellOverlays()
+  removePoiMarkers()
   map?.destroy()
   map = null
   amap = null

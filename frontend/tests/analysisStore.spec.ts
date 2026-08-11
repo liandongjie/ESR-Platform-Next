@@ -9,6 +9,7 @@ import {
   getRiskAnalysisSpatialResult,
   getRiskAnalysisSubmission,
 } from '@/api/riskAnalysis'
+import { searchAmapPois } from '@/map/amapPoi'
 import { useAnalysisStore } from '@/stores/analysis'
 import type { AnalysisAreaBufferResponse } from '@/types/analysisArea'
 import type {
@@ -30,12 +31,17 @@ vi.mock('@/api/riskAnalysis', () => ({
   getRiskAnalysisSubmission: vi.fn(),
 }))
 
+vi.mock('@/map/amapPoi', () => ({
+  searchAmapPois: vi.fn(),
+}))
+
 const mockedCreateBuffer = vi.mocked(createAnalysisAreaBuffer)
 const mockedCreateJob = vi.mocked(createRiskAnalysisJob)
 const mockedGetJob = vi.mocked(getRiskAnalysisJob)
 const mockedGetResult = vi.mocked(getRiskAnalysisResult)
 const mockedGetSpatialResult = vi.mocked(getRiskAnalysisSpatialResult)
 const mockedGetSubmission = vi.mocked(getRiskAnalysisSubmission)
+const mockedSearchPois = vi.mocked(searchAmapPois)
 const workspaceTaskStorageKey = 'esr:risk-analysis:workspace-task-id'
 const workspaceDraftStorageKey = 'esr:risk-analysis:workspace-draft'
 
@@ -184,6 +190,7 @@ describe('analysis store', () => {
     mockedGetSpatialResult.mockResolvedValue(makeSpatialResult())
     mockedGetSubmission.mockReset()
     mockedGetSubmission.mockResolvedValue(makeSubmission())
+    mockedSearchPois.mockReset()
     window.sessionStorage.clear()
   })
 
@@ -235,6 +242,169 @@ describe('analysis store', () => {
 
     expect(store.bufferDistanceMeters).toBe(5000)
     expect(store.bufferResult).toBeNull()
+  })
+
+  it('searches one real POI page from the current Polygon Buffer', async () => {
+    const store = useAnalysisStore()
+    await prepareBuffer(store)
+    store.setPoiKeyword('学校')
+    mockedSearchPois.mockResolvedValueOnce({
+      items: [{ id: 'poi-1', name: '学校一', locationWgs84: [118.81, 32.02] }],
+      total: 44,
+      page: 2,
+      pageSize: 10,
+    })
+
+    await store.searchPois(2)
+
+    expect(mockedSearchPois).toHaveBeenCalledOnce()
+    expect(mockedSearchPois).toHaveBeenCalledWith({
+      geometry: makeBufferResponse().buffer.geometry,
+      keyword: '学校',
+      page: 2,
+      pageSize: 10,
+    })
+    expect(store.poiItems[0]?.id).toBe('poi-1')
+    expect(store.poiTotal).toBe(44)
+    expect(store.poiPage).toBe(2)
+    expect(store.poiHasSearched).toBe(true)
+  })
+
+  it('ignores a late POI response after the keyword changes', async () => {
+    const store = useAnalysisStore()
+    await prepareBuffer(store)
+    let resolveSearch:
+      | ((value: Awaited<ReturnType<typeof searchAmapPois>>) => void)
+      | undefined
+    mockedSearchPois.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveSearch = resolve
+        }),
+    )
+    store.setPoiKeyword('学校')
+
+    const pending = store.searchPois(1)
+    store.setPoiKeyword('医院')
+    resolveSearch?.({
+      items: [{ id: 'old', name: '旧结果', locationWgs84: [118.81, 32.02] }],
+      total: 1,
+      page: 1,
+      pageSize: 10,
+    })
+    await pending
+
+    expect(store.poiKeyword).toBe('医院')
+    expect(store.poiItems).toEqual([])
+    expect(store.poiTotal).toBe(0)
+    expect(store.poiLoading).toBe(false)
+  })
+
+  it.each(['success', 'error'] as const)(
+    'keeps page 2 when the late page 1 request ends with %s',
+    async (outcome) => {
+      const store = useAnalysisStore()
+      await prepareBuffer(store)
+      let resolveFirst:
+        | ((value: Awaited<ReturnType<typeof searchAmapPois>>) => void)
+        | undefined
+      let rejectFirst: ((reason: Error) => void) | undefined
+      let resolveSecond:
+        | ((value: Awaited<ReturnType<typeof searchAmapPois>>) => void)
+        | undefined
+      mockedSearchPois
+        .mockImplementationOnce(
+          () =>
+            new Promise((resolve, reject) => {
+              resolveFirst = resolve
+              rejectFirst = reject
+            }),
+        )
+        .mockImplementationOnce(
+          () =>
+            new Promise((resolve) => {
+              resolveSecond = resolve
+            }),
+        )
+      store.setPoiKeyword('学校')
+
+      const page1 = store.searchPois(1)
+      const page2 = store.searchPois(2)
+      resolveSecond?.({
+        items: [{ id: 'page-2', name: '第二页', locationWgs84: [118.82, 32.03] }],
+        total: 44,
+        page: 2,
+        pageSize: 10,
+      })
+      await page2
+
+      if (outcome === 'success') {
+        resolveFirst?.({
+          items: [{ id: 'page-1', name: '第一页', locationWgs84: [118.81, 32.02] }],
+          total: 44,
+          page: 1,
+          pageSize: 10,
+        })
+      } else {
+        rejectFirst?.(new Error('late page 1 failure'))
+      }
+      await page1
+
+      expect(mockedSearchPois).toHaveBeenNthCalledWith(1, expect.objectContaining({ page: 1 }))
+      expect(mockedSearchPois).toHaveBeenNthCalledWith(2, expect.objectContaining({ page: 2 }))
+      expect(store.poiPage).toBe(2)
+      expect(store.poiItems.map((item) => item.id)).toEqual(['page-2'])
+      expect(store.poiTotal).toBe(44)
+      expect(store.poiError).toBeNull()
+      expect(store.poiLoading).toBe(false)
+    },
+  )
+
+  it('immediately invalidates POIs and ignores the late response when Buffer changes', async () => {
+    const store = useAnalysisStore()
+    await prepareBuffer(store)
+    let resolveSearch:
+      | ((value: Awaited<ReturnType<typeof searchAmapPois>>) => void)
+      | undefined
+    mockedSearchPois.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveSearch = resolve
+        }),
+    )
+    store.setPoiKeyword('学校')
+
+    const pending = store.searchPois(1)
+    store.setBufferDistance(5000)
+    expect(store.poiItems).toEqual([])
+    expect(store.poiLoading).toBe(false)
+
+    resolveSearch?.({
+      items: [{ id: 'old', name: '旧结果', locationWgs84: [118.81, 32.02] }],
+      total: 1,
+      page: 1,
+      pageSize: 10,
+    })
+    await pending
+    expect(store.poiItems).toEqual([])
+    expect(store.poiTotal).toBe(0)
+  })
+
+  it('rejects MultiPolygon Buffer without calling the POI provider', async () => {
+    const store = useAnalysisStore()
+    await prepareBuffer(store)
+    const polygon = makeBufferResponse().buffer.geometry
+    if (polygon.type !== 'Polygon') throw new Error('test fixture must be Polygon')
+    store.bufferResult!.buffer.geometry = {
+      type: 'MultiPolygon',
+      coordinates: [polygon.coordinates],
+    }
+    store.setPoiKeyword('学校')
+
+    await store.searchPois(1)
+
+    expect(store.poiError).toBe('当前 POI 查询暂不支持 MultiPolygon 缓冲区')
+    expect(mockedSearchPois).not.toHaveBeenCalled()
   })
 
   it(

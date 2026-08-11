@@ -3,6 +3,7 @@ import { computed, onMounted } from 'vue'
 
 import StatusCard from '@/components/common/StatusCard.vue'
 import MapCanvas from '@/components/map/MapCanvas.vue'
+import PoiSearchPanel from '@/components/poi/PoiSearchPanel.vue'
 import RiskAnalysisResultDownloads from '@/components/risk-analysis/RiskAnalysisResultDownloads.vue'
 import { useAnalysisStore } from '@/stores/analysis'
 import { useSystemStore } from '@/stores/system'
@@ -206,6 +207,7 @@ onMounted(() => {
         :source-point="analysisStore.sourceGeometryWgs84"
         :buffer-geometry="bufferGeometry"
         :risk-spatial-result="analysisStore.spatialResult"
+        :poi-items="analysisStore.poiItems"
         :selection-disabled="analysisStore.analysisLocked"
         @select-point="handlePointSelected"
       />
@@ -324,6 +326,10 @@ onMounted(() => {
                 <strong>{{ analysisStore.bufferResult.buffer.working_crs }}</strong>
               </div>
             </div>
+          </section>
+
+          <section v-if="analysisStore.bufferResult" class="control-section">
+            <PoiSearchPanel />
           </section>
 
           <section v-if="analysisStore.bufferResult" class="control-section">
