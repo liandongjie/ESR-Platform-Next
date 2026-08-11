@@ -10,6 +10,92 @@ def _point_payload(distance_m: float = 1000.0) -> dict:
     }
 
 
+def _boundary(min_x: float, min_y: float, max_x: float, max_y: float) -> list[list[float]]:
+    return [
+        [min_x, min_y],
+        [max_x, min_y],
+        [max_x, max_y],
+        [min_x, max_y],
+        [min_x, min_y],
+    ]
+
+
+def test_normalize_boundaries_returns_polygon_and_metadata(client):
+    response = client.post(
+        "/api/v1/analysis-areas/normalize-boundaries",
+        json={"boundaries": [_boundary(118.8, 32.0, 118.9, 32.1)]},
+    )
+
+    assert response.status_code == 200
+    assert response.headers["Cache-Control"] == "no-store"
+    payload = response.get_json()
+    assert payload["crs"] == "EPSG:4326"
+    assert payload["geometry"]["type"] == "Polygon"
+    assert payload["input_boundary_count"] == 1
+    assert payload["output_polygon_count"] == 1
+
+
+def test_normalize_boundaries_returns_multipolygon_without_dropping_members(client):
+    response = client.post(
+        "/api/v1/analysis-areas/normalize-boundaries",
+        json={
+            "boundaries": [
+                _boundary(118.8, 32.0, 118.82, 32.02),
+                _boundary(118.9, 32.1, 118.92, 32.12),
+            ]
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["geometry"]["type"] == "MultiPolygon"
+    assert len(payload["geometry"]["coordinates"]) == 2
+    assert payload["input_boundary_count"] == 2
+    assert payload["output_polygon_count"] == 2
+
+
+@pytest.mark.parametrize(
+    "boundary",
+    [
+        [
+            [118.8, 32.0],
+            [118.9, 32.1],
+            [118.9, 32.0],
+            [118.8, 32.1],
+            [118.8, 32.0],
+        ],
+        [[118.8, 32.0], [118.9, 32.0], [118.8, 32.0]],
+        [[118.8, 32.0], [118.9, 32.0], [118.9, 32.1], [118.8, 32.1]],
+        _boundary(181.0, 32.0, 182.0, 32.1),
+    ],
+)
+def test_normalize_boundaries_rejects_invalid_unclosed_or_out_of_range_input(client, boundary):
+    response = client.post(
+        "/api/v1/analysis-areas/normalize-boundaries",
+        json={"boundaries": [boundary]},
+    )
+
+    assert response.status_code == 422
+    assert response.get_json()["code"] in {"INVALID_REQUEST", "INVALID_ANALYSIS_AREA"}
+
+
+def test_normalize_boundaries_is_all_or_nothing(client):
+    response = client.post(
+        "/api/v1/analysis-areas/normalize-boundaries",
+        json={
+            "boundaries": [
+                _boundary(118.8, 32.0, 118.9, 32.1),
+                [[118.9, 32.1], [119.0, 32.1], [119.0, 32.2], [118.9, 32.2]],
+            ]
+        },
+    )
+
+    assert response.status_code == 422
+    payload = response.get_json()
+    assert payload["code"] == "INVALID_ANALYSIS_AREA"
+    assert "geometry" not in payload
+
+
 def test_buffer_endpoint_returns_wgs84_polygon_and_metric_metadata(client):
     response = client.post("/api/v1/analysis-areas/buffer", json=_point_payload())
 

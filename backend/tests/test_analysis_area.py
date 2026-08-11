@@ -9,7 +9,18 @@ from app.gis.analysis_area import (
     AnalysisAreaValidationError,
     create_metric_buffer,
     local_utm_crs,
+    normalize_boundaries,
 )
+
+
+def _boundary(min_x: float, min_y: float, max_x: float, max_y: float):
+    return [
+        (min_x, min_y),
+        (max_x, min_y),
+        (max_x, max_y),
+        (min_x, max_y),
+        (min_x, min_y),
+    ]
 
 
 def test_point_buffer_uses_nanjing_utm_and_metric_area():
@@ -105,6 +116,77 @@ def test_multipolygon_preserves_all_disjoint_members_after_buffering():
     assert result.source_geometry.geom_type == "MultiPolygon"
     assert result.buffer_geometry.geom_type == "MultiPolygon"
     assert len(result.buffer_geometry.geoms) == 2
+
+
+def test_normalize_single_boundary_returns_polygon():
+    geometry = normalize_boundaries([_boundary(118.8, 32.0, 118.9, 32.1)])
+
+    assert geometry.geom_type == "Polygon"
+    assert geometry.is_valid
+
+
+def test_normalize_disjoint_boundaries_returns_all_members():
+    geometry = normalize_boundaries(
+        [
+            _boundary(118.8, 32.0, 118.82, 32.02),
+            _boundary(118.9, 32.1, 118.92, 32.12),
+        ]
+    )
+
+    assert geometry.geom_type == "MultiPolygon"
+    assert len(geometry.geoms) == 2
+
+
+@pytest.mark.parametrize(
+    "boundaries",
+    [
+        [
+            _boundary(118.8, 32.0, 119.0, 32.2),
+            _boundary(118.86, 32.06, 118.94, 32.14),
+        ],
+        [
+            _boundary(118.8, 32.0, 118.9, 32.1),
+            _boundary(118.85, 32.05, 118.95, 32.15),
+        ],
+        [
+            _boundary(118.75, 31.95, 119.05, 32.25),
+            _boundary(118.82, 32.02, 118.92, 32.12),
+            _boundary(119.0, 32.1, 119.12, 32.3),
+        ],
+    ],
+)
+def test_normalize_dissolves_contained_overlapping_and_nanjing_like_boundaries(boundaries):
+    geometry = normalize_boundaries(boundaries)
+
+    assert geometry.geom_type == "Polygon"
+    assert geometry.is_valid
+
+
+@pytest.mark.parametrize(
+    ("boundary", "message"),
+    [
+        (
+            [
+                (118.8, 32.0),
+                (118.9, 32.1),
+                (118.9, 32.0),
+                (118.8, 32.1),
+                (118.8, 32.0),
+            ],
+            "有效",
+        ),
+        ([(118.8, 32.0), (118.9, 32.0), (118.8, 32.0)], "至少需要"),
+        ([(118.8, 32.0), (118.9, 32.0), (118.9, 32.1), (118.8, 32.1)], "闭合"),
+        (
+            [(118.8, 32.0), (math.inf, 32.0), (118.9, 32.1), (118.8, 32.0)],
+            "有限",
+        ),
+        (_boundary(181.0, 32.0, 182.0, 32.1), "WGS84"),
+    ],
+)
+def test_normalize_rejects_invalid_boundary(boundary, message):
+    with pytest.raises(AnalysisAreaValidationError, match=message):
+        normalize_boundaries([boundary])
 
 
 def test_southern_hemisphere_uses_southern_utm_zone():

@@ -5,10 +5,45 @@ from pydantic import ValidationError
 
 from app.api.validation import validation_details
 from app.gis.analysis_area import AnalysisAreaValidationError
-from app.schemas.analysis_area import AnalysisAreaBufferRequest
+from app.schemas.analysis_area import (
+    AdministrativeBoundariesNormalizeRequest,
+    AnalysisAreaBufferRequest,
+)
 from app.services.analysis_areas import AnalysisAreaService
 
 analysis_areas_bp = Blueprint("analysis_areas", __name__)
+
+
+@analysis_areas_bp.post("/normalize-boundaries")
+def normalize_administrative_boundaries():
+    """把 Provider 返回的全部 WGS84 填充区 boundary dissolve 为标准面 geometry。"""
+
+    raw_payload = request.get_json(silent=True)
+    if not isinstance(raw_payload, dict):
+        return jsonify({"code": "INVALID_JSON", "message": "请求体必须是 JSON object"}), 400
+
+    try:
+        normalize_request = AdministrativeBoundariesNormalizeRequest.model_validate(raw_payload)
+    except ValidationError as exc:
+        return (
+            jsonify(
+                {
+                    "code": "INVALID_REQUEST",
+                    "message": "行政区 boundary 参数校验失败",
+                    "details": validation_details(exc),
+                }
+            ),
+            422,
+        )
+
+    try:
+        payload = AnalysisAreaService().normalize_boundaries(normalize_request)
+    except AnalysisAreaValidationError as exc:
+        return jsonify({"code": "INVALID_ANALYSIS_AREA", "message": str(exc)}), 422
+
+    response = jsonify(payload)
+    response.headers["Cache-Control"] = "no-store"
+    return response, 200
 
 
 @analysis_areas_bp.post("/buffer")
