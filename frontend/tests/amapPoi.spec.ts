@@ -45,6 +45,21 @@ function lngLat(lng: number, lat: number) {
   return { getLng: () => lng, getLat: () => lat }
 }
 
+const optionalFieldCases = [
+  { source: 'type', target: 'type' },
+  { source: 'typecode', target: 'typeCode' },
+  { source: 'address', target: 'address' },
+] as const
+
+const invalidOptionalFieldCases = optionalFieldCases.flatMap(({ source, target }) =>
+  [
+    { source, target, label: 'missing', value: undefined },
+    { source, target, label: 'null', value: null },
+    { source, target, label: 'number', value: 42 },
+    { source, target, label: 'object', value: {} },
+  ] as const,
+)
+
 describe('AMap POI provider', () => {
   beforeEach(() => {
     vi.resetModules()
@@ -56,7 +71,16 @@ describe('AMap POI provider', () => {
     mocks.callbackResult = {
       poiList: {
         count: 44,
-        pois: [{ id: 'poi-1', name: '学校', location: lngLat(118.817936, 32.027436) }],
+        pois: [
+          {
+            id: 'poi-1',
+            name: '学校',
+            type: '科教文化服务;学校',
+            typecode: '141200',
+            address: '蓝旗街',
+            location: lngLat(118.817936, 32.027436),
+          },
+        ],
       },
     }
     const namespace = {
@@ -73,21 +97,50 @@ describe('AMap POI provider', () => {
     const result = await searchAmapPois({ geometry, keyword: ' 学校 ', page: 2, pageSize: 1 })
 
     expect(mocks.plugin).toHaveBeenCalledWith('AMap.PlaceSearch', expect.any(Function))
-    expect(mocks.options).toEqual([{ pageIndex: 2, pageSize: 1, extensions: 'base' }])
+    expect(mocks.options).toEqual([{ pageIndex: 2, pageSize: 1, extensions: 'all' }])
     expect(mocks.paths[0]).toEqual(geometry.coordinates[0]!.map(wgs84ToGcj02))
-    expect(result).toMatchObject({
+    expect(result).toEqual({
       total: 44,
       page: 2,
       pageSize: 1,
-      items: [{ id: 'poi-1', name: '学校' }],
+      items: [
+        {
+          id: 'poi-1',
+          name: '学校',
+          type: '科教文化服务;学校',
+          typeCode: '141200',
+          address: '蓝旗街',
+          locationWgs84: gcj02ToWgs84([118.817936, 32.027436]),
+        },
+      ],
     })
-    expect(result.items[0]!.locationWgs84).toEqual(
-      gcj02ToWgs84([118.817936, 32.027436]),
-    )
+    expect(JSON.parse(JSON.stringify(result.items[0]))).toEqual(result.items[0])
 
     await searchAmapPois({ geometry, keyword: '医院', page: 1, pageSize: 10 })
     expect(mocks.plugin).toHaveBeenCalledOnce()
   })
+
+  it.each(invalidOptionalFieldCases)(
+    'normalizes $source when it is $label',
+    async ({ source, target, value }) => {
+      const poi: Record<string, unknown> = {
+        id: 'poi-1',
+        name: '学校',
+        type: '科教文化服务;学校',
+        typecode: '141200',
+        address: '蓝旗街',
+        location: lngLat(118.817936, 32.027436),
+      }
+      if (value === undefined) delete poi[source]
+      else poi[source] = value
+      mocks.callbackResult = { poiList: { count: 1, pois: [poi] } }
+      const { searchAmapPois } = await import('@/map/amapPoi')
+
+      const result = await searchAmapPois({ geometry, keyword: '学校', page: 1, pageSize: 10 })
+
+      expect(result.items[0]![target]).toBe('')
+    },
+  )
 
   it('normalizes the real no_data shape to an empty successful page', async () => {
     mocks.callbackStatus = 'no_data'
@@ -138,5 +191,24 @@ describe('AMap POI provider', () => {
     await expect(
       searchAmapPois({ geometry, keyword: '学校', page: 1, pageSize: 10 }),
     ).rejects.toThrow('缺少 location')
+  })
+
+  it.each([
+    ['id', '缺少 id 或 name'],
+    ['name', '缺少 id 或 name'],
+    ['location', '缺少 location'],
+  ] as const)('rejects a POI missing required $0', async (field, message) => {
+    const poi: Record<string, unknown> = {
+      id: 'poi-1',
+      name: '学校',
+      location: lngLat(118.817936, 32.027436),
+    }
+    delete poi[field]
+    mocks.callbackResult = { poiList: { count: 1, pois: [poi] } }
+    const { searchAmapPois } = await import('@/map/amapPoi')
+
+    await expect(
+      searchAmapPois({ geometry, keyword: '学校', page: 1, pageSize: 10 }),
+    ).rejects.toThrow(message)
   })
 })

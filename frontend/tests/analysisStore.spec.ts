@@ -249,7 +249,16 @@ describe('analysis store', () => {
     await prepareBuffer(store)
     store.setPoiKeyword('学校')
     mockedSearchPois.mockResolvedValueOnce({
-      items: [{ id: 'poi-1', name: '学校一', locationWgs84: [118.81, 32.02] }],
+      items: [
+        {
+          id: 'poi-1',
+          name: '学校一',
+          type: '',
+          typeCode: '',
+          address: '',
+          locationWgs84: [118.81, 32.02],
+        },
+      ],
       total: 44,
       page: 2,
       pageSize: 10,
@@ -287,7 +296,16 @@ describe('analysis store', () => {
     const pending = store.searchPois(1)
     store.setPoiKeyword('医院')
     resolveSearch?.({
-      items: [{ id: 'old', name: '旧结果', locationWgs84: [118.81, 32.02] }],
+      items: [
+        {
+          id: 'old',
+          name: '旧结果',
+          type: '',
+          typeCode: '',
+          address: '',
+          locationWgs84: [118.81, 32.02],
+        },
+      ],
       total: 1,
       page: 1,
       pageSize: 10,
@@ -331,7 +349,16 @@ describe('analysis store', () => {
       const page1 = store.searchPois(1)
       const page2 = store.searchPois(2)
       resolveSecond?.({
-        items: [{ id: 'page-2', name: '第二页', locationWgs84: [118.82, 32.03] }],
+        items: [
+          {
+            id: 'page-2',
+            name: '第二页',
+            type: '',
+            typeCode: '',
+            address: '',
+            locationWgs84: [118.82, 32.03],
+          },
+        ],
         total: 44,
         page: 2,
         pageSize: 10,
@@ -340,7 +367,16 @@ describe('analysis store', () => {
 
       if (outcome === 'success') {
         resolveFirst?.({
-          items: [{ id: 'page-1', name: '第一页', locationWgs84: [118.81, 32.02] }],
+          items: [
+            {
+              id: 'page-1',
+              name: '第一页',
+              type: '',
+              typeCode: '',
+              address: '',
+              locationWgs84: [118.81, 32.02],
+            },
+          ],
           total: 44,
           page: 1,
           pageSize: 10,
@@ -380,7 +416,16 @@ describe('analysis store', () => {
     expect(store.poiLoading).toBe(false)
 
     resolveSearch?.({
-      items: [{ id: 'old', name: '旧结果', locationWgs84: [118.81, 32.02] }],
+      items: [
+        {
+          id: 'old',
+          name: '旧结果',
+          type: '',
+          typeCode: '',
+          address: '',
+          locationWgs84: [118.81, 32.02],
+        },
+      ],
       total: 1,
       page: 1,
       pageSize: 10,

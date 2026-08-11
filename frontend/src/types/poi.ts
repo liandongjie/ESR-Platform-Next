@@ -3,6 +3,9 @@ import type { Coordinate, PolygonGeometry } from '@/types/analysisArea'
 export interface PoiDto {
   id: string
   name: string
+  type: string
+  typeCode: string
+  address: string
   locationWgs84: Coordinate
 }
 

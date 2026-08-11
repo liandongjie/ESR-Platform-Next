@@ -42,7 +42,16 @@ describe('PoiSearchPanel', () => {
   it('renders total, current results, and a page-count capped at 100', async () => {
     const wrapper = mountPanel()
     const store = useAnalysisStore()
-    store.poiItems = [{ id: 'poi-1', name: '学校', locationWgs84: [118.81, 32.02] }]
+    store.poiItems = [
+      {
+        id: 'poi-1',
+        name: '学校',
+        type: '',
+        typeCode: '',
+        address: '',
+        locationWgs84: [118.81, 32.02],
+      },
+    ]
     store.poiTotal = 2000
     store.poiHasSearched = true
     await wrapper.vm.$nextTick()
