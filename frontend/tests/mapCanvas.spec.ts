@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import MapCanvas from '../src/components/map/MapCanvas.vue'
 import { gcj02ToWgs84, wgs84ToGcj02 } from '../src/map/coordinates'
 import { RISK_VALUE_COLOR_BINS, riskColorForValue } from '../src/map/riskSpatial'
-import type { PolygonGeometry } from '../src/types/analysisArea'
+import type { MultiPolygonGeometry, PolygonGeometry } from '../src/types/analysisArea'
 import type { RiskAnalysisSpatialResult } from '../src/types/riskAnalysis'
 
 type DrawingMode = 'point' | 'polyline' | 'rectangle' | 'polygon'
@@ -290,6 +290,65 @@ describe('MapCanvas source and spatial overlays', () => {
     ])
     expect(bufferPolygon?.setMap).not.toHaveBeenCalledWith(null)
     wrapper.unmount()
+  })
+
+  it('renders every source Polygon ring and MultiPolygon member and clears their lifecycle', async () => {
+    const polygonWithHole: PolygonGeometry = {
+      type: 'Polygon',
+      coordinates: [
+        [
+          [116.39, 39.9],
+          [116.42, 39.9],
+          [116.42, 39.93],
+          [116.39, 39.9],
+        ],
+        [
+          [116.4, 39.91],
+          [116.41, 39.91],
+          [116.41, 39.92],
+          [116.4, 39.91],
+        ],
+      ],
+    }
+    const multiPolygon: MultiPolygonGeometry = {
+      type: 'MultiPolygon',
+      coordinates: [
+        polygonWithHole.coordinates,
+        [
+          [
+            [116.44, 39.94],
+            [116.46, 39.94],
+            [116.46, 39.96],
+            [116.44, 39.94],
+          ],
+        ],
+      ],
+    }
+    const originalMultiPolygon = structuredClone(multiPolygon)
+    const wrapper = await mountReady({ sourceGeometry: polygonWithHole })
+    const polygonOverlay = polygons[0]!
+
+    expect(polygonOptions[0]?.path).toEqual(
+      polygonWithHole.coordinates.map((ring) => ring.map(wgs84ToGcj02)),
+    )
+
+    await wrapper.setProps({ sourceGeometry: multiPolygon })
+
+    expect(polygonOverlay.setMap).toHaveBeenCalledWith(null)
+    expect(polygonOptions.slice(1).map((options) => options.path)).toEqual(
+      multiPolygon.coordinates.map((member) => member.map((ring) => ring.map(wgs84ToGcj02))),
+    )
+    expect(multiPolygon).toEqual(originalMultiPolygon)
+
+    const multiPolygonOverlays = polygons.slice(1)
+    await wrapper.setProps({ sourceGeometry: null })
+    multiPolygonOverlays.forEach((overlay) => expect(overlay.setMap).toHaveBeenCalledWith(null))
+
+    await wrapper.setProps({ sourceGeometry: multiPolygon })
+    const remountedOverlays = polygons.slice(-2)
+    wrapper.unmount()
+    remountedOverlays.forEach((overlay) => expect(overlay.setMap).toHaveBeenCalledWith(null))
+    expect(multiPolygon).toEqual(originalMultiPolygon)
   })
 
   it('clears replaced buffer overlays', async () => {

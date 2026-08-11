@@ -111,7 +111,7 @@ const state = ref<'loading' | 'ready' | 'missing-key' | 'error'>('loading')
 const errorMessage = ref('')
 let map: MapInstance | null = null
 let amap: AMapNamespace | null = null
-let sourceOverlay: OverlayInstance | null = null
+let sourceOverlays: OverlayInstance[] = []
 let bufferOverlays: OverlayInstance[] = []
 let riskCellOverlays: OverlayInstance[] = []
 let poiMarkers: OverlayInstance[] = []
@@ -128,9 +128,9 @@ function parseNumber(value: string | undefined, fallback: number): number {
   return Number.isFinite(parsed) ? parsed : fallback
 }
 
-function removeSourceOverlay() {
-  sourceOverlay?.setMap(null)
-  sourceOverlay = null
+function removeSourceOverlays() {
+  sourceOverlays.forEach((overlay) => overlay.setMap(null))
+  sourceOverlays = []
 }
 
 function removeBufferOverlays() {
@@ -163,31 +163,48 @@ function renderPoiMarkers() {
 }
 
 function renderSourceGeometry() {
-  removeSourceOverlay()
+  removeSourceOverlays()
   if (!map || !amap || !props.sourceGeometry) return
 
   // Pinia/API 中保存的是 WGS84；只有创建高德覆盖物时才转换成 GCJ-02。
   if (props.sourceGeometry.type === 'Point') {
-    sourceOverlay = new amap.Marker({ position: wgs84ToGcj02(props.sourceGeometry.coordinates) })
+    const overlay = new amap.Marker({ position: wgs84ToGcj02(props.sourceGeometry.coordinates) })
+    overlay.setMap(map)
+    sourceOverlays.push(overlay)
   } else if (props.sourceGeometry.type === 'LineString') {
-    sourceOverlay = new amap.Polyline({
+    const overlay = new amap.Polyline({
       path: props.sourceGeometry.coordinates.map(wgs84ToGcj02),
       strokeColor: '#0091ea',
       strokeWeight: 3,
       strokeOpacity: 1,
       zIndex: 40,
     })
-  } else {
-    sourceOverlay = new amap.Polygon({
-      path: props.sourceGeometry.coordinates.map((ring) => ring.map(wgs84ToGcj02)),
+    overlay.setMap(map)
+    sourceOverlays.push(overlay)
+  } else if (props.sourceGeometry.type === 'Polygon') {
+    const overlay = createPolygonOverlay(props.sourceGeometry, {
       strokeColor: '#0091ea',
       strokeWeight: 2,
       fillColor: '#80d8ff',
       fillOpacity: 0.22,
       zIndex: 40,
     })
+    if (overlay) sourceOverlays.push(overlay)
+  } else {
+    for (const coordinates of props.sourceGeometry.coordinates) {
+      const overlay = createPolygonOverlay(
+        { type: 'Polygon', coordinates },
+        {
+          strokeColor: '#0091ea',
+          strokeWeight: 2,
+          fillColor: '#80d8ff',
+          fillOpacity: 0.22,
+          zIndex: 40,
+        },
+      )
+      if (overlay) sourceOverlays.push(overlay)
+    }
   }
-  sourceOverlay.setMap(map)
 }
 
 function createPolygonOverlay(
@@ -574,7 +591,7 @@ onBeforeUnmount(() => {
     // AMap 实例和覆盖物只属于当前组件生命周期，不进入 Pinia；卸载时统一解除事件并销毁，避免热更新/路由切换残留监听。
     map.off('click', handleMapClick)
   }
-  removeSourceOverlay()
+  removeSourceOverlays()
   removeBufferOverlays()
   removeRiskCellOverlays()
   removePoiMarkers()

@@ -3,7 +3,7 @@ from __future__ import annotations
 import math
 
 import pytest
-from shapely.geometry import GeometryCollection, LineString, Point, Polygon
+from shapely.geometry import GeometryCollection, LineString, MultiPolygon, Point, Polygon
 
 from app.gis.analysis_area import (
     AnalysisAreaValidationError,
@@ -47,6 +47,64 @@ def test_line_and_polygon_use_the_existing_metric_buffer_contract(
     assert result.working_crs.to_epsg() == 32650
     assert result.buffer_geometry.geom_type == "Polygon"
     assert result.area_m2 > 0
+
+
+def test_polygon_with_hole_preserves_the_existing_metric_buffer_contract():
+    geometry = Polygon(
+        [
+            (118.8, 32.0),
+            (119.0, 32.0),
+            (119.0, 32.2),
+            (118.8, 32.2),
+            (118.8, 32.0),
+        ],
+        [
+            [
+                (118.86, 32.06),
+                (118.94, 32.06),
+                (118.94, 32.14),
+                (118.86, 32.14),
+                (118.86, 32.06),
+            ]
+        ],
+    )
+
+    result = create_metric_buffer(geometry, 100.0)
+
+    assert result.source_geometry.geom_type == "Polygon"
+    assert result.buffer_geometry.geom_type == "Polygon"
+    assert len(result.buffer_geometry.interiors) == 1
+
+
+def test_multipolygon_preserves_all_disjoint_members_after_buffering():
+    geometry = MultiPolygon(
+        [
+            Polygon(
+                [
+                    (118.8, 32.0),
+                    (118.82, 32.0),
+                    (118.82, 32.02),
+                    (118.8, 32.02),
+                    (118.8, 32.0),
+                ]
+            ),
+            Polygon(
+                [
+                    (118.9, 32.1),
+                    (118.92, 32.1),
+                    (118.92, 32.12),
+                    (118.9, 32.12),
+                    (118.9, 32.1),
+                ]
+            ),
+        ]
+    )
+
+    result = create_metric_buffer(geometry, 100.0)
+
+    assert result.source_geometry.geom_type == "MultiPolygon"
+    assert result.buffer_geometry.geom_type == "MultiPolygon"
+    assert len(result.buffer_geometry.geoms) == 2
 
 
 def test_southern_hemisphere_uses_southern_utm_zone():
