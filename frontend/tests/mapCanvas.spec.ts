@@ -229,7 +229,16 @@ describe('MapCanvas risk cells', () => {
   it('renders WGS84 POIs as GCJ-02 markers and clears their lifecycle', async () => {
     const wrapper = mount(MapCanvas, {
       props: {
-        poiItems: [{ id: 'poi-1', name: '学校', locationWgs84: [118.81, 32.02] }],
+        poiItems: [
+          {
+            id: 'poi-1',
+            name: '学校',
+            type: '',
+            typeCode: '',
+            address: '',
+            locationWgs84: [118.81, 32.02],
+          },
+        ],
       },
     })
     await flushPromises()
@@ -240,7 +249,16 @@ describe('MapCanvas risk cells', () => {
     const firstSetMap = markerSetMapCalls[0]!
 
     await wrapper.setProps({
-      poiItems: [{ id: 'poi-2', name: '医院', locationWgs84: [118.82, 32.01] }],
+      poiItems: [
+        {
+          id: 'poi-2',
+          name: '医院',
+          type: '',
+          typeCode: '',
+          address: '',
+          locationWgs84: [118.82, 32.01],
+        },
+      ],
     })
     expect(firstSetMap).toHaveBeenCalledWith(null)
     expect(markerOptions[1]).toEqual({

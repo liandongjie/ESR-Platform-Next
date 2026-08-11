@@ -1,9 +1,12 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 
+import { getApiErrorMessage } from '@/api/errors'
+import { createPoiCsvArtifact, type PoiExportData } from '@/export/poiCsv'
 import { useAnalysisStore } from '@/stores/analysis'
 
 const analysisStore = useAnalysisStore()
+const exportNotice = ref<string | null>(null)
 
 const keyword = computed({
   get: () => analysisStore.poiKeyword,
@@ -20,6 +23,45 @@ function searchFirstPage() {
 function searchPage(page: number) {
   void analysisStore.searchPois(page)
 }
+
+function downloadCsv(data: PoiExportData) {
+  let objectUrl: string | null = null
+  let anchor: HTMLAnchorElement | null = null
+
+  try {
+    const artifact = createPoiCsvArtifact(data, new Date())
+    objectUrl = URL.createObjectURL(new Blob([artifact.content], { type: artifact.mimeType }))
+    anchor = document.createElement('a')
+    anchor.href = objectUrl
+    anchor.download = artifact.filename
+    document.body.appendChild(anchor)
+    anchor.click()
+    exportNotice.value =
+      data.mode === 'current-page'
+        ? `已导出当前页 ${data.exportedCount.toLocaleString()} 条 POI`
+        : `高德报告 ${data.totalReported.toLocaleString()} 条；本次最多尝试获取 ${data.retrievableLimit.toLocaleString()} 条；实际导出 ${data.exportedCount.toLocaleString()} 条`
+  } catch (error: unknown) {
+    analysisStore.poiExportError = getApiErrorMessage(error, 'POI CSV 下载失败')
+  } finally {
+    try {
+      anchor?.remove()
+    } finally {
+      if (objectUrl) URL.revokeObjectURL(objectUrl)
+    }
+  }
+}
+
+function exportCurrentPage() {
+  exportNotice.value = null
+  const data = analysisStore.prepareCurrentPagePoiExport()
+  if (data) downloadCsv(data)
+}
+
+async function exportRetrievable() {
+  exportNotice.value = null
+  const data = await analysisStore.collectRetrievablePoiExport()
+  if (data) downloadCsv(data)
+}
 </script>
 
 <template>
@@ -27,7 +69,7 @@ function searchPage(page: number) {
     <div class="section-title-row">
       <strong>POI 查询</strong>
       <el-tag v-if="analysisStore.poiHasSearched" type="info" effect="plain" size="small">
-        共 {{ analysisStore.poiTotal.toLocaleString() }} 条
+        高德报告 {{ analysisStore.poiTotal.toLocaleString() }} 条
       </el-tag>
     </div>
 
@@ -81,6 +123,53 @@ function searchPage(page: number) {
       :page-count="pageCount"
       @current-change="searchPage"
     />
+
+    <div v-if="analysisStore.poiHasSearched && analysisStore.poiItems.length" class="poi-export-actions">
+      <el-button :disabled="analysisStore.poiExportLoading" @click="exportCurrentPage">
+        导出当前页
+      </el-button>
+      <el-button
+        type="primary"
+        plain
+        :loading="analysisStore.poiExportLoading"
+        :disabled="analysisStore.poiExportLoading"
+        @click="exportRetrievable"
+      >
+        导出可获取结果
+      </el-button>
+    </div>
+
+    <div v-if="analysisStore.poiExportLoading" class="poi-export-progress">
+      <span v-if="analysisStore.poiExportProgress?.plannedPages">
+        正在获取第 {{ analysisStore.poiExportProgress.currentPage }} /
+        {{ analysisStore.poiExportProgress.plannedPages }} 页
+      </span>
+      <span v-else>正在获取第 1 页</span>
+      <small
+        v-if="
+          analysisStore.poiExportProgress?.totalReported &&
+            analysisStore.poiExportProgress.totalReported > 5000
+        "
+      >
+        高德报告 {{ analysisStore.poiExportProgress.totalReported.toLocaleString() }} 条，本次最多尝试获取
+        5,000 条
+      </small>
+    </div>
+
+    <el-alert
+      v-if="analysisStore.poiExportError"
+      :title="analysisStore.poiExportError"
+      type="error"
+      :closable="false"
+      show-icon
+    />
+    <el-alert
+      v-else-if="exportNotice"
+      :title="exportNotice"
+      type="success"
+      :closable="false"
+      show-icon
+    />
   </section>
 </template>
 
@@ -106,6 +195,23 @@ function searchPage(page: number) {
 
 .poi-search-row :deep(.el-button) {
   flex: 0 0 auto;
+}
+
+.poi-export-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.poi-export-actions :deep(.el-button + .el-button) {
+  margin-left: 0;
+}
+
+.poi-export-progress {
+  display: grid;
+  gap: 4px;
+  color: var(--muted);
+  font-size: 12px;
 }
 
 .poi-list {

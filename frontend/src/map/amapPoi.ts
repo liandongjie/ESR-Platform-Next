@@ -21,7 +21,7 @@ interface AMapPlaceSearchNamespace {
   PlaceSearch?: new (options: {
     pageIndex: number
     pageSize: number
-    extensions: 'base'
+    extensions: 'all'
   }) => PlaceSearchInstance
 }
 
@@ -132,7 +132,14 @@ function normalizePoi(value: unknown): PoiDto {
   const id = value.id.trim()
   const name = value.name.trim()
   if (!id || !name) throw new Error('高德 POI 响应包含空 id 或 name')
-  return { id, name, locationWgs84: gcj02ToWgs84(gcj02) }
+  return {
+    id,
+    name,
+    type: typeof value.type === 'string' ? value.type : '',
+    typeCode: typeof value.typecode === 'string' ? value.typecode : '',
+    address: typeof value.address === 'string' ? value.address : '',
+    locationWgs84: gcj02ToWgs84(gcj02),
+  }
 }
 
 function normalizeCompleteResult(
@@ -164,7 +171,7 @@ export async function searchAmapPois(request: PoiSearchRequest): Promise<PoiSear
   const placeSearch = new PlaceSearch({
     pageIndex: request.page,
     pageSize: request.pageSize,
-    extensions: 'base',
+    extensions: 'all',
   })
   return new Promise((resolve, reject) => {
     placeSearch.searchInBounds(keyword, path, (status, result) => {
