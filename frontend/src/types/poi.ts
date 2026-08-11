@@ -22,3 +22,11 @@ export interface PoiSearchResult {
   page: number
   pageSize: number
 }
+
+export interface StudyPointCandidate {
+  id: string
+  name: string
+  address: string
+  district: string
+  locationWgs84: Coordinate
+}

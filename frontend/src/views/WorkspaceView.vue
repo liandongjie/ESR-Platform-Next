@@ -1,13 +1,15 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 
 import StatusCard from '@/components/common/StatusCard.vue'
 import MapCanvas from '@/components/map/MapCanvas.vue'
 import PoiSearchPanel from '@/components/poi/PoiSearchPanel.vue'
 import RiskAnalysisResultDownloads from '@/components/risk-analysis/RiskAnalysisResultDownloads.vue'
+import { searchAmapStudyPoints } from '@/map/amapStudyPoint'
 import { useAnalysisStore } from '@/stores/analysis'
 import { useSystemStore } from '@/stores/system'
 import type { Coordinate } from '@/types/analysisArea'
+import type { StudyPointCandidate } from '@/types/poi'
 import type { RiskJobStatus } from '@/types/riskAnalysis'
 
 const systemStore = useSystemStore()
@@ -16,6 +18,13 @@ const decimalDegreesPattern = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$/
 const longitudeInput = ref('')
 const latitudeInput = ref('')
 const coordinateInputError = ref<string | null>(null)
+const studyPointKeyword = ref('')
+const studyPointCandidates = ref<StudyPointCandidate[]>([])
+const studyPointLoading = ref(false)
+const studyPointError = ref<string | null>(null)
+const studyPointHasSearched = ref(false)
+const selectedStudyPointName = ref<string | null>(null)
+let studyPointRequestRevision = 0
 
 const backendText = computed(() => {
   if (systemStore.loading) return '检查中'
@@ -113,6 +122,65 @@ const activeWorkflowStep = computed(() => {
 
 function handlePointSelected(coordinates: Coordinate) {
   analysisStore.setSourcePoint(coordinates)
+  selectedStudyPointName.value = null
+}
+
+watch(studyPointKeyword, () => {
+  studyPointRequestRevision += 1
+  studyPointCandidates.value = []
+  studyPointLoading.value = false
+  studyPointError.value = null
+  studyPointHasSearched.value = false
+})
+
+async function searchStudyPoints() {
+  if (analysisStore.analysisLocked || studyPointLoading.value) return
+
+  const submittedKeyword = studyPointKeyword.value.trim()
+  if (!submittedKeyword) {
+    studyPointError.value = '请输入地址或 POI 关键词'
+    studyPointHasSearched.value = false
+    return
+  }
+
+  const revision = ++studyPointRequestRevision
+  studyPointCandidates.value = []
+  studyPointLoading.value = true
+  studyPointError.value = null
+  studyPointHasSearched.value = false
+
+  try {
+    const candidates = await searchAmapStudyPoints(submittedKeyword)
+    if (
+      revision !== studyPointRequestRevision ||
+      studyPointKeyword.value.trim() !== submittedKeyword
+    ) {
+      return
+    }
+    studyPointCandidates.value = candidates
+    studyPointHasSearched.value = true
+  } catch (error: unknown) {
+    if (
+      revision !== studyPointRequestRevision ||
+      studyPointKeyword.value.trim() !== submittedKeyword
+    ) {
+      return
+    }
+    studyPointError.value = error instanceof Error ? error.message : '地址或 POI 搜索失败'
+  } finally {
+    if (
+      revision === studyPointRequestRevision &&
+      studyPointKeyword.value.trim() === submittedKeyword
+    ) {
+      studyPointLoading.value = false
+    }
+  }
+}
+
+function selectStudyPoint(candidate: StudyPointCandidate) {
+  if (analysisStore.analysisLocked) return
+  handlePointSelected(candidate.locationWgs84)
+  selectedStudyPointName.value = candidate.name
 }
 
 function applyCoordinateInput() {
@@ -292,6 +360,63 @@ onMounted(() => {
             :closable="false"
             show-icon
           />
+
+          <div class="study-point-search">
+            <div class="section-title-row">
+              <strong>搜索地址 / POI</strong>
+              <small>高德地点搜索</small>
+            </div>
+            <div class="study-point-search-row">
+              <el-input
+                v-model="studyPointKeyword"
+                aria-label="地址或 POI 关键词"
+                placeholder="如：南京大学、中关村"
+                :disabled="analysisStore.analysisLocked"
+                @keyup.enter="searchStudyPoints"
+              />
+              <el-button
+                type="primary"
+                plain
+                :loading="studyPointLoading"
+                :disabled="analysisStore.analysisLocked || studyPointLoading"
+                @click="searchStudyPoints"
+              >
+                搜索
+              </el-button>
+            </div>
+
+            <el-alert
+              v-if="studyPointError"
+              class="study-point-search-error"
+              :title="studyPointError"
+              type="error"
+              :closable="false"
+              show-icon
+            />
+            <small
+              v-else-if="studyPointHasSearched && studyPointCandidates.length === 0"
+              class="section-hint study-point-search-empty"
+            >
+              未找到匹配地点
+            </small>
+            <small v-if="selectedStudyPointName" class="study-point-selected">
+              已选择：{{ selectedStudyPointName }}
+            </small>
+
+            <div v-if="studyPointCandidates.length" class="study-point-results">
+              <button
+                v-for="candidate in studyPointCandidates"
+                :key="candidate.id"
+                type="button"
+                class="study-point-result"
+                :disabled="analysisStore.analysisLocked"
+                @click="selectStudyPoint(candidate)"
+              >
+                <strong>{{ candidate.name }}</strong>
+                <small>{{ candidate.district }}{{ candidate.address }}</small>
+              </button>
+            </div>
+          </div>
         </section>
 
         <el-empty
@@ -612,6 +737,61 @@ onMounted(() => {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
+}
+
+.study-point-search {
+  display: grid;
+  gap: 10px;
+  margin-top: 8px;
+  padding-top: 14px;
+  border-top: 1px dashed var(--border);
+}
+
+.study-point-search-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.study-point-results {
+  display: grid;
+  gap: 7px;
+}
+
+.study-point-result {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 9px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #fff;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.study-point-result:hover:not(:disabled) {
+  border-color: var(--primary);
+}
+
+.study-point-result:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.study-point-result strong {
+  font-size: 12px;
+}
+
+.study-point-result small,
+.study-point-selected {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.study-point-selected {
+  color: var(--primary);
 }
 
 .section-title-row,
