@@ -14,7 +14,7 @@ import { searchAmapPois } from '@/map/amapPoi'
 import type {
   AnalysisAreaBufferResponse,
   Coordinate,
-  PointGeometry,
+  SourceGeometry,
 } from '@/types/analysisArea'
 import type {
   RiskAnalysisJobStatus,
@@ -24,6 +24,7 @@ import type {
   RiskIndicatorWeightInput,
 } from '@/types/riskAnalysis'
 import type { PoiDto } from '@/types/poi'
+import { parseSourceGeometry } from '@/validation/sourceGeometry'
 
 const MAX_CONSECUTIVE_POLL_FAILURES = 3
 const DEFAULT_POLL_INTERVAL_MS = 2000
@@ -38,14 +39,14 @@ interface RiskAnalysisJobReference {
 }
 
 interface WorkspaceDraft {
-  source_point_wgs84: Coordinate
+  source_geometry_wgs84: SourceGeometry
   buffer_distance_m: number
   weights: RiskIndicatorWeightInput[]
   buffer_ready: boolean
 }
 
 interface AnalysisState {
-  sourceGeometryWgs84: PointGeometry | null
+  sourceGeometryWgs84: SourceGeometry | null
   bufferDistanceMeters: number
   bufferResult: AnalysisAreaBufferResponse | null
   bufferLoading: boolean
@@ -135,17 +136,12 @@ function readWorkspaceDraft(): WorkspaceDraft | null {
     if (typeof value !== 'object' || value === null || Array.isArray(value)) throw new Error()
 
     const draft = value as Record<string, unknown>
-    const point = draft.source_point_wgs84
+    const sourceGeometry = Object.prototype.hasOwnProperty.call(draft, 'source_geometry_wgs84')
+      ? parseSourceGeometry(draft.source_geometry_wgs84)
+      : parseSourceGeometry({ type: 'Point', coordinates: draft.source_point_wgs84 })
     const distance = draft.buffer_distance_m
     const weights = draft.weights
     if (
-      !Array.isArray(point) ||
-      point.length !== 2 ||
-      !point.every((item) => typeof item === 'number' && Number.isFinite(item)) ||
-      point[0] < -180 ||
-      point[0] > 180 ||
-      point[1] < -90 ||
-      point[1] > 90 ||
       typeof distance !== 'number' ||
       !Number.isFinite(distance) ||
       distance <= 0 ||
@@ -176,7 +172,7 @@ function readWorkspaceDraft(): WorkspaceDraft | null {
     }
 
     return {
-      source_point_wgs84: [point[0], point[1]],
+      source_geometry_wgs84: sourceGeometry,
       buffer_distance_m: distance,
       weights: parsedWeights,
       buffer_ready: draft.buffer_ready,
@@ -188,14 +184,14 @@ function readWorkspaceDraft(): WorkspaceDraft | null {
 }
 
 function saveWorkspaceDraft(
-  sourcePoint: PointGeometry | null,
+  sourceGeometry: SourceGeometry | null,
   bufferDistanceMeters: number,
   weights: RiskIndicatorWeightInput[],
   bufferReady: boolean,
 ): void {
-  if (!sourcePoint) return
+  if (!sourceGeometry) return
   const draft: WorkspaceDraft = {
-    source_point_wgs84: [...sourcePoint.coordinates],
+    source_geometry_wgs84: parseSourceGeometry(sourceGeometry),
     buffer_distance_m: bufferDistanceMeters,
     weights: weights.map((item) => ({ ...item })),
     buffer_ready: bufferReady,
@@ -496,17 +492,15 @@ export const useAnalysisStore = defineStore('analysis', {
       this.taskError = null
       this.pollIntervalMs = DEFAULT_POLL_INTERVAL_MS
     },
-    setSourcePoint(coordinates: Coordinate) {
+    setSourceGeometry(geometry: SourceGeometry) {
       if (this.analysisLocked) return
-      // 切换研究点会使旧 Buffer 立即失效，同时递增版本号让尚未返回的旧请求无法覆盖新选择。
+      const sourceGeometry = parseSourceGeometry(geometry)
+      // 切换研究对象会使旧 Buffer 立即失效，同时递增版本号让尚未返回的旧请求无法覆盖新选择。
       this.bufferRequestRevision += 1
       this.poiCommittedKeyword = null
       this.invalidatePoiSearch()
       this.invalidatePoiExportContext()
-      this.sourceGeometryWgs84 = {
-        type: 'Point',
-        coordinates: [...coordinates],
-      }
+      this.sourceGeometryWgs84 = sourceGeometry
       this.bufferResult = null
       this.bufferLoading = false
       this.bufferError = null
@@ -517,6 +511,9 @@ export const useAnalysisStore = defineStore('analysis', {
         this.weights,
         false,
       )
+    },
+    setSourcePoint(coordinates: Coordinate) {
+      this.setSourceGeometry({ type: 'Point', coordinates })
     },
     setBufferDistance(distanceMeters: number) {
       if (this.analysisLocked || this.bufferDistanceMeters === distanceMeters) return
@@ -584,10 +581,7 @@ export const useAnalysisStore = defineStore('analysis', {
         const draft = readWorkspaceDraft()
         if (!draft) return
 
-        this.sourceGeometryWgs84 = {
-          type: 'Point',
-          coordinates: [...draft.source_point_wgs84],
-        }
+        this.sourceGeometryWgs84 = parseSourceGeometry(draft.source_geometry_wgs84)
         this.bufferDistanceMeters = draft.buffer_distance_m
         this.weights = draft.weights.map((item) => ({ ...item }))
         if (draft.buffer_ready) await this.createBuffer()
@@ -724,10 +718,7 @@ export const useAnalysisStore = defineStore('analysis', {
       this.poiCommittedKeyword = null
       this.invalidatePoiSearch()
       this.invalidatePoiExportContext()
-      const geometry: PointGeometry = {
-        type: 'Point',
-        coordinates: [...this.sourceGeometryWgs84.coordinates],
-      }
+      const geometry = parseSourceGeometry(this.sourceGeometryWgs84)
       const distanceM = this.bufferDistanceMeters
 
       this.resetRiskAnalysis()

@@ -55,8 +55,9 @@ const bufferLimitText = computed(() => {
   return `服务端当前上限 ${maxBufferMeters.value.toLocaleString()} 米`
 })
 const selectedCoordinateText = computed(() => {
-  const coordinate = analysisStore.sourceGeometryWgs84?.coordinates
-  if (!coordinate) return null
+  const geometry = analysisStore.sourceGeometryWgs84
+  if (geometry?.type !== 'Point') return null
+  const coordinate = geometry.coordinates
   return {
     lng: coordinate[0].toFixed(6),
     lat: coordinate[1].toFixed(6),
@@ -67,6 +68,11 @@ const bufferGeometry = computed(
     analysisStore.bufferResult?.buffer.geometry ??
     analysisStore.submissionContext?.request.geometry ??
     null,
+)
+const sourcePoint = computed(() =>
+  analysisStore.sourceGeometryWgs84?.type === 'Point'
+    ? analysisStore.sourceGeometryWgs84
+    : null,
 )
 const recoveryNoticeText = computed(() => {
   if (analysisStore.submissionContext) {
@@ -309,7 +315,7 @@ onMounted(() => {
       </aside>
 
       <MapCanvas
-        :source-point="analysisStore.sourceGeometryWgs84"
+        :source-point="sourcePoint"
         :buffer-geometry="bufferGeometry"
         :risk-spatial-result="analysisStore.spatialResult"
         :poi-items="analysisStore.poiItems"
@@ -471,8 +477,11 @@ onMounted(() => {
 
         <template v-if="analysisStore.sourceGeometryWgs84">
           <div class="selection-summary">
-            <span class="selection-label">研究点（WGS84）</span>
-            <strong>{{ selectedCoordinateText?.lng }}, {{ selectedCoordinateText?.lat }}</strong>
+            <span class="selection-label">研究对象（WGS84）</span>
+            <strong v-if="selectedCoordinateText">
+              {{ selectedCoordinateText.lng }}, {{ selectedCoordinateText.lat }}
+            </strong>
+            <strong v-else>{{ analysisStore.sourceGeometryWgs84.type }}</strong>
             <small>地图 GCJ-02 已在适配层转换为 EPSG:4326</small>
           </div>
 

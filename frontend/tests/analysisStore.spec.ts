@@ -11,7 +11,7 @@ import {
 } from '@/api/riskAnalysis'
 import { searchAmapPois } from '@/map/amapPoi'
 import { useAnalysisStore } from '@/stores/analysis'
-import type { AnalysisAreaBufferResponse } from '@/types/analysisArea'
+import type { AnalysisAreaBufferResponse, SourceGeometry } from '@/types/analysisArea'
 import type { PoiDto, PoiSearchResult } from '@/types/poi'
 import type {
   RiskAnalysisJobStatus,
@@ -46,9 +46,12 @@ const mockedSearchPois = vi.mocked(searchAmapPois)
 const workspaceTaskStorageKey = 'esr:risk-analysis:workspace-task-id'
 const workspaceDraftStorageKey = 'esr:risk-analysis:workspace-draft'
 
-function makeDraft(bufferReady: boolean) {
+function makeDraft(
+  bufferReady: boolean,
+  sourceGeometry: SourceGeometry = { type: 'Point', coordinates: [118.9, 32.1] },
+) {
   return {
-    source_point_wgs84: [118.9, 32.1],
+    source_geometry_wgs84: sourceGeometry,
     buffer_distance_m: 3000,
     weights: [
       { code: 'PM25', weight_percent: 35 },
@@ -248,6 +251,44 @@ describe('analysis store', () => {
     store.setSourcePoint([118.91, 32.11])
     expect(store.sourceGeometryWgs84?.coordinates).toEqual([118.91, 32.11])
     expect(store.bufferResult).toBeNull()
+  })
+
+  it.each<SourceGeometry>([
+    {
+      type: 'LineString',
+      coordinates: [
+        [118.9, 32.1],
+        [118.91, 32.11],
+      ],
+    },
+    {
+      type: 'Polygon',
+      coordinates: [
+        [
+          [118.9, 32.1],
+          [118.91, 32.1],
+          [118.91, 32.11],
+          [118.9, 32.1],
+        ],
+      ],
+    },
+  ])('deep-clones $type in state and the Buffer request', async (geometry) => {
+    mockedCreateBuffer.mockResolvedValueOnce(makeBufferResponse())
+    const store = useAnalysisStore()
+    const original = structuredClone(geometry)
+
+    store.setSourceGeometry(geometry)
+    if (geometry.type === 'LineString') geometry.coordinates[0]![0] = 120
+    if (geometry.type === 'Polygon') geometry.coordinates[0]![0]![0] = 120
+
+    expect(store.sourceGeometryWgs84).toEqual(original)
+    await store.createBuffer()
+
+    const payload = mockedCreateBuffer.mock.calls[0]![0]
+    expect(payload.geometry).toEqual(original)
+    if (payload.geometry.type === 'LineString') payload.geometry.coordinates[0]![0] = 121
+    if (payload.geometry.type === 'Polygon') payload.geometry.coordinates[0]![0]![0] = 121
+    expect(store.sourceGeometryWgs84).toEqual(original)
   })
 
   it('ignores a late buffer response after the user selects another point', async () => {
@@ -822,7 +863,7 @@ describe('analysis store', () => {
 
     const draft = JSON.parse(window.sessionStorage.getItem(workspaceDraftStorageKey) ?? '{}')
     expect(draft).toEqual({
-      source_point_wgs84: [118.9, 32.1],
+      source_geometry_wgs84: { type: 'Point', coordinates: [118.9, 32.1] },
       buffer_distance_m: 4000,
       weights: [
         { code: 'PM25', weight_percent: 35 },
@@ -831,7 +872,9 @@ describe('analysis store', () => {
       ],
       buffer_ready: true,
     })
-    expect(JSON.stringify(draft)).not.toMatch(/geometry|area|working_crs|gcj|viewport/i)
+    expect(JSON.stringify(draft)).not.toMatch(
+      /area_m2|area_km2|working_crs|bounds|gcj|viewport/i,
+    )
 
     store.setBufferDistance(5000)
     expect(JSON.parse(window.sessionStorage.getItem(workspaceDraftStorageKey) ?? '{}')).toMatchObject(
@@ -850,6 +893,51 @@ describe('analysis store', () => {
     expect(store.weights).toEqual(makeDraft(false).weights)
     expect(store.bufferResult).toBeNull()
     expect(mockedCreateBuffer).not.toHaveBeenCalled()
+  })
+
+  it.each<SourceGeometry>([
+    {
+      type: 'LineString',
+      coordinates: [
+        [118.9, 32.1],
+        [118.91, 32.11],
+      ],
+    },
+    {
+      type: 'Polygon',
+      coordinates: [
+        [
+          [118.9, 32.1],
+          [118.91, 32.1],
+          [118.91, 32.11],
+          [118.9, 32.1],
+        ],
+      ],
+    },
+  ])('restores a $type draft without creating a buffer', async (geometry) => {
+    window.sessionStorage.setItem(
+      workspaceDraftStorageKey,
+      JSON.stringify(makeDraft(false, geometry)),
+    )
+    const store = useAnalysisStore()
+
+    await store.restoreRiskAnalysis()
+
+    expect(store.sourceGeometryWgs84).toEqual(geometry)
+    expect(store.sourceGeometryWgs84).not.toBe(geometry)
+    expect(mockedCreateBuffer).not.toHaveBeenCalled()
+  })
+
+  it('restores the legacy Point draft only when the new geometry field is absent', async () => {
+    const legacyDraft = makeDraft(false) as Record<string, unknown>
+    delete legacyDraft.source_geometry_wgs84
+    legacyDraft.source_point_wgs84 = [118.8, 32]
+    window.sessionStorage.setItem(workspaceDraftStorageKey, JSON.stringify(legacyDraft))
+    const store = useAnalysisStore()
+
+    await store.restoreRiskAnalysis()
+
+    expect(store.sourceGeometryWgs84).toEqual({ type: 'Point', coordinates: [118.8, 32] })
   })
 
   it('recreates a previously ready buffer through the existing Buffer API', async () => {
@@ -902,14 +990,38 @@ describe('analysis store', () => {
 
     expect(store.bufferResult).toBeNull()
     expect(JSON.parse(window.sessionStorage.getItem(workspaceDraftStorageKey) ?? '{}')).toMatchObject(
-      { source_point_wgs84: [118.92, 32.12], buffer_ready: false },
+      {
+        source_geometry_wgs84: { type: 'Point', coordinates: [118.92, 32.12] },
+        buffer_ready: false,
+      },
     )
   })
 
   it('discards a malformed draft without calling the Buffer API', async () => {
     window.sessionStorage.setItem(
       workspaceDraftStorageKey,
-      JSON.stringify({ ...makeDraft(true), source_point_wgs84: [999, 32.1] }),
+      JSON.stringify({
+        ...makeDraft(true),
+        source_geometry_wgs84: { type: 'Point', coordinates: [999, 32.1] },
+      }),
+    )
+    const store = useAnalysisStore()
+
+    await store.restoreRiskAnalysis()
+
+    expect(store.sourceGeometryWgs84).toBeNull()
+    expect(mockedCreateBuffer).not.toHaveBeenCalled()
+    expect(window.sessionStorage.getItem(workspaceDraftStorageKey)).toBeNull()
+  })
+
+  it('does not fall back to a legacy Point when the new geometry field is malformed', async () => {
+    window.sessionStorage.setItem(
+      workspaceDraftStorageKey,
+      JSON.stringify({
+        ...makeDraft(true),
+        source_geometry_wgs84: { type: 'MultiPolygon', coordinates: [] },
+        source_point_wgs84: [118.9, 32.1],
+      }),
     )
     const store = useAnalysisStore()
 
