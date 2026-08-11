@@ -4,8 +4,11 @@ from dataclasses import dataclass
 from math import floor, isfinite
 
 from pyproj import CRS, Transformer
+from shapely.errors import ShapelyError
+from shapely.geometry import Polygon
 from shapely.geometry.base import BaseGeometry
 from shapely.ops import transform as shapely_transform
+from shapely.ops import unary_union
 
 _WGS84 = CRS.from_epsg(4326)
 _SUPPORTED_GEOMETRY_TYPES = {
@@ -33,6 +36,55 @@ class MetricBufferResult:
     distance_m: float
     working_crs: CRS
     area_m2: float
+
+
+def normalize_boundaries(boundaries: list[list[tuple[float, float]]]) -> BaseGeometry:
+    """把 Provider 返回的全部 WGS84 填充区面 dissolve 为一个面 geometry。"""
+
+    if not boundaries:
+        raise AnalysisAreaValidationError("boundaries 至少需要一个 boundary")
+
+    polygons: list[Polygon] = []
+    for index, boundary in enumerate(boundaries):
+        if len(boundary) < 4:
+            raise AnalysisAreaValidationError(
+                f"boundary[{index}] 至少需要三个不同顶点并闭合"
+            )
+
+        coordinates: list[tuple[float, float]] = []
+        for coordinate in boundary:
+            if len(coordinate) != 2:
+                raise AnalysisAreaValidationError(f"boundary[{index}] 坐标必须包含经度和纬度")
+            longitude, latitude = (float(value) for value in coordinate)
+            if not isfinite(longitude) or not isfinite(latitude):
+                raise AnalysisAreaValidationError(f"boundary[{index}] 坐标必须是有限数值")
+            if not -180 <= longitude <= 180 or not -90 <= latitude <= 90:
+                raise AnalysisAreaValidationError(f"boundary[{index}] 坐标超出 WGS84 经纬度范围")
+            coordinates.append((longitude, latitude))
+
+        if coordinates[0] != coordinates[-1]:
+            raise AnalysisAreaValidationError(f"boundary[{index}] 必须闭合")
+        if len(set(coordinates[:-1])) < 3:
+            raise AnalysisAreaValidationError(f"boundary[{index}] 至少需要三个不同顶点")
+
+        polygon = Polygon(coordinates)
+        if polygon.is_empty or not polygon.is_valid:
+            raise AnalysisAreaValidationError(f"boundary[{index}] 不是有效 Polygon")
+        polygons.append(polygon)
+
+    try:
+        geometry = unary_union(polygons)
+    except ShapelyError as exc:
+        raise AnalysisAreaValidationError("boundaries dissolve 失败") from exc
+
+    if geometry.is_empty or not geometry.is_valid or geometry.geom_type not in {
+        "Polygon",
+        "MultiPolygon",
+    }:
+        raise AnalysisAreaValidationError(
+            "boundaries dissolve 结果必须是有效 Polygon 或 MultiPolygon"
+        )
+    return geometry
 
 
 def create_metric_buffer(geometry: BaseGeometry, distance_m: float) -> MetricBufferResult:

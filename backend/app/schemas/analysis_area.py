@@ -37,3 +37,9 @@ class AnalysisAreaBufferRequest(ApiModel):
         except GeoJsonValidationError as exc:
             raise ValueError(str(exc)) from exc
         return value
+
+
+class AdministrativeBoundariesNormalizeRequest(ApiModel):
+    """Provider 填充区 boundary 的 WGS84 normalization 请求。"""
+
+    boundaries: list[list[tuple[FiniteFloat, FiniteFloat]]] = Field(min_length=1)
