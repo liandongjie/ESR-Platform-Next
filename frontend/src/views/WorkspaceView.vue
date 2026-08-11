@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 
 import StatusCard from '@/components/common/StatusCard.vue'
 import MapCanvas from '@/components/map/MapCanvas.vue'
@@ -12,6 +12,10 @@ import type { RiskJobStatus } from '@/types/riskAnalysis'
 
 const systemStore = useSystemStore()
 const analysisStore = useAnalysisStore()
+const decimalDegreesPattern = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$/
+const longitudeInput = ref('')
+const latitudeInput = ref('')
+const coordinateInputError = ref<string | null>(null)
 
 const backendText = computed(() => {
   if (systemStore.loading) return '检查中'
@@ -111,6 +115,39 @@ function handlePointSelected(coordinates: Coordinate) {
   analysisStore.setSourcePoint(coordinates)
 }
 
+function applyCoordinateInput() {
+  if (analysisStore.analysisLocked) return
+
+  const longitudeText = longitudeInput.value.trim()
+  const latitudeText = latitudeInput.value.trim()
+  if (!longitudeText || !latitudeText) {
+    coordinateInputError.value = '请输入经度和纬度'
+    return
+  }
+  if (!decimalDegreesPattern.test(longitudeText) || !decimalDegreesPattern.test(latitudeText)) {
+    coordinateInputError.value = '经纬度只接受普通十进制度文本'
+    return
+  }
+
+  const longitude = Number(longitudeText)
+  const latitude = Number(latitudeText)
+  if (!Number.isFinite(longitude) || !Number.isFinite(latitude)) {
+    coordinateInputError.value = '经纬度必须是有限数值'
+    return
+  }
+  if (longitude < -180 || longitude > 180) {
+    coordinateInputError.value = '经度必须在 -180 至 180 之间'
+    return
+  }
+  if (latitude < -90 || latitude > 90) {
+    coordinateInputError.value = '纬度必须在 -90 至 90 之间'
+    return
+  }
+
+  coordinateInputError.value = null
+  handlePointSelected([longitude, latitude])
+}
+
 function createBuffer() {
   if (!bufferDistanceValid.value || analysisStore.analysisLocked) return
   void analysisStore.createBuffer()
@@ -169,7 +206,7 @@ onMounted(() => {
             <span>01</span>
             <div>
               <strong>选择研究区</strong>
-              <small>当前支持地图点击 Point</small>
+              <small>支持地图点击或 WGS84 坐标输入</small>
             </div>
           </li>
           <li :class="{ active: activeWorkflowStep === 2 }">
@@ -220,9 +257,46 @@ onMounted(() => {
           </div>
         </div>
 
+        <section class="control-section">
+          <div class="section-title-row">
+            <strong>输入研究点</strong>
+            <small>WGS84 / EPSG:4326</small>
+          </div>
+          <div class="coordinate-input-grid">
+            <el-input
+              v-model="longitudeInput"
+              aria-label="研究点经度"
+              placeholder="经度 [-180, 180]"
+              :disabled="analysisStore.analysisLocked"
+            />
+            <el-input
+              v-model="latitudeInput"
+              aria-label="研究点纬度"
+              placeholder="纬度 [-90, 90]"
+              :disabled="analysisStore.analysisLocked"
+            />
+          </div>
+          <small class="section-hint">仅支持普通十进制度，不支持科学计数法等格式。</small>
+          <el-button
+            type="primary"
+            plain
+            :disabled="analysisStore.analysisLocked"
+            @click="applyCoordinateInput"
+          >
+            使用该坐标
+          </el-button>
+          <el-alert
+            v-if="coordinateInputError"
+            :title="coordinateInputError"
+            type="error"
+            :closable="false"
+            show-icon
+          />
+        </section>
+
         <el-empty
           v-if="!analysisStore.sourceGeometryWgs84 && !analysisStore.job"
-          description="点击地图选择研究点"
+          description="点击地图或输入坐标选择研究点"
           :image-size="86"
         />
 
@@ -532,6 +606,12 @@ onMounted(() => {
 
 .control-section :deep(.el-input-number) {
   width: 100%;
+}
+
+.coordinate-input-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
 }
 
 .section-title-row,
