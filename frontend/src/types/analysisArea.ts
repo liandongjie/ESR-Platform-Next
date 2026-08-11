@@ -21,7 +21,11 @@ export interface MultiPolygonGeometry {
 }
 
 export type BufferGeometry = PolygonGeometry | MultiPolygonGeometry
-export type SourceGeometry = PointGeometry | LineStringGeometry | PolygonGeometry
+export type SourceGeometry =
+  | PointGeometry
+  | LineStringGeometry
+  | PolygonGeometry
+  | MultiPolygonGeometry
 
 export interface AnalysisAreaBufferRequest {
   geometry: SourceGeometry

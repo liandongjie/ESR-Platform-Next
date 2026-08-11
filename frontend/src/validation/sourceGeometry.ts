@@ -19,6 +19,30 @@ function coordinateKey(coordinate: Coordinate): string {
   return `${coordinate[0]},${coordinate[1]}`
 }
 
+function parseLinearRing(value: unknown): Coordinate[] {
+  if (!Array.isArray(value)) throw new Error('Polygon ring 无效')
+
+  const ring = value.map(parseCoordinate)
+  if (ring.length < 4) throw new Error('Polygon ring 至少需要三个不同顶点并闭合')
+
+  const first = ring[0]!
+  const last = ring.at(-1)!
+  if (first[0] !== last[0] || first[1] !== last[1]) {
+    throw new Error('Polygon ring 必须闭合')
+  }
+  if (new Set(ring.slice(0, -1).map(coordinateKey)).size < 3) {
+    throw new Error('Polygon ring 至少需要三个不同顶点')
+  }
+  return ring
+}
+
+function parsePolygonCoordinates(value: unknown): Coordinate[][] {
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new Error('Polygon 至少需要一个 ring')
+  }
+  return value.map(parseLinearRing)
+}
+
 export function parseSourceGeometry(value: unknown): SourceGeometry {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
     throw new Error('source geometry 必须是 GeoJSON geometry object')
@@ -41,24 +65,18 @@ export function parseSourceGeometry(value: unknown): SourceGeometry {
   }
 
   if (geometry.type === 'Polygon') {
-    if (!Array.isArray(geometry.coordinates) || geometry.coordinates.length !== 1) {
-      throw new Error('Polygon 只允许一个外环')
-    }
-    const rawRing = geometry.coordinates[0]
-    if (!Array.isArray(rawRing)) throw new Error('Polygon 外环无效')
-    const ring = rawRing.map(parseCoordinate)
-    if (ring.length < 4) throw new Error('Polygon 外环至少需要三个不同顶点并闭合')
-
-    const first = ring[0]!
-    const last = ring.at(-1)!
-    if (first[0] !== last[0] || first[1] !== last[1]) {
-      throw new Error('Polygon 外环必须闭合')
-    }
-    if (new Set(ring.slice(0, -1).map(coordinateKey)).size < 3) {
-      throw new Error('Polygon 外环至少需要三个不同顶点')
-    }
-    return { type: 'Polygon', coordinates: [ring] }
+    return { type: 'Polygon', coordinates: parsePolygonCoordinates(geometry.coordinates) }
   }
 
-  throw new Error('source geometry 仅支持 Point、LineString 或 Polygon')
+  if (geometry.type === 'MultiPolygon') {
+    if (!Array.isArray(geometry.coordinates) || geometry.coordinates.length === 0) {
+      throw new Error('MultiPolygon 至少需要一个 Polygon')
+    }
+    return {
+      type: 'MultiPolygon',
+      coordinates: geometry.coordinates.map(parsePolygonCoordinates),
+    }
+  }
+
+  throw new Error('source geometry 仅支持 Point、LineString、Polygon 或 MultiPolygon')
 }

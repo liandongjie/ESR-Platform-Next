@@ -63,6 +63,76 @@ def test_buffer_endpoint_accepts_line_and_polygon(client, geometry, geometry_typ
     assert payload["buffer"]["crs"] == "EPSG:4326"
 
 
+def test_buffer_endpoint_accepts_polygon_with_hole(client):
+    geometry = {
+        "type": "Polygon",
+        "coordinates": [
+            [
+                [118.8, 32.0],
+                [119.0, 32.0],
+                [119.0, 32.2],
+                [118.8, 32.2],
+                [118.8, 32.0],
+            ],
+            [
+                [118.86, 32.06],
+                [118.94, 32.06],
+                [118.94, 32.14],
+                [118.86, 32.14],
+                [118.86, 32.06],
+            ],
+        ],
+    }
+
+    response = client.post(
+        "/api/v1/analysis-areas/buffer",
+        json={"geometry": geometry, "distance_m": 100.0},
+    )
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["source"]["geometry_type"] == "Polygon"
+    assert payload["buffer"]["geometry"]["type"] == "Polygon"
+    assert len(payload["buffer"]["geometry"]["coordinates"]) == 2
+
+
+def test_buffer_endpoint_accepts_multipolygon(client):
+    geometry = {
+        "type": "MultiPolygon",
+        "coordinates": [
+            [
+                [
+                    [118.8, 32.0],
+                    [118.82, 32.0],
+                    [118.82, 32.02],
+                    [118.8, 32.02],
+                    [118.8, 32.0],
+                ]
+            ],
+            [
+                [
+                    [118.9, 32.1],
+                    [118.92, 32.1],
+                    [118.92, 32.12],
+                    [118.9, 32.12],
+                    [118.9, 32.1],
+                ]
+            ],
+        ],
+    }
+
+    response = client.post(
+        "/api/v1/analysis-areas/buffer",
+        json={"geometry": geometry, "distance_m": 100.0},
+    )
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["source"]["geometry_type"] == "MultiPolygon"
+    assert payload["buffer"]["geometry"]["type"] == "MultiPolygon"
+    assert len(payload["buffer"]["geometry"]["coordinates"]) == 2
+
+
 def test_buffer_endpoint_rejects_malformed_geojson(client):
     payload = _point_payload()
     payload["geometry"] = {"type": "Point", "coordinates": [118.9]}

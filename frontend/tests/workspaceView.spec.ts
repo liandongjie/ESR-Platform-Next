@@ -473,7 +473,7 @@ describe('WorkspaceView online drawing', () => {
     wrapper.unmount()
   })
 
-  it('renders LineString and Polygon source summaries without counting the closing vertex', async () => {
+  it('renders LineString, Polygon hole, and MultiPolygon source summaries', async () => {
     const { wrapper, store } = mountWorkspace()
     store.setSourceGeometry({
       type: 'LineString',
@@ -498,6 +498,56 @@ describe('WorkspaceView online drawing', () => {
     })
     await wrapper.vm.$nextTick()
     expect(wrapper.text()).toContain('Polygon · 3 个顶点')
+
+    store.setSourceGeometry({
+      type: 'Polygon',
+      coordinates: [
+        [
+          [118.8, 32],
+          [118.9, 32],
+          [118.9, 32.1],
+          [118.8, 32],
+        ],
+        [
+          [118.83, 32.03],
+          [118.85, 32.03],
+          [118.85, 32.05],
+          [118.83, 32.03],
+        ],
+      ],
+    })
+    await wrapper.vm.$nextTick()
+    expect(wrapper.text()).toContain('Polygon · 3 个外环顶点 · 1 个孔洞')
+
+    store.setSourceGeometry({
+      type: 'MultiPolygon',
+      coordinates: [
+        [
+          [
+            [118.8, 32],
+            [118.9, 32],
+            [118.9, 32.1],
+            [118.8, 32],
+          ],
+          [
+            [118.83, 32.03],
+            [118.85, 32.03],
+            [118.85, 32.05],
+            [118.83, 32.03],
+          ],
+        ],
+        [
+          [
+            [119, 32.2],
+            [119.1, 32.2],
+            [119.1, 32.3],
+            [119, 32.2],
+          ],
+        ],
+      ],
+    })
+    await wrapper.vm.$nextTick()
+    expect(wrapper.text()).toContain('MultiPolygon · 2 个面 · 1 个孔洞')
     wrapper.unmount()
   })
 

@@ -46,6 +46,39 @@ const mockedSearchPois = vi.mocked(searchAmapPois)
 const workspaceTaskStorageKey = 'esr:risk-analysis:workspace-task-id'
 const workspaceDraftStorageKey = 'esr:risk-analysis:workspace-draft'
 
+const polygonWithHole: SourceGeometry = {
+  type: 'Polygon',
+  coordinates: [
+    [
+      [118.8, 32],
+      [119, 32],
+      [119, 32.2],
+      [118.8, 32],
+    ],
+    [
+      [118.86, 32.06],
+      [118.9, 32.06],
+      [118.9, 32.1],
+      [118.86, 32.06],
+    ],
+  ],
+}
+
+const multiPolygonWithHole: SourceGeometry = {
+  type: 'MultiPolygon',
+  coordinates: [
+    polygonWithHole.type === 'Polygon' ? polygonWithHole.coordinates : [],
+    [
+      [
+        [119.1, 32.1],
+        [119.2, 32.1],
+        [119.2, 32.2],
+        [119.1, 32.1],
+      ],
+    ],
+  ],
+}
+
 function makeDraft(
   bufferReady: boolean,
   sourceGeometry: SourceGeometry = { type: 'Point', coordinates: [118.9, 32.1] },
@@ -272,14 +305,18 @@ describe('analysis store', () => {
         ],
       ],
     },
+    polygonWithHole,
+    multiPolygonWithHole,
   ])('deep-clones $type in state and the Buffer request', async (geometry) => {
     mockedCreateBuffer.mockResolvedValueOnce(makeBufferResponse())
     const store = useAnalysisStore()
-    const original = structuredClone(geometry)
+    const input = structuredClone(geometry)
+    const original = structuredClone(input)
 
-    store.setSourceGeometry(geometry)
-    if (geometry.type === 'LineString') geometry.coordinates[0]![0] = 120
-    if (geometry.type === 'Polygon') geometry.coordinates[0]![0]![0] = 120
+    store.setSourceGeometry(input)
+    if (input.type === 'LineString') input.coordinates[0]![0] = 120
+    if (input.type === 'Polygon') input.coordinates[0]![0]![0] = 120
+    if (input.type === 'MultiPolygon') input.coordinates[0]![0]![0]![0] = 120
 
     expect(store.sourceGeometryWgs84).toEqual(original)
     await store.createBuffer()
@@ -288,6 +325,9 @@ describe('analysis store', () => {
     expect(payload.geometry).toEqual(original)
     if (payload.geometry.type === 'LineString') payload.geometry.coordinates[0]![0] = 121
     if (payload.geometry.type === 'Polygon') payload.geometry.coordinates[0]![0]![0] = 121
+    if (payload.geometry.type === 'MultiPolygon') {
+      payload.geometry.coordinates[0]![0]![0]![0] = 121
+    }
     expect(store.sourceGeometryWgs84).toEqual(original)
   })
 
@@ -914,6 +954,8 @@ describe('analysis store', () => {
         ],
       ],
     },
+    polygonWithHole,
+    multiPolygonWithHole,
   ])('restores a $type draft without creating a buffer', async (geometry) => {
     window.sessionStorage.setItem(
       workspaceDraftStorageKey,
@@ -941,14 +983,17 @@ describe('analysis store', () => {
   })
 
   it('recreates a previously ready buffer through the existing Buffer API', async () => {
-    window.sessionStorage.setItem(workspaceDraftStorageKey, JSON.stringify(makeDraft(true)))
+    window.sessionStorage.setItem(
+      workspaceDraftStorageKey,
+      JSON.stringify(makeDraft(true, multiPolygonWithHole)),
+    )
     mockedCreateBuffer.mockResolvedValueOnce(makeBufferResponse())
     const store = useAnalysisStore()
 
     await store.restoreRiskAnalysis()
 
     expect(mockedCreateBuffer).toHaveBeenCalledWith({
-      geometry: { type: 'Point', coordinates: [118.9, 32.1] },
+      geometry: multiPolygonWithHole,
       distance_m: 3000,
     })
     expect(store.bufferResult).toEqual(makeBufferResponse())

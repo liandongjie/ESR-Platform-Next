@@ -77,7 +77,18 @@ const sourceGeometrySummary = computed(() => {
   if (geometry.type === 'LineString') {
     return `LineString · ${geometry.coordinates.length} 个顶点`
   }
-  return `Polygon · ${Math.max(0, geometry.coordinates[0]?.length ?? 1) - 1} 个顶点`
+  if (geometry.type === 'Polygon') {
+    const vertexCount = Math.max(0, geometry.coordinates[0]?.length ?? 1) - 1
+    const holeCount = Math.max(0, geometry.coordinates.length - 1)
+    return holeCount > 0
+      ? `Polygon · ${vertexCount} 个外环顶点 · ${holeCount} 个孔洞`
+      : `Polygon · ${vertexCount} 个顶点`
+  }
+  const holeCount = geometry.coordinates.reduce(
+    (total, polygon) => total + Math.max(0, polygon.length - 1),
+    0,
+  )
+  return `MultiPolygon · ${geometry.coordinates.length} 个面 · ${holeCount} 个孔洞`
 })
 const bufferGeometry = computed(
   () =>
