@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 
 import { createAnalysisAreaBuffer } from '@/api/analysisAreas'
 import { getApiErrorMessage } from '@/api/errors'
+import type { PoiExportData } from '@/export/poiCsv'
 import {
   createRiskAnalysisJob,
   getRiskAnalysisJob,
@@ -29,6 +30,8 @@ const DEFAULT_POLL_INTERVAL_MS = 2000
 const WORKSPACE_TASK_ID_STORAGE_KEY = 'esr:risk-analysis:workspace-task-id'
 const WORKSPACE_DRAFT_STORAGE_KEY = 'esr:risk-analysis:workspace-draft'
 const WORKSPACE_WEIGHT_CODES = ['PM25', 'AQI', 'NDVI'] as const
+const POI_EXPORT_PAGE_SIZE = 50
+const POI_EXPORT_LIMIT = 5000
 
 interface RiskAnalysisJobReference {
   task_id: string
@@ -57,6 +60,16 @@ interface AnalysisState {
   poiError: string | null
   poiHasSearched: boolean
   poiRequestRevision: number
+  poiCommittedKeyword: string | null
+  poiExportLoading: boolean
+  poiExportError: string | null
+  poiExportProgress: {
+    currentPage: number
+    plannedPages: number | null
+    totalReported: number | null
+    retrievableLimit: number | null
+  } | null
+  poiExportRevision: number
   weights: RiskIndicatorWeightInput[]
   job: RiskAnalysisJobReference | null
   jobStatus: RiskAnalysisJobStatus | null
@@ -211,6 +224,11 @@ export const useAnalysisStore = defineStore('analysis', {
     poiError: null,
     poiHasSearched: false,
     poiRequestRevision: 0,
+    poiCommittedKeyword: null,
+    poiExportLoading: false,
+    poiExportError: null,
+    poiExportProgress: null,
+    poiExportRevision: 0,
     weights: [
       { code: 'PM25', weight_percent: 30 },
       { code: 'AQI', weight_percent: 40 },
@@ -248,6 +266,13 @@ export const useAnalysisStore = defineStore('analysis', {
     spatialLoading: (state): boolean => state.spatialLoadingTaskId !== null,
   },
   actions: {
+    invalidatePoiExportContext() {
+      const wasLoading = this.poiExportLoading
+      this.poiExportRevision += 1
+      this.poiExportLoading = false
+      this.poiExportProgress = null
+      this.poiExportError = wasLoading ? '查询条件已变化，导出已取消' : null
+    },
     invalidatePoiSearch() {
       this.poiRequestRevision += 1
       this.poiPage = 1
@@ -285,6 +310,11 @@ export const useAnalysisStore = defineStore('analysis', {
         return
       }
 
+      if (this.poiCommittedKeyword !== keyword) {
+        this.poiCommittedKeyword = keyword
+        this.invalidatePoiExportContext()
+      }
+
       const revision = ++this.poiRequestRevision
       const bufferRevision = this.bufferRequestRevision
       const pageSize = this.poiPageSize
@@ -314,6 +344,140 @@ export const useAnalysisStore = defineStore('analysis', {
         if (revision === this.poiRequestRevision) this.poiLoading = false
       }
     },
+    prepareCurrentPagePoiExport(): PoiExportData | null {
+      if (this.poiExportLoading) return null
+      this.poiExportError = null
+      if (!this.poiCommittedKeyword || !this.poiHasSearched || this.poiItems.length === 0) {
+        this.poiExportError = '当前页没有可导出的 POI 数据'
+        return null
+      }
+
+      const items = this.poiItems.map((item) => ({
+        ...item,
+        locationWgs84: [...item.locationWgs84] as Coordinate,
+      }))
+      return {
+        mode: 'current-page',
+        keyword: this.poiCommittedKeyword,
+        page: this.poiPage,
+        items,
+        totalReported: this.poiTotal,
+        retrievableLimit: Math.min(this.poiTotal, POI_EXPORT_LIMIT),
+        exportedCount: items.length,
+      }
+    },
+    async collectRetrievablePoiExport(): Promise<PoiExportData | null> {
+      if (this.poiExportLoading) return null
+      this.poiExportError = null
+      if (!this.poiCommittedKeyword || !this.poiHasSearched || !this.bufferResult) {
+        this.poiExportError = '请先完成 POI 查询'
+        return null
+      }
+
+      const geometry = this.bufferResult.buffer.geometry
+      if (geometry.type !== 'Polygon') {
+        this.poiExportError = '当前 POI 导出暂不支持 MultiPolygon 缓冲区'
+        return null
+      }
+      if (geometry.coordinates.length !== 1) {
+        this.poiExportError = '当前 POI 导出仅支持不含内部孔洞的单 Polygon 缓冲区'
+        return null
+      }
+
+      const keyword = this.poiCommittedKeyword
+      const bufferRevision = this.bufferRequestRevision
+      const revision = ++this.poiExportRevision
+      const isCurrent = () =>
+        revision === this.poiExportRevision &&
+        bufferRevision === this.bufferRequestRevision &&
+        keyword === this.poiCommittedKeyword
+
+      this.poiExportLoading = true
+      this.poiExportProgress = {
+        currentPage: 1,
+        plannedPages: null,
+        totalReported: null,
+        retrievableLimit: null,
+      }
+
+      try {
+        const uniqueItems = new Map<string, PoiDto>()
+        let totalReported = 0
+        let retrievableLimit = 0
+        let plannedPages: number | null = null
+        let rawAcceptedCount = 0
+
+        for (let page = 1; page <= (plannedPages ?? 1); page += 1) {
+          if (!isCurrent()) return null
+          if (page > 1) {
+            this.poiExportProgress = {
+              currentPage: page,
+              plannedPages,
+              totalReported,
+              retrievableLimit,
+            }
+          }
+
+          const result = await searchAmapPois({
+            geometry,
+            keyword,
+            page,
+            pageSize: POI_EXPORT_PAGE_SIZE,
+          })
+          if (!isCurrent()) return null
+
+          if (page === 1) {
+            totalReported = result.total
+            retrievableLimit = Math.min(totalReported, POI_EXPORT_LIMIT)
+            plannedPages = Math.ceil(retrievableLimit / POI_EXPORT_PAGE_SIZE)
+            this.poiExportProgress = {
+              currentPage: 1,
+              plannedPages,
+              totalReported,
+              retrievableLimit,
+            }
+            if (plannedPages === 0) throw new Error('当前查询没有可导出的 POI 数据')
+          }
+
+          if (result.items.length === 0) {
+            if (rawAcceptedCount === 0) throw new Error('当前查询没有可导出的 POI 数据')
+            break
+          }
+
+          // 高德 count 是报告总数，不保证分页 rows 构成严格快照；仅用第一页固定请求计划和消费上限。
+          const remaining = retrievableLimit - rawAcceptedCount
+          const acceptedItems = result.items.slice(0, remaining)
+          rawAcceptedCount += acceptedItems.length
+          for (const item of acceptedItems) {
+            if (!uniqueItems.has(item.id)) uniqueItems.set(item.id, item)
+          }
+          if (rawAcceptedCount >= retrievableLimit) break
+        }
+
+        if (!isCurrent()) return null
+        const items = Array.from(uniqueItems.values(), (item) => ({
+          ...item,
+          locationWgs84: [...item.locationWgs84] as Coordinate,
+        }))
+        return {
+          mode: 'retrievable',
+          keyword,
+          page: null,
+          items,
+          totalReported,
+          retrievableLimit,
+          exportedCount: items.length,
+        }
+      } catch (error: unknown) {
+        if (isCurrent()) this.poiExportError = getApiErrorMessage(error, 'POI 可获取结果导出失败')
+        return null
+      } finally {
+        if (revision === this.poiExportRevision) {
+          this.poiExportLoading = false
+          this.poiExportProgress = null
+        }
+      }
+    },
     resetRiskAnalysis() {
       // 不把 Timer 放进 Pinia；递增版本号即可让旧轮询在下一次唤醒时自行退出。
       this.jobRevision += 1
@@ -336,7 +500,9 @@ export const useAnalysisStore = defineStore('analysis', {
       if (this.analysisLocked) return
       // 切换研究点会使旧 Buffer 立即失效，同时递增版本号让尚未返回的旧请求无法覆盖新选择。
       this.bufferRequestRevision += 1
+      this.poiCommittedKeyword = null
       this.invalidatePoiSearch()
+      this.invalidatePoiExportContext()
       this.sourceGeometryWgs84 = {
         type: 'Point',
         coordinates: [...coordinates],
@@ -355,7 +521,9 @@ export const useAnalysisStore = defineStore('analysis', {
     setBufferDistance(distanceMeters: number) {
       if (this.analysisLocked || this.bufferDistanceMeters === distanceMeters) return
       this.bufferRequestRevision += 1
+      this.poiCommittedKeyword = null
       this.invalidatePoiSearch()
+      this.invalidatePoiExportContext()
       this.bufferDistanceMeters = distanceMeters
       this.bufferResult = null
       this.bufferLoading = false
@@ -384,7 +552,9 @@ export const useAnalysisStore = defineStore('analysis', {
     clearSelection() {
       if (this.analysisLocked) return
       this.bufferRequestRevision += 1
+      this.poiCommittedKeyword = null
       this.invalidatePoiSearch()
+      this.invalidatePoiExportContext()
       this.sourceGeometryWgs84 = null
       this.bufferResult = null
       this.bufferLoading = false
@@ -551,7 +721,9 @@ export const useAnalysisStore = defineStore('analysis', {
       }
 
       const revision = ++this.bufferRequestRevision
+      this.poiCommittedKeyword = null
       this.invalidatePoiSearch()
+      this.invalidatePoiExportContext()
       const geometry: PointGeometry = {
         type: 'Point',
         coordinates: [...this.sourceGeometryWgs84.coordinates],

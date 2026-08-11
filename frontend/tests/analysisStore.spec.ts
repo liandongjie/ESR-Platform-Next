@@ -12,6 +12,7 @@ import {
 import { searchAmapPois } from '@/map/amapPoi'
 import { useAnalysisStore } from '@/stores/analysis'
 import type { AnalysisAreaBufferResponse } from '@/types/analysisArea'
+import type { PoiDto, PoiSearchResult } from '@/types/poi'
 import type {
   RiskAnalysisJobStatus,
   RiskAnalysisResult,
@@ -177,6 +178,44 @@ async function prepareBuffer(store: ReturnType<typeof useAnalysisStore>) {
   mockedCreateBuffer.mockResolvedValueOnce(makeBufferResponse())
   store.setSourcePoint([118.9, 32.1])
   await store.createBuffer()
+}
+
+function makePoi(id: string): PoiDto {
+  return {
+    id,
+    name: `POI ${id}`,
+    type: '科教文化服务',
+    typeCode: '141200',
+    address: '南京市',
+    locationWgs84: [118.81, 32.02],
+  }
+}
+
+function makePoiPage(
+  page: number,
+  total: number,
+  count: number,
+  prefix = `page-${page}`,
+): PoiSearchResult {
+  return {
+    items: Array.from({ length: count }, (_, index) => makePoi(`${prefix}-${index}`)),
+    total,
+    page,
+    pageSize: 50,
+  }
+}
+
+async function preparePoiQuery(store: ReturnType<typeof useAnalysisStore>, total = 116) {
+  await prepareBuffer(store)
+  store.setPoiKeyword('学校')
+  mockedSearchPois.mockResolvedValueOnce({
+    items: [makePoi('visible-1')],
+    total,
+    page: 1,
+    pageSize: 10,
+  })
+  await store.searchPois(1)
+  mockedSearchPois.mockClear()
 }
 
 describe('analysis store', () => {
@@ -449,6 +488,308 @@ describe('analysis store', () => {
     await store.searchPois(1)
 
     expect(store.poiError).toBe('当前 POI 查询暂不支持 MultiPolygon 缓冲区')
+    expect(mockedSearchPois).not.toHaveBeenCalled()
+  })
+
+  it('prepares only the current visible page without another provider request', async () => {
+    const store = useAnalysisStore()
+    await preparePoiQuery(store, 44)
+
+    const data = store.prepareCurrentPagePoiExport()
+
+    expect(mockedSearchPois).not.toHaveBeenCalled()
+    expect(data).toMatchObject({
+      mode: 'current-page',
+      keyword: '学校',
+      page: 1,
+      totalReported: 44,
+      retrievableLimit: 44,
+      exportedCount: 1,
+      items: [{ id: 'visible-1' }],
+    })
+
+    store.poiItems = []
+    expect(store.prepareCurrentPagePoiExport()).toBeNull()
+    expect(store.poiExportError).toBe('当前页没有可导出的 POI 数据')
+    expect(mockedSearchPois).not.toHaveBeenCalled()
+  })
+
+  it('fixes the export plan from page 1 and caps an oversized final page', async () => {
+    const store = useAnalysisStore()
+    await preparePoiQuery(store)
+    const pageBefore = store.poiPage
+    const itemsBefore = store.poiItems
+    const totalBefore = store.poiTotal
+    mockedSearchPois
+      .mockResolvedValueOnce(makePoiPage(1, 116, 50))
+      .mockResolvedValueOnce(makePoiPage(2, 166, 50))
+      .mockResolvedValueOnce(makePoiPage(3, 90, 30))
+
+    const data = await store.collectRetrievablePoiExport()
+
+    expect(mockedSearchPois).toHaveBeenCalledTimes(3)
+    expect(mockedSearchPois.mock.calls.map(([request]) => request.page)).toEqual([1, 2, 3])
+    expect(mockedSearchPois.mock.calls.every(([request]) => request.pageSize === 50)).toBe(true)
+    expect(data).toMatchObject({
+      totalReported: 116,
+      retrievableLimit: 116,
+      exportedCount: 116,
+    })
+    expect(data?.items.at(-1)?.id).toBe('page-3-15')
+    expect(store.poiPage).toBe(pageBefore)
+    expect(store.poiItems).toBe(itemsBefore)
+    expect(store.poiTotal).toBe(totalBefore)
+  })
+
+  it('exports the actual first-page rows when count exceeds returned POIs', async () => {
+    const store = useAnalysisStore()
+    await preparePoiQuery(store, 15)
+    mockedSearchPois.mockResolvedValueOnce(makePoiPage(1, 15, 14))
+
+    const data = await store.collectRetrievablePoiExport()
+
+    expect(mockedSearchPois).toHaveBeenCalledOnce()
+    expect(data).toMatchObject({
+      totalReported: 15,
+      retrievableLimit: 15,
+      exportedCount: 14,
+    })
+    expect(store.poiExportError).toBeNull()
+  })
+
+  it('stops after an empty first export page without retrying', async () => {
+    const store = useAnalysisStore()
+    await preparePoiQuery(store)
+    mockedSearchPois.mockResolvedValueOnce({ items: [], total: 0, page: 1, pageSize: 50 })
+
+    await expect(store.collectRetrievablePoiExport()).resolves.toBeNull()
+
+    expect(mockedSearchPois).toHaveBeenCalledOnce()
+    expect(mockedSearchPois).toHaveBeenCalledWith(expect.objectContaining({ page: 1, pageSize: 50 }))
+    expect(store.poiExportLoading).toBe(false)
+    expect(store.poiExportError).toBe('当前查询没有可导出的 POI 数据')
+  })
+
+  it('continues after short pages and consumes at most retrievableLimit raw rows', async () => {
+    const store = useAnalysisStore()
+    await preparePoiQuery(store)
+    mockedSearchPois
+      .mockResolvedValueOnce(makePoiPage(1, 116, 49))
+      .mockResolvedValueOnce(makePoiPage(2, 166, 50))
+      .mockResolvedValueOnce(makePoiPage(3, 90, 30))
+
+    const data = await store.collectRetrievablePoiExport()
+
+    expect(mockedSearchPois).toHaveBeenCalledTimes(3)
+    expect(data).toMatchObject({
+      totalReported: 116,
+      retrievableLimit: 116,
+      exportedCount: 116,
+    })
+    expect(data?.items.at(-1)?.id).toBe('page-3-16')
+    expect(store.poiExportError).toBeNull()
+  })
+
+  it('stops successfully when a later planned page is empty', async () => {
+    const store = useAnalysisStore()
+    await preparePoiQuery(store)
+    mockedSearchPois
+      .mockResolvedValueOnce(makePoiPage(1, 116, 50))
+      .mockResolvedValueOnce({ items: [], total: 0, page: 2, pageSize: 50 })
+
+    const data = await store.collectRetrievablePoiExport()
+
+    expect(mockedSearchPois).toHaveBeenCalledTimes(2)
+    expect(data).toMatchObject({
+      totalReported: 116,
+      retrievableLimit: 116,
+      exportedCount: 50,
+    })
+    expect(store.poiExportError).toBeNull()
+  })
+
+  it.each(['SDK error', 'malformed complete'])(
+    'stops after a provider %s without retrying',
+    async (message) => {
+      const store = useAnalysisStore()
+      await preparePoiQuery(store)
+      mockedSearchPois
+        .mockResolvedValueOnce(makePoiPage(1, 116, 50))
+        .mockRejectedValueOnce(new Error(message))
+
+      await expect(store.collectRetrievablePoiExport()).resolves.toBeNull()
+
+      expect(mockedSearchPois).toHaveBeenCalledTimes(2)
+      expect(store.poiExportError).toContain(message)
+    },
+  )
+
+  it('requests at most 100 fixed-size pages when totalReported exceeds 5000', async () => {
+    const store = useAnalysisStore()
+    await preparePoiQuery(store, 5001)
+    mockedSearchPois.mockImplementation((request) =>
+      Promise.resolve(makePoiPage(request.page, 5001, 50)),
+    )
+
+    const data = await store.collectRetrievablePoiExport()
+
+    expect(mockedSearchPois).toHaveBeenCalledTimes(100)
+    expect(mockedSearchPois).toHaveBeenLastCalledWith(
+      expect.objectContaining({ page: 100, pageSize: 50 }),
+    )
+    expect(data).toMatchObject({
+      totalReported: 5001,
+      retrievableLimit: 5000,
+      exportedCount: 5000,
+    })
+  })
+
+  it('deduplicates all-page results by strict POI ID in first-seen order', async () => {
+    const store = useAnalysisStore()
+    await preparePoiQuery(store, 100)
+    const page1 = makePoiPage(1, 100, 50)
+    const page2 = makePoiPage(2, 100, 50)
+    page2.items[0] = page1.items[0]!
+    mockedSearchPois.mockResolvedValueOnce(page1).mockResolvedValueOnce(page2)
+
+    const data = await store.collectRetrievablePoiExport()
+
+    expect(data?.exportedCount).toBe(99)
+    expect(data?.items[0]?.id).toBe('page-1-0')
+    expect(data?.items[50]?.id).toBe('page-2-1')
+  })
+
+  it('does not cancel an export when only the input draft changes', async () => {
+    const store = useAnalysisStore()
+    await preparePoiQuery(store, 1)
+    let resolveExport: ((value: PoiSearchResult) => void) | undefined
+    mockedSearchPois.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveExport = resolve
+        }),
+    )
+
+    const pending = store.collectRetrievablePoiExport()
+    store.setPoiKeyword('医院')
+    resolveExport?.(makePoiPage(1, 1, 1))
+
+    await expect(pending).resolves.toMatchObject({ keyword: '学校', exportedCount: 1 })
+    expect(store.poiExportError).toBeNull()
+  })
+
+  it('keeps a newer export session immune to every late write from a canceled session', async () => {
+    const store = useAnalysisStore()
+    await preparePoiQuery(store, 116)
+    let resolveOldExport: ((value: PoiSearchResult) => void) | undefined
+    mockedSearchPois
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveOldExport = resolve
+          }),
+      )
+      .mockResolvedValueOnce({ items: [makePoi('hospital')], total: 1, page: 1, pageSize: 10 })
+      .mockResolvedValueOnce(makePoiPage(1, 1, 1, 'new'))
+
+    const oldExport = store.collectRetrievablePoiExport()
+    store.setPoiKeyword('医院')
+    await store.searchPois(1)
+    expect(store.poiExportError).toBe('查询条件已变化，导出已取消')
+
+    const newExport = await store.collectRetrievablePoiExport()
+    expect(newExport).toMatchObject({ keyword: '医院', exportedCount: 1 })
+    expect(store.poiExportError).toBeNull()
+    expect(store.poiExportLoading).toBe(false)
+
+    resolveOldExport?.(makePoiPage(1, 116, 50, 'old'))
+    await expect(oldExport).resolves.toBeNull()
+
+    expect(mockedSearchPois).toHaveBeenCalledTimes(3)
+    expect(store.poiExportError).toBeNull()
+    expect(store.poiExportLoading).toBe(false)
+    expect(store.poiExportProgress).toBeNull()
+  })
+
+  it('cancels an export after Buffer context changes and ignores its late page', async () => {
+    const store = useAnalysisStore()
+    await preparePoiQuery(store, 116)
+    let resolveExport: ((value: PoiSearchResult) => void) | undefined
+    mockedSearchPois.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveExport = resolve
+        }),
+    )
+
+    const pending = store.collectRetrievablePoiExport()
+    store.setBufferDistance(5000)
+    expect(store.poiExportError).toBe('查询条件已变化，导出已取消')
+    resolveExport?.(makePoiPage(1, 116, 50))
+
+    await expect(pending).resolves.toBeNull()
+    expect(mockedSearchPois).toHaveBeenCalledOnce()
+    expect(store.poiExportLoading).toBe(false)
+  })
+
+  it('does not cancel an all-page export during ordinary result pagination', async () => {
+    const store = useAnalysisStore()
+    await preparePoiQuery(store, 1)
+    let resolveExport: ((value: PoiSearchResult) => void) | undefined
+    mockedSearchPois.mockImplementation((request) => {
+      if (request.pageSize === 10) {
+        return Promise.resolve({ items: [makePoi('visible-2')], total: 1, page: 2, pageSize: 10 })
+      }
+      return new Promise((resolve) => {
+        resolveExport = resolve
+      })
+    })
+
+    const pending = store.collectRetrievablePoiExport()
+    await store.searchPois(2)
+    resolveExport?.(makePoiPage(1, 1, 1))
+
+    await expect(pending).resolves.toMatchObject({ exportedCount: 1 })
+    expect(store.poiExportError).toBeNull()
+  })
+
+  it('rejects MultiPolygon export without calling the POI provider', async () => {
+    const store = useAnalysisStore()
+    await preparePoiQuery(store)
+    const polygon = makeBufferResponse().buffer.geometry
+    if (polygon.type !== 'Polygon') throw new Error('test fixture must be Polygon')
+    store.bufferResult!.buffer.geometry = {
+      type: 'MultiPolygon',
+      coordinates: [polygon.coordinates],
+    }
+
+    await expect(store.collectRetrievablePoiExport()).resolves.toBeNull()
+
+    expect(store.poiExportError).toContain('暂不支持 MultiPolygon')
+    expect(mockedSearchPois).not.toHaveBeenCalled()
+  })
+
+  it('rejects a Polygon Buffer with an inner ring without calling the POI provider', async () => {
+    const store = useAnalysisStore()
+    await preparePoiQuery(store)
+    const polygon = makeBufferResponse().buffer.geometry
+    if (polygon.type !== 'Polygon') throw new Error('test fixture must be Polygon')
+    store.bufferResult!.buffer.geometry = {
+      type: 'Polygon',
+      coordinates: [
+        polygon.coordinates[0]!,
+        [
+          [118.88, 32.1],
+          [118.9, 32.11],
+          [118.91, 32.1],
+          [118.88, 32.1],
+        ],
+      ],
+    }
+
+    await expect(store.collectRetrievablePoiExport()).resolves.toBeNull()
+
+    expect(store.poiExportError).toContain('不含内部孔洞')
     expect(mockedSearchPois).not.toHaveBeenCalled()
   })
 
