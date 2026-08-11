@@ -1,6 +1,7 @@
 import ElementPlus, { ElButton } from 'element-plus'
 import { createPinia, setActivePinia } from 'pinia'
 import { flushPromises, mount } from '@vue/test-utils'
+import { defineComponent, h } from 'vue'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { useAnalysisStore } from '@/stores/analysis'
@@ -10,6 +11,23 @@ import WorkspaceView from '@/views/WorkspaceView.vue'
 const mocks = vi.hoisted(() => ({
   searchAmapStudyPoints: vi.fn(),
 }))
+const drawingCanvasMocks = {
+  startDrawing: vi.fn(),
+  cancelDrawing: vi.fn(),
+}
+
+const MapCanvasStub = defineComponent({
+  name: 'MapCanvas',
+  props: {
+    sourceGeometry: { type: Object, default: null },
+    selectionDisabled: Boolean,
+  },
+  emits: ['select-point', 'select-geometry', 'drawing-mode-change', 'drawing-error'],
+  setup(_props, { expose }) {
+    expose(drawingCanvasMocks)
+    return () => h('div', { class: 'map-canvas-stub' })
+  },
+})
 
 vi.mock('@/map/amapStudyPoint', () => ({
   searchAmapStudyPoints: mocks.searchAmapStudyPoints,
@@ -30,7 +48,7 @@ function mountWorkspace() {
     global: {
       plugins: [pinia, ElementPlus],
       stubs: {
-        MapCanvas: true,
+        MapCanvas: MapCanvasStub,
         PoiSearchPanel: true,
         RiskAnalysisResultDownloads: true,
         StatusCard: true,
@@ -39,6 +57,11 @@ function mountWorkspace() {
   })
   return { wrapper, store: useAnalysisStore() }
 }
+
+beforeEach(() => {
+  drawingCanvasMocks.startDrawing.mockReset()
+  drawingCanvasMocks.cancelDrawing.mockReset()
+})
 
 function coordinateInputs(wrapper: ReturnType<typeof mountWorkspace>['wrapper']) {
   return {
@@ -359,5 +382,171 @@ describe('WorkspaceView address or POI study point search', () => {
     expect(wrapper.get('.study-point-result').attributes('disabled')).toBeDefined()
     await wrapper.get('.study-point-result').trigger('click')
     expect(setSourcePoint).not.toHaveBeenCalled()
+  })
+})
+
+describe('WorkspaceView online drawing', () => {
+  beforeEach(() => {
+    window.sessionStorage.clear()
+  })
+
+  it.each([
+    ['点', 'point'],
+    ['线', 'polyline'],
+    ['矩形', 'rectangle'],
+    ['多边形', 'polygon'],
+  ] as const)('starts %s drawing from the Workspace control', async (label, mode) => {
+    const { wrapper } = mountWorkspace()
+
+    await wrapper.get(`button[aria-label="绘制${label}"]`).trigger('click')
+
+    expect(drawingCanvasMocks.startDrawing).toHaveBeenCalledWith(mode)
+    wrapper.unmount()
+  })
+
+  it('commits selected geometry through setSourceGeometry', async () => {
+    const { wrapper, store } = mountWorkspace()
+    const setSourceGeometry = vi.spyOn(store, 'setSourceGeometry')
+    const geometry = {
+      type: 'LineString' as const,
+      coordinates: [
+        [118.8, 32],
+        [118.9, 32.1],
+      ] as Array<[number, number]>,
+    }
+
+    wrapper.findComponent(MapCanvasStub).vm.$emit('select-geometry', geometry)
+    await wrapper.vm.$nextTick()
+
+    expect(setSourceGeometry).toHaveBeenCalledWith(geometry)
+    expect(store.sourceGeometryWgs84).toEqual(geometry)
+    wrapper.unmount()
+  })
+
+  it('shows the active mode and cancels without changing committed source state', async () => {
+    const { wrapper, store } = mountWorkspace()
+    store.setSourceGeometry({
+      type: 'LineString',
+      coordinates: [
+        [118.8, 32],
+        [118.9, 32.1],
+      ],
+    })
+    const committed = {
+      type: 'LineString',
+      coordinates: [
+        [118.8, 32],
+        [118.9, 32.1],
+      ],
+    }
+
+    wrapper.findComponent(MapCanvasStub).vm.$emit('drawing-mode-change', 'polygon')
+    await wrapper.vm.$nextTick()
+    expect(wrapper.text()).toContain('多边形绘制中')
+
+    const cancelButton = wrapper
+      .findAllComponents(ElButton)
+      .find((button) => button.text().trim() === '取消绘制')
+    if (!cancelButton) throw new Error('missing cancel drawing button')
+    await cancelButton.trigger('click')
+
+    expect(drawingCanvasMocks.cancelDrawing).toHaveBeenCalledOnce()
+    expect(store.sourceGeometryWgs84).toEqual(committed)
+    wrapper.unmount()
+  })
+
+  it('clears the study area only through the existing clearSelection action', async () => {
+    const { wrapper, store } = mountWorkspace()
+    store.setSourcePoint([118.9, 32.1])
+    await wrapper.vm.$nextTick()
+    const clearSelection = vi.spyOn(store, 'clearSelection')
+    const clearButton = wrapper
+      .findAllComponents(ElButton)
+      .find((button) => button.text().trim() === '清除研究区')
+    if (!clearButton) throw new Error('missing clear study area button')
+
+    await clearButton.trigger('click')
+
+    expect(drawingCanvasMocks.cancelDrawing).toHaveBeenCalledOnce()
+    expect(clearSelection).toHaveBeenCalledOnce()
+    expect(store.sourceGeometryWgs84).toBeNull()
+    wrapper.unmount()
+  })
+
+  it('renders LineString and Polygon source summaries without counting the closing vertex', async () => {
+    const { wrapper, store } = mountWorkspace()
+    store.setSourceGeometry({
+      type: 'LineString',
+      coordinates: [
+        [118.8, 32],
+        [118.9, 32.1],
+      ],
+    })
+    await wrapper.vm.$nextTick()
+    expect(wrapper.text()).toContain('LineString · 2 个顶点')
+
+    store.setSourceGeometry({
+      type: 'Polygon',
+      coordinates: [
+        [
+          [118.8, 32],
+          [118.9, 32],
+          [118.9, 32.1],
+          [118.8, 32],
+        ],
+      ],
+    })
+    await wrapper.vm.$nextTick()
+    expect(wrapper.text()).toContain('Polygon · 3 个顶点')
+    wrapper.unmount()
+  })
+
+  it('shows drawing errors without replacing the current source', async () => {
+    const { wrapper, store } = mountWorkspace()
+    store.setSourcePoint([118.9, 32.1])
+
+    wrapper.findComponent(MapCanvasStub).vm.$emit('drawing-error', 'MouseTool 加载失败，请重试')
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.get('[role="alert"]').text()).toContain('MouseTool 加载失败，请重试')
+    expect(store.sourceGeometryWgs84).toEqual({ type: 'Point', coordinates: [118.9, 32.1] })
+    wrapper.unmount()
+  })
+
+  it('clears a drawing error after a Point path successfully selects a study point', async () => {
+    const { wrapper, store } = mountWorkspace()
+    const mapCanvas = wrapper.findComponent(MapCanvasStub)
+    mapCanvas.vm.$emit('drawing-error', '上一次绘制失败')
+    await wrapper.vm.$nextTick()
+    expect(wrapper.get('[role="alert"]').text()).toContain('上一次绘制失败')
+
+    mapCanvas.vm.$emit('select-point', [118.9, 32.1])
+    await wrapper.vm.$nextTick()
+
+    expect(store.sourceGeometryWgs84).toEqual({ type: 'Point', coordinates: [118.9, 32.1] })
+    expect(wrapper.find('[role="alert"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('disables drawing controls and guards callbacks while analysis is locked', async () => {
+    const { wrapper, store } = mountWorkspace()
+    store.setSourcePoint([118.9, 32.1])
+    const setSourceGeometry = vi.spyOn(store, 'setSourceGeometry')
+    store.polling = true
+    await wrapper.vm.$nextTick()
+
+    for (const label of ['点', '线', '矩形', '多边形']) {
+      expect(wrapper.get(`button[aria-label="绘制${label}"]`).attributes('disabled')).toBeDefined()
+    }
+
+    wrapper.findComponent(MapCanvasStub).vm.$emit('select-geometry', {
+      type: 'Point',
+      coordinates: [120, 30],
+    })
+    await wrapper.vm.$nextTick()
+
+    expect(setSourceGeometry).not.toHaveBeenCalled()
+    expect(store.sourceGeometryWgs84).toEqual({ type: 'Point', coordinates: [118.9, 32.1] })
+    wrapper.unmount()
   })
 })

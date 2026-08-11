@@ -8,7 +8,7 @@ import RiskAnalysisResultDownloads from '@/components/risk-analysis/RiskAnalysis
 import { searchAmapStudyPoints } from '@/map/amapStudyPoint'
 import { useAnalysisStore } from '@/stores/analysis'
 import { useSystemStore } from '@/stores/system'
-import type { Coordinate } from '@/types/analysisArea'
+import type { Coordinate, SourceGeometry } from '@/types/analysisArea'
 import type { StudyPointCandidate } from '@/types/poi'
 import type { RiskJobStatus } from '@/types/riskAnalysis'
 
@@ -25,6 +25,20 @@ const studyPointError = ref<string | null>(null)
 const studyPointHasSearched = ref(false)
 const selectedStudyPointName = ref<string | null>(null)
 let studyPointRequestRevision = 0
+type DrawingMode = 'point' | 'polyline' | 'rectangle' | 'polygon'
+interface MapCanvasDrawingApi {
+  startDrawing: (mode: DrawingMode) => void
+  cancelDrawing: () => void
+}
+const mapCanvasRef = ref<MapCanvasDrawingApi | null>(null)
+const activeDrawingMode = ref<DrawingMode | null>(null)
+const drawingError = ref<string | null>(null)
+const drawingModes: Array<{ mode: DrawingMode; label: string }> = [
+  { mode: 'point', label: '点' },
+  { mode: 'polyline', label: '线' },
+  { mode: 'rectangle', label: '矩形' },
+  { mode: 'polygon', label: '多边形' },
+]
 
 const backendText = computed(() => {
   if (systemStore.loading) return '检查中'
@@ -54,25 +68,22 @@ const bufferLimitText = computed(() => {
   if (maxBufferMeters.value === undefined) return '上限以服务端校验为准'
   return `服务端当前上限 ${maxBufferMeters.value.toLocaleString()} 米`
 })
-const selectedCoordinateText = computed(() => {
+const sourceGeometrySummary = computed(() => {
   const geometry = analysisStore.sourceGeometryWgs84
-  if (geometry?.type !== 'Point') return null
-  const coordinate = geometry.coordinates
-  return {
-    lng: coordinate[0].toFixed(6),
-    lat: coordinate[1].toFixed(6),
+  if (!geometry) return null
+  if (geometry.type === 'Point') {
+    return `${geometry.coordinates[0].toFixed(6)}, ${geometry.coordinates[1].toFixed(6)}`
   }
+  if (geometry.type === 'LineString') {
+    return `LineString · ${geometry.coordinates.length} 个顶点`
+  }
+  return `Polygon · ${Math.max(0, geometry.coordinates[0]?.length ?? 1) - 1} 个顶点`
 })
 const bufferGeometry = computed(
   () =>
     analysisStore.bufferResult?.buffer.geometry ??
     analysisStore.submissionContext?.request.geometry ??
     null,
-)
-const sourcePoint = computed(() =>
-  analysisStore.sourceGeometryWgs84?.type === 'Point'
-    ? analysisStore.sourceGeometryWgs84
-    : null,
 )
 const recoveryNoticeText = computed(() => {
   if (analysisStore.submissionContext) {
@@ -127,8 +138,45 @@ const activeWorkflowStep = computed(() => {
 })
 
 function handlePointSelected(coordinates: Coordinate) {
+  mapCanvasRef.value?.cancelDrawing()
   analysisStore.setSourcePoint(coordinates)
   selectedStudyPointName.value = null
+  drawingError.value = null
+}
+
+function handleGeometrySelected(geometry: SourceGeometry) {
+  if (analysisStore.analysisLocked) return
+  analysisStore.setSourceGeometry(geometry)
+  selectedStudyPointName.value = null
+  drawingError.value = null
+}
+
+function handleDrawingModeChange(mode: DrawingMode | null) {
+  activeDrawingMode.value = mode
+}
+
+function handleDrawingError(message: string) {
+  drawingError.value = message
+}
+
+function startDrawing(mode: DrawingMode) {
+  if (analysisStore.analysisLocked) return
+  drawingError.value = null
+  mapCanvasRef.value?.startDrawing(mode)
+}
+
+function cancelDrawing() {
+  if (analysisStore.analysisLocked) return
+  drawingError.value = null
+  mapCanvasRef.value?.cancelDrawing()
+}
+
+function clearStudyArea() {
+  if (analysisStore.analysisLocked) return
+  mapCanvasRef.value?.cancelDrawing()
+  analysisStore.clearSelection()
+  selectedStudyPointName.value = null
+  drawingError.value = null
 }
 
 watch(studyPointKeyword, () => {
@@ -315,12 +363,16 @@ onMounted(() => {
       </aside>
 
       <MapCanvas
-        :source-point="sourcePoint"
+        ref="mapCanvasRef"
+        :source-geometry="analysisStore.sourceGeometryWgs84"
         :buffer-geometry="bufferGeometry"
         :risk-spatial-result="analysisStore.spatialResult"
         :poi-items="analysisStore.poiItems"
         :selection-disabled="analysisStore.analysisLocked"
         @select-point="handlePointSelected"
+        @select-geometry="handleGeometrySelected"
+        @drawing-mode-change="handleDrawingModeChange"
+        @drawing-error="handleDrawingError"
       />
 
       <aside class="result-panel panel-card phase2c-result-panel">
@@ -332,6 +384,51 @@ onMounted(() => {
         </div>
 
         <section class="control-section">
+          <div class="section-title-row">
+            <strong>在线绘制</strong>
+            <el-tag v-if="activeDrawingMode" type="primary" effect="plain" size="small">
+              {{ drawingModes.find((item) => item.mode === activeDrawingMode)?.label }}绘制中
+            </el-tag>
+          </div>
+          <div class="drawing-tool-grid">
+            <el-button
+              v-for="item in drawingModes"
+              :key="item.mode"
+              :type="activeDrawingMode === item.mode ? 'primary' : 'default'"
+              :disabled="analysisStore.analysisLocked"
+              :aria-label="`绘制${item.label}`"
+              @click="startDrawing(item.mode)"
+            >
+              {{ item.label }}
+            </el-button>
+          </div>
+          <div class="drawing-actions">
+            <el-button
+              :disabled="analysisStore.analysisLocked || !activeDrawingMode"
+              @click="cancelDrawing"
+            >
+              取消绘制
+            </el-button>
+            <el-button
+              type="danger"
+              plain
+              :disabled="
+                analysisStore.analysisLocked ||
+                  (!analysisStore.sourceGeometryWgs84 && !activeDrawingMode)
+              "
+              @click="clearStudyArea"
+            >
+              清除研究区
+            </el-button>
+          </div>
+          <el-alert
+            v-if="drawingError"
+            :title="drawingError"
+            type="error"
+            :closable="false"
+            show-icon
+          />
+
           <div class="section-title-row">
             <strong>输入研究点</strong>
             <small>WGS84 / EPSG:4326</small>
@@ -478,10 +575,7 @@ onMounted(() => {
         <template v-if="analysisStore.sourceGeometryWgs84">
           <div class="selection-summary">
             <span class="selection-label">研究对象（WGS84）</span>
-            <strong v-if="selectedCoordinateText">
-              {{ selectedCoordinateText.lng }}, {{ selectedCoordinateText.lat }}
-            </strong>
-            <strong v-else>{{ analysisStore.sourceGeometryWgs84.type }}</strong>
+            <strong>{{ sourceGeometrySummary }}</strong>
             <small>地图 GCJ-02 已在适配层转换为 EPSG:4326</small>
           </div>
 
@@ -743,6 +837,23 @@ onMounted(() => {
 }
 
 .coordinate-input-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.drawing-tool-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.drawing-tool-grid :deep(.el-button),
+.drawing-actions :deep(.el-button) {
+  margin-left: 0;
+}
+
+.drawing-actions {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
