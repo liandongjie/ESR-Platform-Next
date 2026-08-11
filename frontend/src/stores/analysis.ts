@@ -9,6 +9,7 @@ import {
   getRiskAnalysisSpatialResult,
   getRiskAnalysisSubmission,
 } from '@/api/riskAnalysis'
+import { searchAmapPois } from '@/map/amapPoi'
 import type {
   AnalysisAreaBufferResponse,
   Coordinate,
@@ -21,6 +22,7 @@ import type {
   RiskAnalysisSubmissionDetail,
   RiskIndicatorWeightInput,
 } from '@/types/riskAnalysis'
+import type { PoiDto } from '@/types/poi'
 
 const MAX_CONSECUTIVE_POLL_FAILURES = 3
 const DEFAULT_POLL_INTERVAL_MS = 2000
@@ -46,6 +48,15 @@ interface AnalysisState {
   bufferLoading: boolean
   bufferError: string | null
   bufferRequestRevision: number
+  poiKeyword: string
+  poiPage: number
+  poiPageSize: number
+  poiItems: PoiDto[]
+  poiTotal: number
+  poiLoading: boolean
+  poiError: string | null
+  poiHasSearched: boolean
+  poiRequestRevision: number
   weights: RiskIndicatorWeightInput[]
   job: RiskAnalysisJobReference | null
   jobStatus: RiskAnalysisJobStatus | null
@@ -191,6 +202,15 @@ export const useAnalysisStore = defineStore('analysis', {
     bufferLoading: false,
     bufferError: null,
     bufferRequestRevision: 0,
+    poiKeyword: '',
+    poiPage: 1,
+    poiPageSize: 10,
+    poiItems: [],
+    poiTotal: 0,
+    poiLoading: false,
+    poiError: null,
+    poiHasSearched: false,
+    poiRequestRevision: 0,
     weights: [
       { code: 'PM25', weight_percent: 30 },
       { code: 'AQI', weight_percent: 40 },
@@ -228,6 +248,72 @@ export const useAnalysisStore = defineStore('analysis', {
     spatialLoading: (state): boolean => state.spatialLoadingTaskId !== null,
   },
   actions: {
+    invalidatePoiSearch() {
+      this.poiRequestRevision += 1
+      this.poiPage = 1
+      this.poiItems = []
+      this.poiTotal = 0
+      this.poiLoading = false
+      this.poiError = null
+      this.poiHasSearched = false
+    },
+    setPoiKeyword(keyword: string) {
+      if (this.poiKeyword === keyword) return
+      this.poiKeyword = keyword
+      this.invalidatePoiSearch()
+    },
+    async searchPois(page = 1) {
+      const keyword = this.poiKeyword.trim()
+      if (!keyword) {
+        this.poiError = '请输入 POI 关键词'
+        return
+      }
+      if (!this.bufferResult) {
+        this.poiError = '请先生成缓冲区'
+        return
+      }
+
+      const geometry = this.bufferResult.buffer.geometry
+      if (geometry.type !== 'Polygon') {
+        this.invalidatePoiSearch()
+        this.poiError = '当前 POI 查询暂不支持 MultiPolygon 缓冲区'
+        return
+      }
+      if (geometry.coordinates.length !== 1) {
+        this.invalidatePoiSearch()
+        this.poiError = '当前 POI 查询仅支持不含内部孔洞的单 Polygon 缓冲区'
+        return
+      }
+
+      const revision = ++this.poiRequestRevision
+      const bufferRevision = this.bufferRequestRevision
+      const pageSize = this.poiPageSize
+      this.poiPage = page
+      this.poiItems = []
+      this.poiLoading = true
+      this.poiError = null
+      this.poiHasSearched = false
+
+      try {
+        const result = await searchAmapPois({ geometry, keyword, page, pageSize })
+        if (
+          revision !== this.poiRequestRevision ||
+          bufferRevision !== this.bufferRequestRevision ||
+          keyword !== this.poiKeyword.trim() ||
+          page !== this.poiPage
+        ) {
+          return
+        }
+        this.poiItems = result.items
+        this.poiTotal = result.total
+        this.poiHasSearched = true
+      } catch (error: unknown) {
+        if (revision !== this.poiRequestRevision) return
+        this.poiError = getApiErrorMessage(error, 'POI 查询失败')
+      } finally {
+        if (revision === this.poiRequestRevision) this.poiLoading = false
+      }
+    },
     resetRiskAnalysis() {
       // 不把 Timer 放进 Pinia；递增版本号即可让旧轮询在下一次唤醒时自行退出。
       this.jobRevision += 1
@@ -250,6 +336,7 @@ export const useAnalysisStore = defineStore('analysis', {
       if (this.analysisLocked) return
       // 切换研究点会使旧 Buffer 立即失效，同时递增版本号让尚未返回的旧请求无法覆盖新选择。
       this.bufferRequestRevision += 1
+      this.invalidatePoiSearch()
       this.sourceGeometryWgs84 = {
         type: 'Point',
         coordinates: [...coordinates],
@@ -268,6 +355,7 @@ export const useAnalysisStore = defineStore('analysis', {
     setBufferDistance(distanceMeters: number) {
       if (this.analysisLocked || this.bufferDistanceMeters === distanceMeters) return
       this.bufferRequestRevision += 1
+      this.invalidatePoiSearch()
       this.bufferDistanceMeters = distanceMeters
       this.bufferResult = null
       this.bufferLoading = false
@@ -296,6 +384,7 @@ export const useAnalysisStore = defineStore('analysis', {
     clearSelection() {
       if (this.analysisLocked) return
       this.bufferRequestRevision += 1
+      this.invalidatePoiSearch()
       this.sourceGeometryWgs84 = null
       this.bufferResult = null
       this.bufferLoading = false
@@ -462,6 +551,7 @@ export const useAnalysisStore = defineStore('analysis', {
       }
 
       const revision = ++this.bufferRequestRevision
+      this.invalidatePoiSearch()
       const geometry: PointGeometry = {
         type: 'Point',
         coordinates: [...this.sourceGeometryWgs84.coordinates],

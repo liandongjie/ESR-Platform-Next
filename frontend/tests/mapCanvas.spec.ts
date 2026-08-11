@@ -22,8 +22,15 @@ interface PolygonOptions {
   zIndex: number
 }
 
+interface MarkerOptions {
+  position: [number, number]
+  title?: string
+}
+
 const polygonOptions: PolygonOptions[] = []
 const polygonSetMapCalls: ReturnType<typeof vi.fn>[] = []
+const markerOptions: MarkerOptions[] = []
+const markerSetMapCalls: ReturnType<typeof vi.fn>[] = []
 const setFitView = vi.fn()
 let mapClickHandler: ((event: TestMapClickEvent) => void) | null = null
 
@@ -45,6 +52,11 @@ class FakeMap {
 
 class FakeMarker {
   setMap = vi.fn()
+
+  constructor(options: MarkerOptions) {
+    markerOptions.push(options)
+    markerSetMapCalls.push(this.setMap)
+  }
 }
 
 class FakePolygon {
@@ -119,6 +131,8 @@ describe('MapCanvas risk cells', () => {
     vi.stubEnv('VITE_AMAP_SECURITY_JS_CODE', 'test-security-code')
     polygonOptions.length = 0
     polygonSetMapCalls.length = 0
+    markerOptions.length = 0
+    markerSetMapCalls.length = 0
     setFitView.mockReset()
     mapClickHandler = null
     vi.mocked(AMapLoader.load).mockReset()
@@ -210,5 +224,32 @@ describe('MapCanvas risk cells', () => {
     await wrapper.setData({ current: spatialResult('task-a') })
     expect(setFitView).toHaveBeenCalledTimes(3)
     wrapper.unmount()
+  })
+
+  it('renders WGS84 POIs as GCJ-02 markers and clears their lifecycle', async () => {
+    const wrapper = mount(MapCanvas, {
+      props: {
+        poiItems: [{ id: 'poi-1', name: '学校', locationWgs84: [118.81, 32.02] }],
+      },
+    })
+    await flushPromises()
+
+    expect(markerOptions).toEqual([
+      { position: wgs84ToGcj02([118.81, 32.02]), title: '学校' },
+    ])
+    const firstSetMap = markerSetMapCalls[0]!
+
+    await wrapper.setProps({
+      poiItems: [{ id: 'poi-2', name: '医院', locationWgs84: [118.82, 32.01] }],
+    })
+    expect(firstSetMap).toHaveBeenCalledWith(null)
+    expect(markerOptions[1]).toEqual({
+      position: wgs84ToGcj02([118.82, 32.01]),
+      title: '医院',
+    })
+    const secondSetMap = markerSetMapCalls[1]!
+
+    wrapper.unmount()
+    expect(secondSetMap).toHaveBeenCalledWith(null)
   })
 })
