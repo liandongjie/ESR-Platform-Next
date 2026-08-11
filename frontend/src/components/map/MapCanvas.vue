@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import AMapLoader from '@amap/amap-jsapi-loader'
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
+import { hasAmapConfiguration, loadAmap } from '@/map/amap'
 import { gcj02ToWgs84, wgs84ToGcj02 } from '@/map/coordinates'
 import { RISK_VALUE_COLOR_BINS, riskColorForValue } from '@/map/riskSpatial'
 import type {
@@ -204,9 +204,7 @@ watch(() => props.bufferGeometry, renderBufferGeometry, { deep: true })
 watch(() => props.riskSpatialResult, renderRiskCells, { deep: true })
 
 onMounted(async () => {
-  const key = import.meta.env.VITE_AMAP_JS_API_KEY?.trim()
-  const securityCode = import.meta.env.VITE_AMAP_SECURITY_JS_CODE?.trim()
-  if (!key || !securityCode) {
+  if (!hasAmapConfiguration()) {
     state.value = 'missing-key'
     return
   }
@@ -217,14 +215,8 @@ onMounted(async () => {
     return
   }
 
-  window._AMapSecurityConfig = { securityJsCode: securityCode }
-
   try {
-    amap = (await AMapLoader.load({
-      key,
-      version: '2.0',
-      plugins: ['AMap.Scale', 'AMap.ToolBar'],
-    })) as unknown as AMapNamespace
+    amap = await loadAmap<AMapNamespace>()
     map = new amap.Map(container.value, {
       zoom: parseNumber(import.meta.env.VITE_AMAP_ZOOM, 13),
       center: [
