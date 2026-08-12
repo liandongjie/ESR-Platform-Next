@@ -1,7 +1,21 @@
 import { loadAmap } from '@/map/amap'
 import { gcj02ToWgs84, wgs84ToGcj02 } from '@/map/coordinates'
-import type { Coordinate } from '@/types/analysisArea'
-import type { PoiDto, PoiSearchRequest, PoiSearchResult } from '@/types/poi'
+import type { Coordinate, PolygonGeometry } from '@/types/analysisArea'
+import type {
+  PoiDto,
+  PoiGeometrySearchRequest,
+  PoiGeometrySearchResult,
+  PoiGeometrySearchTruncatedReason,
+  PoiSearchRequest,
+  PoiSearchResult,
+} from '@/types/poi'
+import { parseSourceGeometry } from '@/validation/sourceGeometry'
+
+const MAX_MEMBERS = 100
+const MAX_PROVIDER_CALLS = 100
+const MAX_RAW_ROWS = 5000
+const PROVIDER_PAGE_SIZE = 50
+const POINT_ON_SEGMENT_EPSILON = 1e-12
 
 interface AMapLngLat {
   getLng: () => number
@@ -88,6 +102,30 @@ function validateRequest(request: PoiSearchRequest): { keyword: string; path: Co
   return { keyword, path: path.map(wgs84ToGcj02) }
 }
 
+function validateGeometrySearchRequest(request: PoiGeometrySearchRequest): {
+  keyword: string
+  members: PolygonGeometry[]
+} {
+  const keyword = request.keyword.trim()
+  if (!keyword) throw new Error('请输入 POI 关键词')
+
+  const geometry = parseSourceGeometry(request.geometry)
+  if (geometry.type !== 'Polygon' && geometry.type !== 'MultiPolygon') {
+    throw new Error('复杂 POI 查询仅支持 Polygon 或 MultiPolygon 缓冲区')
+  }
+
+  const members =
+    geometry.type === 'Polygon'
+      ? [geometry]
+      : geometry.coordinates.map(
+          (coordinates): PolygonGeometry => ({ type: 'Polygon', coordinates }),
+        )
+  if (members.length > MAX_MEMBERS) {
+    throw new Error(`复杂 POI 查询最多支持 ${MAX_MEMBERS} 个 Polygon member`)
+  }
+  return { keyword, members }
+}
+
 async function loadPlaceSearchNamespace(): Promise<AMapPlaceSearchNamespace> {
   if (placeSearchNamespacePromise) return placeSearchNamespacePromise
 
@@ -162,32 +200,142 @@ function normalizeCompleteResult(
   }
 }
 
-export async function searchAmapPois(request: PoiSearchRequest): Promise<PoiSearchResult> {
-  const { keyword, path } = validateRequest(request)
+async function searchAmapPoiPage(
+  keyword: string,
+  path: Coordinate[],
+  page: number,
+  pageSize: number,
+): Promise<PoiSearchResult> {
   const amap = await loadPlaceSearchNamespace()
   const PlaceSearch = amap.PlaceSearch
   if (!PlaceSearch) throw new Error('AMap.PlaceSearch 插件不可用')
 
-  const placeSearch = new PlaceSearch({
-    pageIndex: request.page,
-    pageSize: request.pageSize,
-    extensions: 'all',
-  })
+  const placeSearch = new PlaceSearch({ pageIndex: page, pageSize, extensions: 'all' })
   return new Promise((resolve, reject) => {
     placeSearch.searchInBounds(keyword, path, (status, result) => {
       try {
         if (status === 'no_data') {
-          resolve({ items: [], total: 0, page: request.page, pageSize: request.pageSize })
+          resolve({ items: [], total: 0, page, pageSize })
           return
         }
         if (status !== 'complete') {
           reject(new AmapPoiSearchError(status, callbackInfo(result)))
           return
         }
-        resolve(normalizeCompleteResult(result, request.page, request.pageSize))
+        resolve(normalizeCompleteResult(result, page, pageSize))
       } catch (error: unknown) {
         reject(error)
       }
     })
   })
+}
+
+type RingRelation = 'outside' | 'inside' | 'boundary'
+
+function pointOnSegment(point: Coordinate, start: Coordinate, end: Coordinate): boolean {
+  const cross =
+    (point[0] - start[0]) * (end[1] - start[1]) -
+    (point[1] - start[1]) * (end[0] - start[0])
+  if (Math.abs(cross) > POINT_ON_SEGMENT_EPSILON) return false
+
+  return (
+    point[0] >= Math.min(start[0], end[0]) - POINT_ON_SEGMENT_EPSILON &&
+    point[0] <= Math.max(start[0], end[0]) + POINT_ON_SEGMENT_EPSILON &&
+    point[1] >= Math.min(start[1], end[1]) - POINT_ON_SEGMENT_EPSILON &&
+    point[1] <= Math.max(start[1], end[1]) + POINT_ON_SEGMENT_EPSILON
+  )
+}
+
+function pointInRing(point: Coordinate, ring: Coordinate[]): RingRelation {
+  let inside = false
+  for (let index = 0; index < ring.length - 1; index += 1) {
+    const start = ring[index]!
+    const end = ring[index + 1]!
+    if (pointOnSegment(point, start, end)) return 'boundary'
+
+    const crossesLatitude = (start[1] > point[1]) !== (end[1] > point[1])
+    if (
+      crossesLatitude &&
+      point[0] <
+        ((end[0] - start[0]) * (point[1] - start[1])) / (end[1] - start[1]) + start[0]
+    ) {
+      inside = !inside
+    }
+  }
+  return inside ? 'inside' : 'outside'
+}
+
+function pointInPolygon(point: Coordinate, polygon: PolygonGeometry): boolean {
+  // Provider 只查询 outer ring；回到 WGS84 后再按完整 Polygon 过滤，孔洞边界仍属于 Polygon。
+  if (pointInRing(point, polygon.coordinates[0]!) === 'outside') return false
+  return polygon.coordinates.slice(1).every((hole) => pointInRing(point, hole) !== 'inside')
+}
+
+function aggregateResult(
+  items: Map<string, PoiDto>,
+  reportedCandidateCount: number,
+  truncatedReason: PoiGeometrySearchTruncatedReason | null,
+): PoiGeometrySearchResult {
+  const aggregatedItems = Array.from(items.values())
+  const retrievalComplete = truncatedReason === null
+  return {
+    items: aggregatedItems,
+    reportedCandidateCount,
+    retrievedUniqueCount: aggregatedItems.length,
+    retrievalComplete,
+    hasMore: !retrievalComplete,
+    truncatedReason,
+  }
+}
+
+export async function searchAmapPois(request: PoiSearchRequest): Promise<PoiSearchResult> {
+  const { keyword, path } = validateRequest(request)
+  return searchAmapPoiPage(keyword, path, request.page, request.pageSize)
+}
+
+export async function searchAmapPoisInGeometry(
+  request: PoiGeometrySearchRequest,
+): Promise<PoiGeometrySearchResult> {
+  const { keyword, members } = validateGeometrySearchRequest(request)
+  const activeMembers = members.map(() => true)
+  const uniqueItems = new Map<string, PoiDto>()
+  let reportedCandidateCount = 0
+  let providerCalls = 0
+  let rawRows = 0
+
+  // 页优先轮询保证每个 member 先获得同一页机会，避免首个大 Polygon 独占全局预算。
+  for (let page = 1; activeMembers.some(Boolean); page += 1) {
+    for (let memberIndex = 0; memberIndex < members.length; memberIndex += 1) {
+      if (!activeMembers[memberIndex]) continue
+      if (providerCalls >= MAX_PROVIDER_CALLS) {
+        return aggregateResult(uniqueItems, reportedCandidateCount, 'provider-call-limit')
+      }
+
+      const member = members[memberIndex]!
+      const outerPath = member.coordinates[0]!.map(wgs84ToGcj02)
+      const result = await searchAmapPoiPage(keyword, outerPath, page, PROVIDER_PAGE_SIZE)
+      providerCalls += 1
+      if (page === 1) reportedCandidateCount += result.total
+
+      if (result.items.length === 0) {
+        activeMembers[memberIndex] = false
+        continue
+      }
+
+      const remainingRows = MAX_RAW_ROWS - rawRows
+      const acceptedRows = result.items.slice(0, remainingRows)
+      rawRows += acceptedRows.length
+      for (const item of acceptedRows) {
+        if (pointInPolygon(item.locationWgs84, member) && !uniqueItems.has(item.id)) {
+          uniqueItems.set(item.id, item)
+        }
+      }
+
+      if (result.items.length > remainingRows || rawRows >= MAX_RAW_ROWS) {
+        return aggregateResult(uniqueItems, reportedCandidateCount, 'raw-row-limit')
+      }
+    }
+  }
+
+  return aggregateResult(uniqueItems, reportedCandidateCount, null)
 }
