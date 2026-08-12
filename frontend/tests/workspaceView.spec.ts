@@ -5,6 +5,7 @@ import { defineComponent, h } from 'vue'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import AdministrativeRegionInput from '@/components/map/AdministrativeRegionInput.vue'
+import ShapefileInput from '@/components/map/ShapefileInput.vue'
 import { useAnalysisStore } from '@/stores/analysis'
 import type { StudyPointCandidate } from '@/types/poi'
 import WorkspaceView from '@/views/WorkspaceView.vue'
@@ -50,6 +51,7 @@ function mountWorkspace() {
       plugins: [pinia, ElementPlus],
       stubs: {
         AdministrativeRegionInput: true,
+        ShapefileInput: true,
         MapCanvas: MapCanvasStub,
         PoiSearchPanel: true,
         RiskAnalysisResultDownloads: true,
@@ -467,6 +469,60 @@ describe('WorkspaceView online drawing', () => {
 
     expect(wrapper.findComponent(AdministrativeRegionInput).props('disabled')).toBe(true)
     wrapper.findComponent(AdministrativeRegionInput).vm.$emit('confirm', {
+      type: 'Polygon',
+      coordinates: [[[118.8, 32], [119, 32], [119, 32.2], [118.8, 32]]],
+    })
+    await wrapper.vm.$nextTick()
+
+    expect(setSourceGeometry).not.toHaveBeenCalled()
+    expect(store.sourceGeometryWgs84).toEqual({ type: 'Point', coordinates: [118.9, 32.1] })
+  })
+
+  it('commits imported Shapefile geometry through the existing store action', async () => {
+    const { wrapper, store } = mountWorkspace()
+    store.setSourcePoint([118.9, 32.1])
+    store.bufferResult = {
+      source: { crs: 'EPSG:4326', geometry_type: 'Point', bounds: [118.9, 32.1, 118.9, 32.1] },
+      buffer: {
+        crs: 'EPSG:4326',
+        distance_m: 3000,
+        working_crs: 'EPSG:32650',
+        area_m2: 1,
+        area_km2: 0.000001,
+        bounds: [118.8, 32, 119, 32.2],
+        geometry: {
+          type: 'Polygon',
+          coordinates: [[[118.8, 32], [119, 32], [119, 32.2], [118.8, 32]]],
+        },
+      },
+    }
+    const setSourceGeometry = vi.spyOn(store, 'setSourceGeometry')
+    const imported = {
+      type: 'LineString' as const,
+      coordinates: [
+        [118.7, 31.9],
+        [119.1, 32.3],
+      ] as Array<[number, number]>,
+    }
+
+    wrapper.findComponent(ShapefileInput).vm.$emit('confirm', imported)
+    await wrapper.vm.$nextTick()
+
+    expect(setSourceGeometry).toHaveBeenCalledWith(imported)
+    expect(store.sourceGeometryWgs84).toEqual(imported)
+    expect(store.bufferResult).toBeNull()
+    expect(drawingCanvasMocks.cancelDrawing).toHaveBeenCalledOnce()
+  })
+
+  it('guards Shapefile geometry events while analysis is locked', async () => {
+    const { wrapper, store } = mountWorkspace()
+    store.setSourcePoint([118.9, 32.1])
+    const setSourceGeometry = vi.spyOn(store, 'setSourceGeometry')
+    store.polling = true
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.findComponent(ShapefileInput).props('disabled')).toBe(true)
+    wrapper.findComponent(ShapefileInput).vm.$emit('confirm', {
       type: 'Polygon',
       coordinates: [[[118.8, 32], [119, 32], [119, 32.2], [118.8, 32]]],
     })

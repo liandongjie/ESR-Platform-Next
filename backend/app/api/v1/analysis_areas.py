@@ -5,6 +5,7 @@ from pydantic import ValidationError
 
 from app.api.validation import validation_details
 from app.gis.analysis_area import AnalysisAreaValidationError
+from app.gis.shapefile import ShapefileCapacityError, ShapefileImportError
 from app.schemas.analysis_area import (
     AdministrativeBoundariesNormalizeRequest,
     AnalysisAreaBufferRequest,
@@ -12,6 +13,46 @@ from app.schemas.analysis_area import (
 from app.services.analysis_areas import AnalysisAreaService
 
 analysis_areas_bp = Blueprint("analysis_areas", __name__)
+
+
+@analysis_areas_bp.post("/import-shapefile")
+def import_shapefile():
+    """把单个 Shapefile ZIP 转换为现有 WGS84 SourceGeometry。"""
+
+    files = request.files.getlist("file")
+    if set(request.files) != {"file"} or len(files) != 1 or request.form:
+        return (
+            jsonify(
+                {
+                    "code": "INVALID_UPLOAD",
+                    "message": "multipart/form-data 必须且只能包含一个 file 字段",
+                }
+            ),
+            400,
+        )
+
+    upload = files[0]
+    if not upload.filename or not upload.filename.casefold().endswith(".zip"):
+        return (
+            jsonify(
+                {
+                    "code": "UNSUPPORTED_MEDIA_TYPE",
+                    "message": "Shapefile 导入仅支持 ZIP 文件",
+                }
+            ),
+            415,
+        )
+
+    try:
+        payload = AnalysisAreaService().import_shapefile(upload.stream)
+    except ShapefileCapacityError as exc:
+        return jsonify({"code": "UPLOAD_TOO_LARGE", "message": str(exc)}), 413
+    except ShapefileImportError as exc:
+        return jsonify({"code": "INVALID_SHAPEFILE", "message": str(exc)}), 422
+
+    response = jsonify(payload)
+    response.headers["Cache-Control"] = "no-store"
+    return response, 200
 
 
 @analysis_areas_bp.post("/normalize-boundaries")

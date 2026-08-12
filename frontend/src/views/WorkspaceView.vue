@@ -4,6 +4,7 @@ import { computed, onMounted, ref, watch } from 'vue'
 import StatusCard from '@/components/common/StatusCard.vue'
 import AdministrativeRegionInput from '@/components/map/AdministrativeRegionInput.vue'
 import MapCanvas from '@/components/map/MapCanvas.vue'
+import ShapefileInput from '@/components/map/ShapefileInput.vue'
 import PoiSearchPanel from '@/components/poi/PoiSearchPanel.vue'
 import RiskAnalysisResultDownloads from '@/components/risk-analysis/RiskAnalysisResultDownloads.vue'
 import { searchAmapStudyPoints } from '@/map/amapStudyPoint'
@@ -163,7 +164,7 @@ function handleGeometrySelected(geometry: SourceGeometry) {
   drawingError.value = null
 }
 
-function handleAdministrativeRegionSelected(geometry: SourceGeometry) {
+function handleConfirmedGeometrySelected(geometry: SourceGeometry) {
   if (analysisStore.analysisLocked) return
   mapCanvasRef.value?.cancelDrawing()
   handleGeometrySelected(geometry)
@@ -404,7 +405,12 @@ onMounted(() => {
         <section class="control-section">
           <AdministrativeRegionInput
             :disabled="analysisStore.analysisLocked"
-            @confirm="handleAdministrativeRegionSelected"
+            @confirm="handleConfirmedGeometrySelected"
+          />
+
+          <ShapefileInput
+            :disabled="analysisStore.analysisLocked"
+            @confirm="handleConfirmedGeometrySelected"
           />
 
           <div class="section-title-row">

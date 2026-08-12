@@ -8,6 +8,7 @@ from shapely.geometry import GeometryCollection, LineString, MultiPolygon, Point
 from app.gis.analysis_area import (
     AnalysisAreaValidationError,
     create_metric_buffer,
+    dissolve_polygon_geometries,
     local_utm_crs,
     normalize_boundaries,
 )
@@ -160,6 +161,19 @@ def test_normalize_dissolves_contained_overlapping_and_nanjing_like_boundaries(b
 
     assert geometry.geom_type == "Polygon"
     assert geometry.is_valid
+
+
+def test_shared_polygon_dissolve_preserves_holes_and_disjoint_members():
+    polygon_with_hole = Polygon(
+        _boundary(118.8, 32.0, 118.9, 32.1),
+        [_boundary(118.82, 32.02, 118.84, 32.04)],
+    )
+    disjoint_polygon = Polygon(_boundary(119.0, 32.2, 119.1, 32.3))
+
+    geometry = dissolve_polygon_geometries([polygon_with_hole, disjoint_polygon])
+
+    assert geometry.geom_type == "MultiPolygon"
+    assert sum(len(polygon.interiors) for polygon in geometry.geoms) == 1
 
 
 @pytest.mark.parametrize(

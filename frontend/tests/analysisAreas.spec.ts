@@ -62,4 +62,57 @@ describe('analysis area normalization API', () => {
       message,
     )
   })
+
+  it('uploads one ZIP and validates the imported SourceGeometry at runtime', async () => {
+    const geometry = { type: 'Polygon', coordinates: [boundary] }
+    mocks.post.mockResolvedValue({
+      data: {
+        crs: 'EPSG:4326',
+        source_crs: 'EPSG:3857',
+        feature_count: 2,
+        coordinate_count: 4,
+        geometry,
+      },
+    })
+    const { importShapefile } = await import('@/api/analysisAreas')
+    const file = new File(['zip'], 'study.zip', { type: 'application/zip' })
+
+    await expect(importShapefile(file)).resolves.toMatchObject({ geometry })
+    expect(mocks.post).toHaveBeenCalledWith(
+      '/analysis-areas/import-shapefile',
+      expect.any(FormData),
+      { headers: { 'Content-Type': undefined } },
+    )
+    const form = mocks.post.mock.calls[0]?.[1] as FormData
+    expect(form.get('file')).toBe(file)
+  })
+
+  it.each([
+    [{ crs: 'GCJ-02' }, 'EPSG:4326'],
+    [
+      {
+        crs: 'EPSG:4326',
+        source_crs: 'EPSG:4326',
+        feature_count: 1,
+        coordinate_count: 1,
+        geometry: { type: 'Point', coordinates: [999, 32] },
+      },
+      'WGS84',
+    ],
+    [
+      {
+        crs: 'EPSG:4326',
+        source_crs: '',
+        feature_count: 0,
+        coordinate_count: 0,
+        geometry: { type: 'Point', coordinates: [118.9, 32.1] },
+      },
+      'metadata',
+    ],
+  ])('rejects malformed Shapefile import responses', async (data, message) => {
+    mocks.post.mockResolvedValue({ data })
+    const { importShapefile } = await import('@/api/analysisAreas')
+
+    await expect(importShapefile(new File(['zip'], 'study.zip'))).rejects.toThrow(message)
+  })
 })

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from math import floor, isfinite
 
@@ -72,17 +73,39 @@ def normalize_boundaries(boundaries: list[list[tuple[float, float]]]) -> BaseGeo
             raise AnalysisAreaValidationError(f"boundary[{index}] 不是有效 Polygon")
         polygons.append(polygon)
 
+    return dissolve_polygon_geometries(polygons, error_subject="boundaries")
+
+
+def dissolve_polygon_geometries(
+    geometries: Sequence[BaseGeometry],
+    *,
+    error_subject: str = "polygon",
+) -> BaseGeometry:
+    """把有效 Polygon/MultiPolygon dissolve 为单个面 geometry。"""
+
+    if not geometries:
+        raise AnalysisAreaValidationError(f"{error_subject} geometries 不能为空")
+    if any(
+        geometry.is_empty
+        or not geometry.is_valid
+        or geometry.geom_type not in {"Polygon", "MultiPolygon"}
+        for geometry in geometries
+    ):
+        raise AnalysisAreaValidationError(
+            f"{error_subject} dissolve 输入必须是有效 Polygon 或 MultiPolygon"
+        )
+
     try:
-        geometry = unary_union(polygons)
+        geometry = unary_union(geometries)
     except ShapelyError as exc:
-        raise AnalysisAreaValidationError("boundaries dissolve 失败") from exc
+        raise AnalysisAreaValidationError(f"{error_subject} dissolve 失败") from exc
 
     if geometry.is_empty or not geometry.is_valid or geometry.geom_type not in {
         "Polygon",
         "MultiPolygon",
     }:
         raise AnalysisAreaValidationError(
-            "boundaries dissolve 结果必须是有效 Polygon 或 MultiPolygon"
+            f"{error_subject} dissolve 结果必须是有效 Polygon 或 MultiPolygon"
         )
     return geometry
 
@@ -95,9 +118,8 @@ def create_metric_buffer(geometry: BaseGeometry, distance_m: float) -> MetricBuf
     从源头避免把“3000 米”错误解释成“3000 度”。
     """
 
-    _validate_source_geometry(geometry)
+    validate_wgs84_source_geometry(geometry)
     _validate_distance(distance_m)
-    _validate_wgs84_bounds(geometry)
 
     working_crs = local_utm_crs(geometry)
     to_metric = Transformer.from_crs(_WGS84, working_crs, always_xy=True)
@@ -137,7 +159,9 @@ def local_utm_crs(geometry: BaseGeometry) -> CRS:
     return CRS.from_epsg(epsg)
 
 
-def _validate_source_geometry(geometry: BaseGeometry) -> None:
+def validate_wgs84_source_geometry(geometry: BaseGeometry) -> None:
+    """校验当前 SourceGeometry 公共约定：有效 geometry 且坐标为 WGS84。"""
+
     if geometry.is_empty:
         raise AnalysisAreaValidationError("研究区 geometry 不能为空")
     if geometry.geom_type not in _SUPPORTED_GEOMETRY_TYPES:
@@ -146,6 +170,7 @@ def _validate_source_geometry(geometry: BaseGeometry) -> None:
         )
     if not geometry.is_valid:
         raise AnalysisAreaValidationError("研究区 geometry 无效，请先修复自相交等拓扑问题")
+    _validate_wgs84_bounds(geometry)
 
 
 def _validate_distance(distance_m: float) -> None:

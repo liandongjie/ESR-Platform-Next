@@ -59,3 +59,11 @@ export interface AdministrativeBoundariesNormalizeResponse {
   input_boundary_count: number
   output_polygon_count: number
 }
+
+export interface ShapefileImportResponse {
+  crs: 'EPSG:4326'
+  source_crs: string
+  feature_count: number
+  coordinate_count: number
+  geometry: SourceGeometry
+}
