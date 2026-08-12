@@ -39,6 +39,9 @@ data/source/            本地栅格挂载占位目录，不提交数据
 data/runtime/           任务结果目录，不提交生成物
 ```
 
+Production 单 Linux 主机部署见
+[`docs/deployment/single-host-runbook.md`](docs/deployment/single-host-runbook.md)。
+
 ## 数据边界
 
 真实栅格不进入 Git。开发机上的源数据目录：
