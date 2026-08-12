@@ -10,10 +10,12 @@ import {
   getRiskAnalysisSpatialResult,
   getRiskAnalysisSubmission,
 } from '@/api/riskAnalysis'
-import { searchAmapPois } from '@/map/amapPoi'
+import { searchAmapPois, searchAmapPoisInGeometry } from '@/map/amapPoi'
 import type {
   AnalysisAreaBufferResponse,
+  BufferGeometry,
   Coordinate,
+  PolygonGeometry,
   SourceGeometry,
 } from '@/types/analysisArea'
 import type {
@@ -23,7 +25,7 @@ import type {
   RiskAnalysisSubmissionDetail,
   RiskIndicatorWeightInput,
 } from '@/types/riskAnalysis'
-import type { PoiDto } from '@/types/poi'
+import type { PoiDto, PoiGeometrySearchTruncatedReason } from '@/types/poi'
 import { parseSourceGeometry } from '@/validation/sourceGeometry'
 
 const MAX_CONSECUTIVE_POLL_FAILURES = 3
@@ -57,6 +59,12 @@ interface AnalysisState {
   poiPageSize: number
   poiItems: PoiDto[]
   poiTotal: number
+  poiAggregatedItems: PoiDto[]
+  poiReportedCandidateCount: number | null
+  poiRetrievedUniqueCount: number | null
+  poiRetrievalComplete: boolean | null
+  poiHasMore: boolean | null
+  poiTruncatedReason: PoiGeometrySearchTruncatedReason | null
   poiLoading: boolean
   poiError: string | null
   poiHasSearched: boolean
@@ -90,6 +98,10 @@ interface AnalysisState {
 
 function wait(milliseconds: number): Promise<void> {
   return new Promise((resolve) => window.setTimeout(resolve, milliseconds))
+}
+
+function isSimplePoiGeometry(geometry: BufferGeometry): geometry is PolygonGeometry {
+  return geometry.type === 'Polygon' && geometry.coordinates.length === 1
 }
 
 function readWorkspaceTaskId(): string | null {
@@ -216,6 +228,12 @@ export const useAnalysisStore = defineStore('analysis', {
     poiPageSize: 10,
     poiItems: [],
     poiTotal: 0,
+    poiAggregatedItems: [],
+    poiReportedCandidateCount: null,
+    poiRetrievedUniqueCount: null,
+    poiRetrievalComplete: null,
+    poiHasMore: null,
+    poiTruncatedReason: null,
     poiLoading: false,
     poiError: null,
     poiHasSearched: false,
@@ -274,6 +292,12 @@ export const useAnalysisStore = defineStore('analysis', {
       this.poiPage = 1
       this.poiItems = []
       this.poiTotal = 0
+      this.poiAggregatedItems = []
+      this.poiReportedCandidateCount = null
+      this.poiRetrievedUniqueCount = null
+      this.poiRetrievalComplete = null
+      this.poiHasMore = null
+      this.poiTruncatedReason = null
       this.poiLoading = false
       this.poiError = null
       this.poiHasSearched = false
@@ -295,23 +319,15 @@ export const useAnalysisStore = defineStore('analysis', {
       }
 
       const geometry = this.bufferResult.buffer.geometry
-      if (geometry.type !== 'Polygon') {
-        this.invalidatePoiSearch()
-        this.poiError = '当前 POI 查询暂不支持 MultiPolygon 缓冲区'
-        return
-      }
-      if (geometry.coordinates.length !== 1) {
-        this.invalidatePoiSearch()
-        this.poiError = '当前 POI 查询仅支持不含内部孔洞的单 Polygon 缓冲区'
-        return
-      }
+      const simpleGeometry = isSimplePoiGeometry(geometry) ? geometry : null
 
       if (this.poiCommittedKeyword !== keyword) {
         this.poiCommittedKeyword = keyword
         this.invalidatePoiExportContext()
       }
 
-      const revision = ++this.poiRequestRevision
+      this.invalidatePoiSearch()
+      const revision = this.poiRequestRevision
       const bufferRevision = this.bufferRequestRevision
       const pageSize = this.poiPageSize
       this.poiPage = page
@@ -321,7 +337,9 @@ export const useAnalysisStore = defineStore('analysis', {
       this.poiHasSearched = false
 
       try {
-        const result = await searchAmapPois({ geometry, keyword, page, pageSize })
+        const result = simpleGeometry
+          ? await searchAmapPois({ geometry: simpleGeometry, keyword, page, pageSize })
+          : await searchAmapPoisInGeometry({ geometry, keyword })
         if (
           revision !== this.poiRequestRevision ||
           bufferRevision !== this.bufferRequestRevision ||
@@ -330,8 +348,19 @@ export const useAnalysisStore = defineStore('analysis', {
         ) {
           return
         }
-        this.poiItems = result.items
-        this.poiTotal = result.total
+        if ('reportedCandidateCount' in result) {
+          this.poiAggregatedItems = result.items
+          this.poiReportedCandidateCount = result.reportedCandidateCount
+          this.poiRetrievedUniqueCount = result.retrievedUniqueCount
+          this.poiRetrievalComplete = result.retrievalComplete
+          this.poiHasMore = result.hasMore
+          this.poiTruncatedReason = result.truncatedReason
+          const offset = (page - 1) * pageSize
+          this.poiItems = result.items.slice(offset, offset + pageSize)
+        } else {
+          this.poiItems = result.items
+          this.poiTotal = result.total
+        }
         this.poiHasSearched = true
       } catch (error: unknown) {
         if (revision !== this.poiRequestRevision) return
@@ -339,6 +368,16 @@ export const useAnalysisStore = defineStore('analysis', {
       } finally {
         if (revision === this.poiRequestRevision) this.poiLoading = false
       }
+    },
+    async changePoiPage(page: number) {
+      if (this.poiReportedCandidateCount === null) {
+        await this.searchPois(page)
+        return
+      }
+
+      this.poiPage = page
+      const offset = (page - 1) * this.poiPageSize
+      this.poiItems = this.poiAggregatedItems.slice(offset, offset + this.poiPageSize)
     },
     prepareCurrentPagePoiExport(): PoiExportData | null {
       if (this.poiExportLoading) return null
@@ -357,8 +396,9 @@ export const useAnalysisStore = defineStore('analysis', {
         keyword: this.poiCommittedKeyword,
         page: this.poiPage,
         items,
-        totalReported: this.poiTotal,
-        retrievableLimit: Math.min(this.poiTotal, POI_EXPORT_LIMIT),
+        totalReported: this.poiReportedCandidateCount ?? this.poiTotal,
+        retrievableLimit:
+          this.poiRetrievedUniqueCount ?? Math.min(this.poiTotal, POI_EXPORT_LIMIT),
         exportedCount: items.length,
       }
     },
@@ -371,13 +411,24 @@ export const useAnalysisStore = defineStore('analysis', {
       }
 
       const geometry = this.bufferResult.buffer.geometry
-      if (geometry.type !== 'Polygon') {
-        this.poiExportError = '当前 POI 导出暂不支持 MultiPolygon 缓冲区'
-        return null
-      }
-      if (geometry.coordinates.length !== 1) {
-        this.poiExportError = '当前 POI 导出仅支持不含内部孔洞的单 Polygon 缓冲区'
-        return null
+      if (!isSimplePoiGeometry(geometry)) {
+        if (this.poiAggregatedItems.length === 0) {
+          this.poiExportError = '当前查询没有可导出的 POI 数据'
+          return null
+        }
+        const items = this.poiAggregatedItems.map((item) => ({
+          ...item,
+          locationWgs84: [...item.locationWgs84] as Coordinate,
+        }))
+        return {
+          mode: 'retrievable',
+          keyword: this.poiCommittedKeyword,
+          page: null,
+          items,
+          totalReported: this.poiReportedCandidateCount ?? 0,
+          retrievableLimit: this.poiRetrievedUniqueCount ?? items.length,
+          exportedCount: items.length,
+        }
       }
 
       const keyword = this.poiCommittedKeyword

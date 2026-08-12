@@ -12,16 +12,30 @@ const keyword = computed({
   get: () => analysisStore.poiKeyword,
   set: (value: string) => analysisStore.setPoiKeyword(value),
 })
-const pageCount = computed(() =>
-  Math.min(100, Math.ceil(analysisStore.poiTotal / analysisStore.poiPageSize)),
-)
+const isComplexResult = computed(() => analysisStore.poiReportedCandidateCount !== null)
+const pageCount = computed(() => {
+  const itemCount = isComplexResult.value
+    ? (analysisStore.poiRetrievedUniqueCount ?? 0)
+    : analysisStore.poiTotal
+  const pages = Math.ceil(itemCount / analysisStore.poiPageSize)
+  return isComplexResult.value ? pages : Math.min(100, pages)
+})
+const truncatedMessage = computed(() => {
+  if (analysisStore.poiTruncatedReason === 'provider-call-limit') {
+    return '查询达到 100 次 Provider 请求上限，结果已截断；当前仅展示和导出已获取结果'
+  }
+  if (analysisStore.poiTruncatedReason === 'raw-row-limit') {
+    return '查询达到 5,000 条 Provider 原始结果上限，结果已截断；当前仅展示和导出已获取结果'
+  }
+  return null
+})
 
 function searchFirstPage() {
   void analysisStore.searchPois(1)
 }
 
 function searchPage(page: number) {
-  void analysisStore.searchPois(page)
+  void analysisStore.changePoiPage(page)
 }
 
 function downloadCsv(data: PoiExportData) {
@@ -39,6 +53,10 @@ function downloadCsv(data: PoiExportData) {
     exportNotice.value =
       data.mode === 'current-page'
         ? `已导出当前页 ${data.exportedCount.toLocaleString()} 条 POI`
+        : isComplexResult.value
+          ? analysisStore.poiRetrievalComplete
+            ? `已导出全部已获取结果 ${data.exportedCount.toLocaleString()} 条 POI`
+            : `查询已截断；已导出已获取结果 ${data.exportedCount.toLocaleString()} 条 POI`
         : `高德报告 ${data.totalReported.toLocaleString()} 条；本次最多尝试获取 ${data.retrievableLimit.toLocaleString()} 条；实际导出 ${data.exportedCount.toLocaleString()} 条`
   } catch (error: unknown) {
     analysisStore.poiExportError = getApiErrorMessage(error, 'POI CSV 下载失败')
@@ -68,8 +86,17 @@ async function exportRetrievable() {
   <section class="poi-search">
     <div class="section-title-row">
       <strong>POI 查询</strong>
-      <el-tag v-if="analysisStore.poiHasSearched" type="info" effect="plain" size="small">
+      <el-tag
+        v-if="analysisStore.poiHasSearched && !isComplexResult"
+        type="info"
+        effect="plain"
+        size="small"
+      >
         高德报告 {{ analysisStore.poiTotal.toLocaleString() }} 条
+      </el-tag>
+      <el-tag v-else-if="analysisStore.poiHasSearched" type="info" effect="plain" size="small">
+        已获取 {{ analysisStore.poiRetrievedUniqueCount?.toLocaleString() }} 条；候选报告
+        {{ analysisStore.poiReportedCandidateCount?.toLocaleString() }} 条（非严格总数）
       </el-tag>
     </div>
 
@@ -96,6 +123,14 @@ async function exportRetrievable() {
       v-if="analysisStore.poiError"
       :title="analysisStore.poiError"
       type="error"
+      :closable="false"
+      show-icon
+    />
+
+    <el-alert
+      v-if="analysisStore.poiHasSearched && truncatedMessage"
+      :title="truncatedMessage"
+      type="warning"
       :closable="false"
       show-icon
     />
