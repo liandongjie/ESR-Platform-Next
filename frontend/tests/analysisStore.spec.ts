@@ -9,10 +9,10 @@ import {
   getRiskAnalysisSpatialResult,
   getRiskAnalysisSubmission,
 } from '@/api/riskAnalysis'
-import { searchAmapPois } from '@/map/amapPoi'
+import { searchAmapPois, searchAmapPoisInGeometry } from '@/map/amapPoi'
 import { useAnalysisStore } from '@/stores/analysis'
 import type { AnalysisAreaBufferResponse, SourceGeometry } from '@/types/analysisArea'
-import type { PoiDto, PoiSearchResult } from '@/types/poi'
+import type { PoiDto, PoiGeometrySearchResult, PoiSearchResult } from '@/types/poi'
 import type {
   RiskAnalysisJobStatus,
   RiskAnalysisResult,
@@ -34,6 +34,7 @@ vi.mock('@/api/riskAnalysis', () => ({
 
 vi.mock('@/map/amapPoi', () => ({
   searchAmapPois: vi.fn(),
+  searchAmapPoisInGeometry: vi.fn(),
 }))
 
 const mockedCreateBuffer = vi.mocked(createAnalysisAreaBuffer)
@@ -43,6 +44,7 @@ const mockedGetResult = vi.mocked(getRiskAnalysisResult)
 const mockedGetSpatialResult = vi.mocked(getRiskAnalysisSpatialResult)
 const mockedGetSubmission = vi.mocked(getRiskAnalysisSubmission)
 const mockedSearchPois = vi.mocked(searchAmapPois)
+const mockedSearchPoisInGeometry = vi.mocked(searchAmapPoisInGeometry)
 const workspaceTaskStorageKey = 'esr:risk-analysis:workspace-task-id'
 const workspaceDraftStorageKey = 'esr:risk-analysis:workspace-draft'
 
@@ -241,6 +243,22 @@ function makePoiPage(
   }
 }
 
+function makePoiGeometryResult(
+  count: number,
+  overrides: Partial<PoiGeometrySearchResult> = {},
+): PoiGeometrySearchResult {
+  const items = Array.from({ length: count }, (_, index) => makePoi(`aggregate-${index}`))
+  return {
+    items,
+    reportedCandidateCount: count,
+    retrievedUniqueCount: count,
+    retrievalComplete: true,
+    hasMore: false,
+    truncatedReason: null,
+    ...overrides,
+  }
+}
+
 async function preparePoiQuery(store: ReturnType<typeof useAnalysisStore>, total = 116) {
   await prepareBuffer(store)
   store.setPoiKeyword('学校')
@@ -266,6 +284,7 @@ describe('analysis store', () => {
     mockedGetSubmission.mockReset()
     mockedGetSubmission.mockResolvedValue(makeSubmission())
     mockedSearchPois.mockReset()
+    mockedSearchPoisInGeometry.mockReset()
     window.sessionStorage.clear()
   })
 
@@ -384,7 +403,7 @@ describe('analysis store', () => {
       pageSize: 10,
     })
 
-    await store.searchPois(2)
+    await store.changePoiPage(2)
 
     expect(mockedSearchPois).toHaveBeenCalledOnce()
     expect(mockedSearchPois).toHaveBeenCalledWith({
@@ -397,6 +416,7 @@ describe('analysis store', () => {
     expect(store.poiTotal).toBe(44)
     expect(store.poiPage).toBe(2)
     expect(store.poiHasSearched).toBe(true)
+    expect(mockedSearchPoisInGeometry).not.toHaveBeenCalled()
   })
 
   it('ignores a late POI response after the keyword changes', async () => {
@@ -555,21 +575,92 @@ describe('analysis store', () => {
     expect(store.poiTotal).toBe(0)
   })
 
-  it('rejects MultiPolygon Buffer without calling the POI provider', async () => {
+  it('stores a complex aggregate and paginates it locally without more provider calls', async () => {
     const store = useAnalysisStore()
     await prepareBuffer(store)
-    const polygon = makeBufferResponse().buffer.geometry
-    if (polygon.type !== 'Polygon') throw new Error('test fixture must be Polygon')
-    store.bufferResult!.buffer.geometry = {
-      type: 'MultiPolygon',
-      coordinates: [polygon.coordinates],
-    }
+    if (multiPolygonWithHole.type !== 'MultiPolygon') throw new Error('test fixture must be MultiPolygon')
+    store.bufferResult!.buffer.geometry = structuredClone(multiPolygonWithHole)
     store.setPoiKeyword('学校')
+    mockedSearchPoisInGeometry.mockResolvedValueOnce(
+      makePoiGeometryResult(12, {
+        reportedCandidateCount: 99,
+        retrievalComplete: false,
+        hasMore: true,
+        truncatedReason: 'provider-call-limit',
+      }),
+    )
 
     await store.searchPois(1)
 
-    expect(store.poiError).toBe('当前 POI 查询暂不支持 MultiPolygon 缓冲区')
+    expect(mockedSearchPoisInGeometry).toHaveBeenCalledWith({
+      geometry: multiPolygonWithHole,
+      keyword: '学校',
+    })
     expect(mockedSearchPois).not.toHaveBeenCalled()
+    expect(store.poiAggregatedItems).toHaveLength(12)
+    expect(store.poiItems.map((item) => item.id)).toEqual(
+      Array.from({ length: 10 }, (_, index) => `aggregate-${index}`),
+    )
+    expect(store.poiReportedCandidateCount).toBe(99)
+    expect(store.poiRetrievedUniqueCount).toBe(12)
+    expect(store.poiRetrievalComplete).toBe(false)
+    expect(store.poiHasMore).toBe(true)
+    expect(store.poiTruncatedReason).toBe('provider-call-limit')
+
+    await store.changePoiPage(2)
+
+    expect(store.poiItems.map((item) => item.id)).toEqual(['aggregate-10', 'aggregate-11'])
+    expect(mockedSearchPoisInGeometry).toHaveBeenCalledOnce()
+
+    store.setPoiKeyword('医院')
+    expect(store.poiAggregatedItems).toEqual([])
+    expect(store.poiReportedCandidateCount).toBeNull()
+    expect(store.poiRetrievedUniqueCount).toBeNull()
+    expect(store.poiPage).toBe(1)
+  })
+
+  it('uses the aggregate query for a Polygon with a hole', async () => {
+    const store = useAnalysisStore()
+    await prepareBuffer(store)
+    if (polygonWithHole.type !== 'Polygon') throw new Error('test fixture must be Polygon')
+    store.bufferResult!.buffer.geometry = structuredClone(polygonWithHole)
+    store.setPoiKeyword('学校')
+    mockedSearchPoisInGeometry.mockResolvedValueOnce(makePoiGeometryResult(0))
+
+    await store.searchPois(1)
+
+    expect(mockedSearchPoisInGeometry).toHaveBeenCalledWith({
+      geometry: polygonWithHole,
+      keyword: '学校',
+    })
+    expect(store.poiHasSearched).toBe(true)
+    expect(store.poiRetrievedUniqueCount).toBe(0)
+  })
+
+  it('invalidates a pending complex aggregate when the Buffer changes', async () => {
+    const store = useAnalysisStore()
+    await prepareBuffer(store)
+    if (multiPolygonWithHole.type !== 'MultiPolygon') throw new Error('test fixture must be MultiPolygon')
+    store.bufferResult!.buffer.geometry = structuredClone(multiPolygonWithHole)
+    let resolveSearch: ((value: PoiGeometrySearchResult) => void) | undefined
+    mockedSearchPoisInGeometry.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveSearch = resolve
+        }),
+    )
+    store.setPoiKeyword('学校')
+
+    const pending = store.searchPois(1)
+    store.setBufferDistance(5000)
+    resolveSearch?.(makePoiGeometryResult(12))
+    await pending
+
+    expect(store.poiAggregatedItems).toEqual([])
+    expect(store.poiItems).toEqual([])
+    expect(store.poiReportedCandidateCount).toBeNull()
+    expect(store.poiRetrievedUniqueCount).toBeNull()
+    expect(store.poiPage).toBe(1)
   })
 
   it('prepares only the current visible page without another provider request', async () => {
@@ -834,44 +925,47 @@ describe('analysis store', () => {
     expect(store.poiExportError).toBeNull()
   })
 
-  it('rejects MultiPolygon export without calling the POI provider', async () => {
+  it('exports the visible complex page and reuses the aggregate for retrievable export', async () => {
     const store = useAnalysisStore()
-    await preparePoiQuery(store)
-    const polygon = makeBufferResponse().buffer.geometry
-    if (polygon.type !== 'Polygon') throw new Error('test fixture must be Polygon')
-    store.bufferResult!.buffer.geometry = {
-      type: 'MultiPolygon',
-      coordinates: [polygon.coordinates],
-    }
+    await prepareBuffer(store)
+    if (multiPolygonWithHole.type !== 'MultiPolygon') throw new Error('test fixture must be MultiPolygon')
+    store.bufferResult!.buffer.geometry = structuredClone(multiPolygonWithHole)
+    store.setPoiKeyword('学校')
+    mockedSearchPoisInGeometry.mockResolvedValueOnce(
+      makePoiGeometryResult(12, {
+        reportedCandidateCount: 99,
+        retrievalComplete: false,
+        hasMore: true,
+        truncatedReason: 'raw-row-limit',
+      }),
+    )
+    await store.searchPois(1)
+    await store.changePoiPage(2)
+    mockedSearchPoisInGeometry.mockClear()
 
-    await expect(store.collectRetrievablePoiExport()).resolves.toBeNull()
+    const currentPage = store.prepareCurrentPagePoiExport()
+    const retrievable = await store.collectRetrievablePoiExport()
 
-    expect(store.poiExportError).toContain('暂不支持 MultiPolygon')
+    expect(currentPage).toMatchObject({
+      mode: 'current-page',
+      page: 2,
+      totalReported: 99,
+      retrievableLimit: 12,
+      exportedCount: 2,
+    })
+    expect(currentPage?.items.map((item) => item.id)).toEqual(['aggregate-10', 'aggregate-11'])
+    expect(retrievable).toMatchObject({
+      mode: 'retrievable',
+      page: null,
+      totalReported: 99,
+      retrievableLimit: 12,
+      exportedCount: 12,
+    })
+    expect(retrievable?.items.map((item) => item.id)).toEqual(
+      Array.from({ length: 12 }, (_, index) => `aggregate-${index}`),
+    )
     expect(mockedSearchPois).not.toHaveBeenCalled()
-  })
-
-  it('rejects a Polygon Buffer with an inner ring without calling the POI provider', async () => {
-    const store = useAnalysisStore()
-    await preparePoiQuery(store)
-    const polygon = makeBufferResponse().buffer.geometry
-    if (polygon.type !== 'Polygon') throw new Error('test fixture must be Polygon')
-    store.bufferResult!.buffer.geometry = {
-      type: 'Polygon',
-      coordinates: [
-        polygon.coordinates[0]!,
-        [
-          [118.88, 32.1],
-          [118.9, 32.11],
-          [118.91, 32.1],
-          [118.88, 32.1],
-        ],
-      ],
-    }
-
-    await expect(store.collectRetrievablePoiExport()).resolves.toBeNull()
-
-    expect(store.poiExportError).toContain('不含内部孔洞')
-    expect(mockedSearchPois).not.toHaveBeenCalled()
+    expect(mockedSearchPoisInGeometry).not.toHaveBeenCalled()
   })
 
   it(

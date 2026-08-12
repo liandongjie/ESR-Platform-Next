@@ -44,6 +44,16 @@ function populatePoiResult(store: ReturnType<typeof useAnalysisStore>) {
   store.poiHasSearched = true
 }
 
+function populateTruncatedComplexResult(store: ReturnType<typeof useAnalysisStore>) {
+  populatePoiResult(store)
+  store.poiAggregatedItems = [...store.poiItems]
+  store.poiReportedCandidateCount = 99
+  store.poiRetrievedUniqueCount = 12
+  store.poiRetrievalComplete = false
+  store.poiHasMore = true
+  store.poiTruncatedReason = 'raw-row-limit'
+}
+
 function exportButton(wrapper: ReturnType<typeof mountPanel>, label: string) {
   const button = wrapper.findAll('button').find((item) => item.text().includes(label))
   if (!button) throw new Error(`missing button: ${label}`)
@@ -112,6 +122,33 @@ describe('PoiSearchPanel', () => {
     expect(wrapper.text()).toContain('高德报告 2,000 条')
     expect(wrapper.text()).toContain('学校')
     expect(wrapper.getComponent(ElPagination).props('pageCount')).toBe(100)
+  })
+
+  it('renders retrieved complex semantics, local pages, and the truncation warning', async () => {
+    const wrapper = mountPanel()
+    const store = useAnalysisStore()
+    populateTruncatedComplexResult(store)
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.text()).toContain('已获取 12 条')
+    expect(wrapper.text()).toContain('候选报告 99 条（非严格总数）')
+    expect(wrapper.text()).not.toContain('高德报告 99 条')
+    expect(wrapper.text()).toContain('达到 5,000 条 Provider 原始结果上限')
+    expect(wrapper.text()).toContain('仅展示和导出已获取结果')
+    expect(wrapper.getComponent(ElPagination).props('pageCount')).toBe(2)
+  })
+
+  it('delegates page changes to Store local-or-provider pagination', async () => {
+    const wrapper = mountPanel()
+    const store = useAnalysisStore()
+    populateTruncatedComplexResult(store)
+    const changePage = vi.spyOn(store, 'changePoiPage').mockResolvedValue()
+    await wrapper.vm.$nextTick()
+
+    wrapper.getComponent(ElPagination).vm.$emit('current-change', 2)
+    await wrapper.vm.$nextTick()
+
+    expect(changePage).toHaveBeenCalledWith(2)
   })
 
   it('renders no_data as an empty success state', async () => {
@@ -187,6 +224,19 @@ describe('PoiSearchPanel', () => {
     expect(wrapper.text()).toContain('高德报告 6,001 条')
     expect(wrapper.text()).toContain('本次最多尝试获取 5,000 条')
     expect(wrapper.text()).toContain('实际导出 1 条')
+  })
+
+  it('labels a truncated complex export as only the retrieved result', async () => {
+    const wrapper = mountPanel()
+    const store = useAnalysisStore()
+    populateTruncatedComplexResult(store)
+    vi.spyOn(store, 'collectRetrievablePoiExport').mockResolvedValue(exportData('retrievable'))
+    await wrapper.vm.$nextTick()
+
+    await exportButton(wrapper, '导出可获取结果').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('查询已截断；已导出已获取结果 1 条 POI')
   })
 
   it('does not create an artifact when the Store returns no export data', async () => {

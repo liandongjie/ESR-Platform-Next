@@ -1,4 +1,4 @@
-import type { Coordinate, PolygonGeometry } from '@/types/analysisArea'
+import type { BufferGeometry, Coordinate, PolygonGeometry } from '@/types/analysisArea'
 
 export interface PoiDto {
   id: string
@@ -21,6 +21,22 @@ export interface PoiSearchResult {
   total: number
   page: number
   pageSize: number
+}
+
+export interface PoiGeometrySearchRequest {
+  geometry: BufferGeometry
+  keyword: string
+}
+
+export type PoiGeometrySearchTruncatedReason = 'provider-call-limit' | 'raw-row-limit'
+
+export interface PoiGeometrySearchResult {
+  items: PoiDto[]
+  reportedCandidateCount: number
+  retrievedUniqueCount: number
+  retrievalComplete: boolean
+  hasMore: boolean
+  truncatedReason: PoiGeometrySearchTruncatedReason | null
 }
 
 export interface StudyPointCandidate {
