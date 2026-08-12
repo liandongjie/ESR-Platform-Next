@@ -56,6 +56,14 @@ def test_ready_returns_200_when_all_dependencies_are_healthy(app, client, monkey
 
 def test_ready_checks_each_distinct_redis_endpoint_once(app, client, monkeypatch):
     prepare_healthy_dependencies(app, monkeypatch)
+    redis_url = "redis://localhost:6379/0"
+    result_backend_url = "redis://localhost:6379/1"
+    app.config["REDIS_URL"] = redis_url
+    app.config["CELERY"] = {
+        **app.config["CELERY"],
+        "broker_url": redis_url,
+        "result_backend": result_backend_url,
+    }
     calls = []
     monkeypatch.setattr(
         health,
@@ -66,7 +74,7 @@ def test_ready_checks_each_distinct_redis_endpoint_once(app, client, monkeypatch
     response = client.get("/api/v1/health/ready")
 
     assert response.status_code == 200
-    assert calls == ["redis://localhost:6379/0", "redis://localhost:6379/1"]
+    assert calls == [redis_url, result_backend_url]
     endpoints = response.get_json()["checks"]["redis"]["endpoints"]
     assert endpoints[0]["roles"] == ["redis", "celery_broker"]
     assert endpoints[1]["roles"] == ["celery_result_backend"]
