@@ -48,3 +48,14 @@ export interface AnalysisAreaBufferResponse {
     geometry: BufferGeometry
   }
 }
+
+export interface AdministrativeBoundariesNormalizeRequest {
+  boundaries: Coordinate[][]
+}
+
+export interface AdministrativeBoundariesNormalizeResponse {
+  crs: 'EPSG:4326'
+  geometry: BufferGeometry
+  input_boundary_count: number
+  output_polygon_count: number
+}
