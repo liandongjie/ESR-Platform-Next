@@ -2,6 +2,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 
 import StatusCard from '@/components/common/StatusCard.vue'
+import AdministrativeRegionInput from '@/components/map/AdministrativeRegionInput.vue'
 import MapCanvas from '@/components/map/MapCanvas.vue'
 import PoiSearchPanel from '@/components/poi/PoiSearchPanel.vue'
 import RiskAnalysisResultDownloads from '@/components/risk-analysis/RiskAnalysisResultDownloads.vue'
@@ -160,6 +161,12 @@ function handleGeometrySelected(geometry: SourceGeometry) {
   analysisStore.setSourceGeometry(geometry)
   selectedStudyPointName.value = null
   drawingError.value = null
+}
+
+function handleAdministrativeRegionSelected(geometry: SourceGeometry) {
+  if (analysisStore.analysisLocked) return
+  mapCanvasRef.value?.cancelDrawing()
+  handleGeometrySelected(geometry)
 }
 
 function handleDrawingModeChange(mode: DrawingMode | null) {
@@ -339,7 +346,7 @@ onMounted(() => {
             <span>01</span>
             <div>
               <strong>选择研究区</strong>
-              <small>支持地图点击或 WGS84 坐标输入</small>
+              <small>支持绘制、坐标、地点或行政区输入</small>
             </div>
           </li>
           <li :class="{ active: activeWorkflowStep === 2 }">
@@ -395,6 +402,11 @@ onMounted(() => {
         </div>
 
         <section class="control-section">
+          <AdministrativeRegionInput
+            :disabled="analysisStore.analysisLocked"
+            @confirm="handleAdministrativeRegionSelected"
+          />
+
           <div class="section-title-row">
             <strong>在线绘制</strong>
             <el-tag v-if="activeDrawingMode" type="primary" effect="plain" size="small">
@@ -535,7 +547,7 @@ onMounted(() => {
 
         <el-empty
           v-if="!analysisStore.sourceGeometryWgs84 && !analysisStore.job"
-          description="点击地图或输入坐标选择研究点"
+          description="绘制或输入研究区"
           :image-size="86"
         />
 
