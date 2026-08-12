@@ -7,7 +7,7 @@ from pathlib import Path
 from flask import Flask, jsonify
 
 from app.api.v1 import api_v1
-from app.config import CONFIG_BY_NAME
+from app.config import CONFIG_BY_NAME, validate_production_config
 from app.extensions import celery, cors, db, jwt, migrate
 
 
@@ -19,6 +19,8 @@ def create_app(config_name: str | None = None) -> Flask:
 
     app = Flask(__name__)
     app.config.from_object(config_class)
+    if resolved_name == "production":
+        validate_production_config(app.config)
 
     _configure_logging(app)
     _ensure_runtime_directories(app)
