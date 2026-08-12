@@ -42,3 +42,30 @@ jobs:
       - run: npm run lint
       - run: npm run test:run
       - run: npm run build
+
+  production-deployment-artifacts:
+    runs-on: ubuntu-latest
+    env:
+      IMAGE_TAG: ci
+      SECRET_KEY: ci-only-dummy-secret
+      JWT_SECRET_KEY: ci-only-dummy-jwt-secret
+      POSTGRES_PASSWORD: ci-only-dummy-database-password
+      DATABASE_URL: postgresql+psycopg://esr:ci-only-dummy-database-password@db:5432/esr_platform
+      ESR_SOURCE_RASTER_HOST_DIR: /tmp/esr-source
+      VITE_AMAP_JS_API_KEY: ci-only-dummy-amap-key
+      VITE_AMAP_SECURITY_JS_CODE: ci-only-dummy-amap-security-code
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build backend production image
+        run: docker build --target production --tag esr-platform-backend:ci ./backend
+      - name: Build frontend production image
+        run: >-
+          docker build
+          --target production
+          --tag esr-platform-frontend:ci
+          --build-arg VITE_API_BASE_URL=/api/v1
+          --build-arg VITE_AMAP_JS_API_KEY="$VITE_AMAP_JS_API_KEY"
+          --build-arg VITE_AMAP_SECURITY_JS_CODE="$VITE_AMAP_SECURITY_JS_CODE"
+          ./frontend
+      - name: Validate production Compose configuration
+        run: docker compose -f compose.production.yml config --quiet
