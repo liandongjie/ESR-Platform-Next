@@ -1,0 +1,102 @@
+name: esr-platform-next-production
+
+x-backend-common: &backend-common
+  image: esr-platform-backend:${IMAGE_TAG:-local}
+  environment:
+    APP_ENV: production
+    SECRET_KEY: ${SECRET_KEY:?SECRET_KEY is required}
+    JWT_SECRET_KEY: ${JWT_SECRET_KEY:?JWT_SECRET_KEY is required}
+    LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required}
+    REDIS_URL: redis://redis:6379/0
+    CELERY_BROKER_URL: redis://redis:6379/0
+    CELERY_RESULT_BACKEND: redis://redis:6379/1
+    ESR_SOURCE_RASTER_DIR: /data/source
+    ESR_RUNTIME_DATA_DIR: /data/runtime
+    ESR_RESULT_TTL_HOURS: ${ESR_RESULT_TTL_HOURS:-24}
+    ESR_MAX_BUFFER_METERS: ${ESR_MAX_BUFFER_METERS:-5000}
+    ESR_MAX_ANALYSIS_AREA_KM2: ${ESR_MAX_ANALYSIS_AREA_KM2:-50}
+  volumes:
+    - type: bind
+      source: ${ESR_SOURCE_RASTER_HOST_DIR:?ESR_SOURCE_RASTER_HOST_DIR is required}
+      target: /data/source
+      read_only: true
+    - runtime_data:/data/runtime
+  restart: unless-stopped
+
+services:
+  db:
+    image: postgis/postgis:16-3.4
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-esr_platform}
+      POSTGRES_USER: ${POSTGRES_USER:-esr}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-esr} -d ${POSTGRES_DB:-esr_platform}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  redis:
+    image: redis:7.4-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  backend:
+    <<: *backend-common
+    build:
+      context: ./backend
+      target: production
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5000/api/v1/health/live')"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  worker:
+    <<: *backend-common
+    command: ["celery", "-A", "app.celery_app:celery_app", "worker", "--loglevel=INFO", "--concurrency=2"]
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  frontend:
+    image: esr-platform-frontend:${IMAGE_TAG:-local}
+    build:
+      context: ./frontend
+      target: production
+      args:
+        VITE_API_BASE_URL: /api/v1
+        VITE_AMAP_JS_API_KEY: ${VITE_AMAP_JS_API_KEY:?VITE_AMAP_JS_API_KEY is required}
+        VITE_AMAP_SECURITY_JS_CODE: ${VITE_AMAP_SECURITY_JS_CODE:?VITE_AMAP_SECURITY_JS_CODE is required}
+        VITE_AMAP_CENTER_LNG: ${VITE_AMAP_CENTER_LNG:-118.9000}
+        VITE_AMAP_CENTER_LAT: ${VITE_AMAP_CENTER_LAT:-32.1000}
+        VITE_AMAP_ZOOM: ${VITE_AMAP_ZOOM:-13}
+    ports:
+      - "${HTTP_PORT:-80}:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  redis_data:
+  runtime_data:
