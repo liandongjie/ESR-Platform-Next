@@ -20,6 +20,7 @@ class BaseConfig:
     )
     SQLALCHEMY_TRACK_MODIFICATIONS = False
     SQLALCHEMY_ENGINE_OPTIONS = {"pool_pre_ping": True}
+    MAX_CONTENT_LENGTH = 16 * 1024 * 1024
 
     REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
     CELERY = {

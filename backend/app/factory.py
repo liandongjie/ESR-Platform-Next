@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 
 from flask import Flask, jsonify
+from werkzeug.exceptions import RequestEntityTooLarge
 
 from app.api.v1 import api_v1
 from app.config import CONFIG_BY_NAME, validate_production_config
@@ -63,6 +64,10 @@ def _register_blueprints(app: Flask) -> None:
 
 
 def _register_error_handlers(app: Flask) -> None:
+    @app.errorhandler(RequestEntityTooLarge)
+    def request_too_large(_: RequestEntityTooLarge):
+        return jsonify({"code": "UPLOAD_TOO_LARGE", "message": "上传请求超过服务端容量限制"}), 413
+
     @app.errorhandler(404)
     def not_found(_: Exception):
         return jsonify({"code": "NOT_FOUND", "message": "Resource not found"}), 404

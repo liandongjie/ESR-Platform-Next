@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, BinaryIO
 
 from shapely.geometry import mapping
 
 from app.gis.analysis_area import create_metric_buffer, normalize_boundaries
 from app.gis.geojson import parse_geojson_geometry
+from app.gis.shapefile import import_shapefile_zip
 from app.schemas.analysis_area import (
     AdministrativeBoundariesNormalizeRequest,
     AnalysisAreaBufferRequest,
@@ -35,6 +36,16 @@ class AnalysisAreaService:
                 "bounds": [float(value) for value in result.buffer_geometry.bounds],
                 "geometry": mapping(result.buffer_geometry),
             },
+        }
+
+    def import_shapefile(self, stream: BinaryIO) -> dict[str, Any]:
+        result = import_shapefile_zip(stream)
+        return {
+            "crs": "EPSG:4326",
+            "source_crs": result.source_crs,
+            "feature_count": result.feature_count,
+            "coordinate_count": result.coordinate_count,
+            "geometry": mapping(result.geometry),
         }
 
     def normalize_boundaries(
