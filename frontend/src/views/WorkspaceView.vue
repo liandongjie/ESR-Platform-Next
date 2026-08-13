@@ -1,32 +1,18 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 
 import WorkspaceWorkflowNavigator from '@/components/workspace/WorkspaceWorkflowNavigator.vue'
-import AdministrativeRegionInput from '@/components/map/AdministrativeRegionInput.vue'
 import MapCanvas from '@/components/map/MapCanvas.vue'
-import ShapefileInput from '@/components/map/ShapefileInput.vue'
 import PoiSearchPanel from '@/components/poi/PoiSearchPanel.vue'
 import RiskAnalysisResultDownloads from '@/components/risk-analysis/RiskAnalysisResultDownloads.vue'
-import { searchAmapStudyPoints } from '@/map/amapStudyPoint'
+import StudyAreaPanel from '@/components/workspace/StudyAreaPanel.vue'
 import { useAnalysisStore } from '@/stores/analysis'
 import { useSystemStore } from '@/stores/system'
 import type { Coordinate, SourceGeometry } from '@/types/analysisArea'
-import type { StudyPointCandidate } from '@/types/poi'
 import type { RiskJobStatus } from '@/types/riskAnalysis'
 
 const systemStore = useSystemStore()
 const analysisStore = useAnalysisStore()
-const decimalDegreesPattern = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$/
-const longitudeInput = ref('')
-const latitudeInput = ref('')
-const coordinateInputError = ref<string | null>(null)
-const studyPointKeyword = ref('')
-const studyPointCandidates = ref<StudyPointCandidate[]>([])
-const studyPointLoading = ref(false)
-const studyPointError = ref<string | null>(null)
-const studyPointHasSearched = ref(false)
-const selectedStudyPointName = ref<string | null>(null)
-let studyPointRequestRevision = 0
 type DrawingMode = 'point' | 'polyline' | 'rectangle' | 'polygon'
 interface MapCanvasDrawingApi {
   startDrawing: (mode: DrawingMode) => void
@@ -35,12 +21,6 @@ interface MapCanvasDrawingApi {
 const mapCanvasRef = ref<MapCanvasDrawingApi | null>(null)
 const activeDrawingMode = ref<DrawingMode | null>(null)
 const drawingError = ref<string | null>(null)
-const drawingModes: Array<{ mode: DrawingMode; label: string }> = [
-  { mode: 'point', label: '点' },
-  { mode: 'polyline', label: '线' },
-  { mode: 'rectangle', label: '矩形' },
-  { mode: 'polygon', label: '多边形' },
-]
 
 const maxBufferMeters = computed(() => systemStore.capabilities?.limits.max_buffer_meters)
 const bufferDistance = computed({
@@ -59,28 +39,6 @@ const bufferDistanceValid = computed(() => {
 const bufferLimitText = computed(() => {
   if (maxBufferMeters.value === undefined) return '上限以服务端校验为准'
   return `服务端当前上限 ${maxBufferMeters.value.toLocaleString()} 米`
-})
-const sourceGeometrySummary = computed(() => {
-  const geometry = analysisStore.sourceGeometryWgs84
-  if (!geometry) return null
-  if (geometry.type === 'Point') {
-    return `${geometry.coordinates[0].toFixed(6)}, ${geometry.coordinates[1].toFixed(6)}`
-  }
-  if (geometry.type === 'LineString') {
-    return `LineString · ${geometry.coordinates.length} 个顶点`
-  }
-  if (geometry.type === 'Polygon') {
-    const vertexCount = Math.max(0, geometry.coordinates[0]?.length ?? 1) - 1
-    const holeCount = Math.max(0, geometry.coordinates.length - 1)
-    return holeCount > 0
-      ? `Polygon · ${vertexCount} 个外环顶点 · ${holeCount} 个孔洞`
-      : `Polygon · ${vertexCount} 个顶点`
-  }
-  const holeCount = geometry.coordinates.reduce(
-    (total, polygon) => total + Math.max(0, polygon.length - 1),
-    0,
-  )
-  return `MultiPolygon · ${geometry.coordinates.length} 个面 · ${holeCount} 个孔洞`
 })
 const bufferGeometry = computed(
   () =>
@@ -143,14 +101,12 @@ const activeWorkflowStep = computed<1 | 2 | 3 | 4>(() => {
 function handlePointSelected(coordinates: Coordinate) {
   mapCanvasRef.value?.cancelDrawing()
   analysisStore.setSourcePoint(coordinates)
-  selectedStudyPointName.value = null
   drawingError.value = null
 }
 
 function handleGeometrySelected(geometry: SourceGeometry) {
   if (analysisStore.analysisLocked) return
   analysisStore.setSourceGeometry(geometry)
-  selectedStudyPointName.value = null
   drawingError.value = null
 }
 
@@ -175,7 +131,6 @@ function startDrawing(mode: DrawingMode) {
 }
 
 function cancelDrawing() {
-  if (analysisStore.analysisLocked) return
   drawingError.value = null
   mapCanvasRef.value?.cancelDrawing()
 }
@@ -184,99 +139,7 @@ function clearStudyArea() {
   if (analysisStore.analysisLocked) return
   mapCanvasRef.value?.cancelDrawing()
   analysisStore.clearSelection()
-  selectedStudyPointName.value = null
   drawingError.value = null
-}
-
-watch(studyPointKeyword, () => {
-  studyPointRequestRevision += 1
-  studyPointCandidates.value = []
-  studyPointLoading.value = false
-  studyPointError.value = null
-  studyPointHasSearched.value = false
-})
-
-async function searchStudyPoints() {
-  if (analysisStore.analysisLocked || studyPointLoading.value) return
-
-  const submittedKeyword = studyPointKeyword.value.trim()
-  if (!submittedKeyword) {
-    studyPointError.value = '请输入地址或 POI 关键词'
-    studyPointHasSearched.value = false
-    return
-  }
-
-  const revision = ++studyPointRequestRevision
-  studyPointCandidates.value = []
-  studyPointLoading.value = true
-  studyPointError.value = null
-  studyPointHasSearched.value = false
-
-  try {
-    const candidates = await searchAmapStudyPoints(submittedKeyword)
-    if (
-      revision !== studyPointRequestRevision ||
-      studyPointKeyword.value.trim() !== submittedKeyword
-    ) {
-      return
-    }
-    studyPointCandidates.value = candidates
-    studyPointHasSearched.value = true
-  } catch (error: unknown) {
-    if (
-      revision !== studyPointRequestRevision ||
-      studyPointKeyword.value.trim() !== submittedKeyword
-    ) {
-      return
-    }
-    studyPointError.value = error instanceof Error ? error.message : '地址或 POI 搜索失败'
-  } finally {
-    if (
-      revision === studyPointRequestRevision &&
-      studyPointKeyword.value.trim() === submittedKeyword
-    ) {
-      studyPointLoading.value = false
-    }
-  }
-}
-
-function selectStudyPoint(candidate: StudyPointCandidate) {
-  if (analysisStore.analysisLocked) return
-  handlePointSelected(candidate.locationWgs84)
-  selectedStudyPointName.value = candidate.name
-}
-
-function applyCoordinateInput() {
-  if (analysisStore.analysisLocked) return
-
-  const longitudeText = longitudeInput.value.trim()
-  const latitudeText = latitudeInput.value.trim()
-  if (!longitudeText || !latitudeText) {
-    coordinateInputError.value = '请输入经度和纬度'
-    return
-  }
-  if (!decimalDegreesPattern.test(longitudeText) || !decimalDegreesPattern.test(latitudeText)) {
-    coordinateInputError.value = '经纬度只接受普通十进制度文本'
-    return
-  }
-
-  const longitude = Number(longitudeText)
-  const latitude = Number(latitudeText)
-  if (!Number.isFinite(longitude) || !Number.isFinite(latitude)) {
-    coordinateInputError.value = '经纬度必须是有限数值'
-    return
-  }
-  if (longitude < -180 || longitude > 180) {
-    coordinateInputError.value = '经度必须在 -180 至 180 之间'
-    return
-  }
-  if (latitude < -90 || latitude > 90) {
-    coordinateInputError.value = '纬度必须在 -90 至 90 之间'
-    return
-  }
-
-  coordinateInputError.value = null
-  handlePointSelected([longitude, latitude])
 }
 
 function createBuffer() {
@@ -352,152 +215,16 @@ onMounted(() => {
         </div>
 
         <section class="control-section">
-          <AdministrativeRegionInput
+          <StudyAreaPanel
             :disabled="analysisStore.analysisLocked"
+            :source-geometry="analysisStore.sourceGeometryWgs84"
+            :active-drawing-mode="activeDrawingMode"
+            :drawing-error="drawingError"
             @confirm="handleConfirmedGeometrySelected"
+            @start-drawing="startDrawing"
+            @cancel-drawing="cancelDrawing"
+            @clear="clearStudyArea"
           />
-
-          <ShapefileInput
-            :disabled="analysisStore.analysisLocked"
-            @confirm="handleConfirmedGeometrySelected"
-          />
-
-          <div class="section-title-row">
-            <strong>在线绘制</strong>
-            <el-tag v-if="activeDrawingMode" type="primary" effect="plain" size="small">
-              {{ drawingModes.find((item) => item.mode === activeDrawingMode)?.label }}绘制中
-            </el-tag>
-          </div>
-          <div class="drawing-tool-grid">
-            <el-button
-              v-for="item in drawingModes"
-              :key="item.mode"
-              :type="activeDrawingMode === item.mode ? 'primary' : 'default'"
-              :disabled="analysisStore.analysisLocked"
-              :aria-label="`绘制${item.label}`"
-              @click="startDrawing(item.mode)"
-            >
-              {{ item.label }}
-            </el-button>
-          </div>
-          <div class="drawing-actions">
-            <el-button
-              :disabled="analysisStore.analysisLocked || !activeDrawingMode"
-              @click="cancelDrawing"
-            >
-              取消绘制
-            </el-button>
-            <el-button
-              type="danger"
-              plain
-              :disabled="
-                analysisStore.analysisLocked ||
-                  (!analysisStore.sourceGeometryWgs84 && !activeDrawingMode)
-              "
-              @click="clearStudyArea"
-            >
-              清除研究区
-            </el-button>
-          </div>
-          <el-alert
-            v-if="drawingError"
-            :title="drawingError"
-            type="error"
-            :closable="false"
-            show-icon
-          />
-
-          <div class="section-title-row">
-            <strong>输入研究点</strong>
-            <small>WGS84 / EPSG:4326</small>
-          </div>
-          <div class="coordinate-input-grid">
-            <el-input
-              v-model="longitudeInput"
-              aria-label="研究点经度"
-              placeholder="经度 [-180, 180]"
-              :disabled="analysisStore.analysisLocked"
-            />
-            <el-input
-              v-model="latitudeInput"
-              aria-label="研究点纬度"
-              placeholder="纬度 [-90, 90]"
-              :disabled="analysisStore.analysisLocked"
-            />
-          </div>
-          <small class="section-hint">仅支持普通十进制度，不支持科学计数法等格式。</small>
-          <el-button
-            type="primary"
-            plain
-            :disabled="analysisStore.analysisLocked"
-            @click="applyCoordinateInput"
-          >
-            使用该坐标
-          </el-button>
-          <el-alert
-            v-if="coordinateInputError"
-            :title="coordinateInputError"
-            type="error"
-            :closable="false"
-            show-icon
-          />
-
-          <div class="study-point-search">
-            <div class="section-title-row">
-              <strong>搜索地址 / POI</strong>
-              <small>高德地点搜索</small>
-            </div>
-            <div class="study-point-search-row">
-              <el-input
-                v-model="studyPointKeyword"
-                aria-label="地址或 POI 关键词"
-                placeholder="如：南京大学、中关村"
-                :disabled="analysisStore.analysisLocked"
-                @keyup.enter="searchStudyPoints"
-              />
-              <el-button
-                type="primary"
-                plain
-                :loading="studyPointLoading"
-                :disabled="analysisStore.analysisLocked || studyPointLoading"
-                @click="searchStudyPoints"
-              >
-                搜索
-              </el-button>
-            </div>
-
-            <el-alert
-              v-if="studyPointError"
-              class="study-point-search-error"
-              :title="studyPointError"
-              type="error"
-              :closable="false"
-              show-icon
-            />
-            <small
-              v-else-if="studyPointHasSearched && studyPointCandidates.length === 0"
-              class="section-hint study-point-search-empty"
-            >
-              未找到匹配地点
-            </small>
-            <small v-if="selectedStudyPointName" class="study-point-selected">
-              已选择：{{ selectedStudyPointName }}
-            </small>
-
-            <div v-if="studyPointCandidates.length" class="study-point-results">
-              <button
-                v-for="candidate in studyPointCandidates"
-                :key="candidate.id"
-                type="button"
-                class="study-point-result"
-                :disabled="analysisStore.analysisLocked"
-                @click="selectStudyPoint(candidate)"
-              >
-                <strong>{{ candidate.name }}</strong>
-                <small>{{ candidate.district }}{{ candidate.address }}</small>
-              </button>
-            </div>
-          </div>
         </section>
 
         <el-empty
@@ -549,12 +276,6 @@ onMounted(() => {
         </section>
 
         <template v-if="analysisStore.sourceGeometryWgs84">
-          <div class="selection-summary">
-            <span class="selection-label">研究对象（WGS84）</span>
-            <strong>{{ sourceGeometrySummary }}</strong>
-            <small>地图 GCJ-02 已在适配层转换为 EPSG:4326</small>
-          </div>
-
           <section class="control-section">
             <div class="section-title-row">
               <strong>缓冲区</strong>
@@ -834,22 +555,12 @@ onMounted(() => {
   overflow-y: auto;
 }
 
-.selection-summary,
 .control-section {
   display: flex;
   flex-direction: column;
   gap: 10px;
 }
 
-.selection-summary {
-  margin-top: 22px;
-  padding: 12px;
-  border-radius: 10px;
-  background: #f6f8fc;
-}
-
-.selection-label,
-.selection-summary small,
 .section-title-row small,
 .section-hint,
 .compact-result-grid span,
@@ -861,11 +572,6 @@ onMounted(() => {
   font-size: 11px;
 }
 
-.selection-summary strong {
-  font-size: 13px;
-  word-break: break-all;
-}
-
 .control-section {
   margin-top: 18px;
   padding-top: 18px;
@@ -874,84 +580,6 @@ onMounted(() => {
 
 .control-section :deep(.el-input-number) {
   width: 100%;
-}
-
-.coordinate-input-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
-}
-
-.drawing-tool-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
-}
-
-.drawing-tool-grid :deep(.el-button),
-.drawing-actions :deep(.el-button) {
-  margin-left: 0;
-}
-
-.drawing-actions {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
-}
-
-.study-point-search {
-  display: grid;
-  gap: 10px;
-  margin-top: 8px;
-  padding-top: 14px;
-  border-top: 1px dashed var(--border);
-}
-
-.study-point-search-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 8px;
-}
-
-.study-point-results {
-  display: grid;
-  gap: 7px;
-}
-
-.study-point-result {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  padding: 9px 10px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: #fff;
-  color: inherit;
-  text-align: left;
-  cursor: pointer;
-}
-
-.study-point-result:hover:not(:disabled) {
-  border-color: var(--primary);
-}
-
-.study-point-result:disabled {
-  cursor: not-allowed;
-  opacity: 0.6;
-}
-
-.study-point-result strong {
-  font-size: 12px;
-}
-
-.study-point-result small,
-.study-point-selected {
-  color: var(--muted);
-  font-size: 11px;
-}
-
-.study-point-selected {
-  color: var(--primary);
 }
 
 .section-title-row,

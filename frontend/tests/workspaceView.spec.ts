@@ -62,6 +62,15 @@ function mountWorkspace() {
   return { wrapper, store: useAnalysisStore() }
 }
 
+async function selectStudyAreaTab(
+  wrapper: ReturnType<typeof mountWorkspace>['wrapper'],
+  label: string,
+) {
+  const tab = wrapper.findAll('button.study-area-tab').find((item) => item.text() === label)
+  if (!tab) throw new Error(`missing ${label} study area tab`)
+  await tab.trigger('click')
+}
+
 beforeEach(() => {
   drawingCanvasMocks.startDrawing.mockReset()
   drawingCanvasMocks.cancelDrawing.mockReset()
@@ -123,6 +132,7 @@ describe('WorkspaceView coordinate input', () => {
     ['+180.', '-.5', [180, -0.5]],
   ])('sets a WGS84 point from ordinary decimal text', async (longitude, latitude, expected) => {
     const { wrapper, store } = mountWorkspace()
+    await selectStudyAreaTab(wrapper, '坐标')
     const inputs = coordinateInputs(wrapper)
 
     await inputs.longitude.setValue(longitude)
@@ -152,14 +162,15 @@ describe('WorkspaceView coordinate input', () => {
     async (longitude, latitude) => {
       const { wrapper, store } = mountWorkspace()
       store.setSourcePoint([118.8, 32])
-      const setSourcePoint = vi.spyOn(store, 'setSourcePoint')
+      const setSourceGeometry = vi.spyOn(store, 'setSourceGeometry')
+      await selectStudyAreaTab(wrapper, '坐标')
       const inputs = coordinateInputs(wrapper)
 
       await inputs.longitude.setValue(longitude)
       await inputs.latitude.setValue(latitude)
       await applyButton(wrapper).trigger('click')
 
-      expect(setSourcePoint).not.toHaveBeenCalled()
+      expect(setSourceGeometry).not.toHaveBeenCalled()
       expect(store.sourceGeometryWgs84?.coordinates).toEqual([118.8, 32])
       expect(wrapper.get('[role="alert"]').text()).not.toBe('')
     },
@@ -167,6 +178,7 @@ describe('WorkspaceView coordinate input', () => {
 
   it('clears the input error after a valid retry', async () => {
     const { wrapper, store } = mountWorkspace()
+    await selectStudyAreaTab(wrapper, '坐标')
     const inputs = coordinateInputs(wrapper)
 
     await inputs.longitude.setValue('0x76')
@@ -183,10 +195,11 @@ describe('WorkspaceView coordinate input', () => {
 
   it('disables coordinate changes and guards the handler while analysis is locked', async () => {
     const { wrapper, store } = mountWorkspace()
+    await selectStudyAreaTab(wrapper, '坐标')
     const inputs = coordinateInputs(wrapper)
     await inputs.longitude.setValue('118.9')
     await inputs.latitude.setValue('32.1')
-    const setSourcePoint = vi.spyOn(store, 'setSourcePoint')
+    const setSourceGeometry = vi.spyOn(store, 'setSourceGeometry')
 
     store.polling = true
     await wrapper.vm.$nextTick()
@@ -197,7 +210,7 @@ describe('WorkspaceView coordinate input', () => {
 
     applyButton(wrapper).vm.$emit('click')
     await wrapper.vm.$nextTick()
-    expect(setSourcePoint).not.toHaveBeenCalled()
+    expect(setSourceGeometry).not.toHaveBeenCalled()
   })
 })
 
@@ -212,6 +225,7 @@ describe('WorkspaceView address or POI study point search', () => {
       candidate('poi-1', '南京大学', [118.772, 32.061]),
     ])
     const { wrapper } = mountWorkspace()
+    await selectStudyAreaTab(wrapper, '搜索')
     const input = wrapper.get('input[aria-label="地址或 POI 关键词"]')
 
     await input.setValue(' 南京大学 ')
@@ -233,21 +247,26 @@ describe('WorkspaceView address or POI study point search', () => {
     const selected = candidate('poi-1', '南京大学', [118.772, 32.061])
     mocks.searchAmapStudyPoints.mockResolvedValue([selected])
     const { wrapper, store } = mountWorkspace()
-    const setSourcePoint = vi.spyOn(store, 'setSourcePoint')
+    await selectStudyAreaTab(wrapper, '搜索')
+    const setSourceGeometry = vi.spyOn(store, 'setSourceGeometry')
 
     await wrapper.get('input[aria-label="地址或 POI 关键词"]').setValue('南京大学')
     await studyPointSearchButton(wrapper).trigger('click')
     await flushPromises()
     await wrapper.get('.study-point-result').trigger('click')
 
-    expect(setSourcePoint).toHaveBeenCalledOnce()
-    expect(setSourcePoint).toHaveBeenCalledWith(selected.locationWgs84)
+    expect(setSourceGeometry).toHaveBeenCalledOnce()
+    expect(setSourceGeometry).toHaveBeenCalledWith({
+      type: 'Point',
+      coordinates: selected.locationWgs84,
+    })
     expect(wrapper.get('.study-point-selected').text()).toContain('已选择：南京大学')
   })
 
   it('shows empty and error states for the submitted keyword', async () => {
     mocks.searchAmapStudyPoints.mockResolvedValueOnce([])
     const { wrapper } = mountWorkspace()
+    await selectStudyAreaTab(wrapper, '搜索')
     const input = wrapper.get('input[aria-label="地址或 POI 关键词"]')
 
     await input.setValue('不存在的地点')
@@ -264,6 +283,7 @@ describe('WorkspaceView address or POI study point search', () => {
 
   it('rejects an empty keyword without calling the provider', async () => {
     const { wrapper } = mountWorkspace()
+    await selectStudyAreaTab(wrapper, '搜索')
 
     await studyPointSearchButton(wrapper).trigger('click')
 
@@ -276,6 +296,7 @@ describe('WorkspaceView address or POI study point search', () => {
       candidate('poi-1', '南京大学', [118.772, 32.061]),
     ])
     const { wrapper } = mountWorkspace()
+    await selectStudyAreaTab(wrapper, '搜索')
     const input = wrapper.get('input[aria-label="地址或 POI 关键词"]')
 
     await input.setValue('南京大学')
@@ -299,6 +320,7 @@ describe('WorkspaceView address or POI study point search', () => {
       candidate('poi-1', '南京大学', [118.772, 32.061]),
     ])
     const { wrapper, store } = mountWorkspace()
+    await selectStudyAreaTab(wrapper, '搜索')
 
     await wrapper.get('input[aria-label="地址或 POI 关键词"]').setValue('南京大学')
     await studyPointSearchButton(wrapper).trigger('click')
@@ -306,6 +328,7 @@ describe('WorkspaceView address or POI study point search', () => {
     await wrapper.get('.study-point-result').trigger('click')
     expect(wrapper.get('.study-point-selected').text()).toContain('已选择：南京大学')
 
+    await selectStudyAreaTab(wrapper, '坐标')
     const inputs = coordinateInputs(wrapper)
     await inputs.longitude.setValue('118.9')
     await inputs.latitude.setValue('32.1')
@@ -326,6 +349,7 @@ describe('WorkspaceView address or POI study point search', () => {
       const request = deferred<StudyPointCandidate[]>()
       mocks.searchAmapStudyPoints.mockReturnValueOnce(request.promise)
       const { wrapper } = mountWorkspace()
+      await selectStudyAreaTab(wrapper, '搜索')
       const input = wrapper.get('input[aria-label="地址或 POI 关键词"]')
 
       await input.setValue('旧关键词')
@@ -350,6 +374,7 @@ describe('WorkspaceView address or POI study point search', () => {
       .mockReturnValueOnce(oldRequest.promise)
       .mockReturnValueOnce(newRequest.promise)
     const { wrapper } = mountWorkspace()
+    await selectStudyAreaTab(wrapper, '搜索')
     const input = wrapper.get('input[aria-label="地址或 POI 关键词"]')
 
     await input.setValue('旧关键词')
@@ -372,11 +397,12 @@ describe('WorkspaceView address or POI study point search', () => {
       candidate('poi-1', '南京大学', [118.772, 32.061]),
     ])
     const { wrapper, store } = mountWorkspace()
+    await selectStudyAreaTab(wrapper, '搜索')
     const input = wrapper.get('input[aria-label="地址或 POI 关键词"]')
     await input.setValue('南京大学')
     await studyPointSearchButton(wrapper).trigger('click')
     await flushPromises()
-    const setSourcePoint = vi.spyOn(store, 'setSourcePoint')
+    const setSourceGeometry = vi.spyOn(store, 'setSourceGeometry')
 
     store.polling = true
     await wrapper.vm.$nextTick()
@@ -385,7 +411,7 @@ describe('WorkspaceView address or POI study point search', () => {
     expect(studyPointSearchButton(wrapper).attributes('disabled')).toBeDefined()
     expect(wrapper.get('.study-point-result').attributes('disabled')).toBeDefined()
     await wrapper.get('.study-point-result').trigger('click')
-    expect(setSourcePoint).not.toHaveBeenCalled()
+    expect(setSourceGeometry).not.toHaveBeenCalled()
   })
 })
 
@@ -429,6 +455,8 @@ describe('WorkspaceView online drawing', () => {
 
   it('commits a normalized administrative geometry through the existing store action', async () => {
     const { wrapper, store } = mountWorkspace()
+    await selectStudyAreaTab(wrapper, '行政区')
+    drawingCanvasMocks.cancelDrawing.mockClear()
     store.setSourcePoint([118.9, 32.1])
     store.bufferResult = {
       source: { crs: 'EPSG:4326', geometry_type: 'Point', bounds: [118.9, 32.1, 118.9, 32.1] },
@@ -462,6 +490,7 @@ describe('WorkspaceView online drawing', () => {
 
   it('guards administrative geometry events while analysis is locked', async () => {
     const { wrapper, store } = mountWorkspace()
+    await selectStudyAreaTab(wrapper, '行政区')
     store.setSourcePoint([118.9, 32.1])
     const setSourceGeometry = vi.spyOn(store, 'setSourceGeometry')
     store.polling = true
@@ -480,6 +509,8 @@ describe('WorkspaceView online drawing', () => {
 
   it('commits imported Shapefile geometry through the existing store action', async () => {
     const { wrapper, store } = mountWorkspace()
+    await selectStudyAreaTab(wrapper, '文件')
+    drawingCanvasMocks.cancelDrawing.mockClear()
     store.setSourcePoint([118.9, 32.1])
     store.bufferResult = {
       source: { crs: 'EPSG:4326', geometry_type: 'Point', bounds: [118.9, 32.1, 118.9, 32.1] },
@@ -516,6 +547,7 @@ describe('WorkspaceView online drawing', () => {
 
   it('guards Shapefile geometry events while analysis is locked', async () => {
     const { wrapper, store } = mountWorkspace()
+    await selectStudyAreaTab(wrapper, '文件')
     store.setSourcePoint([118.9, 32.1])
     const setSourceGeometry = vi.spyOn(store, 'setSourceGeometry')
     store.polling = true
@@ -532,7 +564,7 @@ describe('WorkspaceView online drawing', () => {
     expect(store.sourceGeometryWgs84).toEqual({ type: 'Point', coordinates: [118.9, 32.1] })
   })
 
-  it('shows the active mode and cancels without changing committed source state', async () => {
+  it('cancels drawing on tab switch without changing committed source state', async () => {
     const { wrapper, store } = mountWorkspace()
     store.setSourceGeometry({
       type: 'LineString',
@@ -553,11 +585,7 @@ describe('WorkspaceView online drawing', () => {
     await wrapper.vm.$nextTick()
     expect(wrapper.text()).toContain('多边形绘制中')
 
-    const cancelButton = wrapper
-      .findAllComponents(ElButton)
-      .find((button) => button.text().trim() === '取消绘制')
-    if (!cancelButton) throw new Error('missing cancel drawing button')
-    await cancelButton.trigger('click')
+    await selectStudyAreaTab(wrapper, '坐标')
 
     expect(drawingCanvasMocks.cancelDrawing).toHaveBeenCalledOnce()
     expect(store.sourceGeometryWgs84).toEqual(committed)
