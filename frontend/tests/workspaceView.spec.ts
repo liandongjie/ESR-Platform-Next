@@ -1,4 +1,4 @@
-import ElementPlus, { ElButton, ElInputNumber } from 'element-plus'
+import ElementPlus, { ElButton, ElInputNumber, ElMessageBox } from 'element-plus'
 import { createPinia, setActivePinia } from 'pinia'
 import { flushPromises, mount } from '@vue/test-utils'
 import { defineComponent, h } from 'vue'
@@ -9,10 +9,13 @@ import ShapefileInput from '@/components/map/ShapefileInput.vue'
 import AnalysisPanel from '@/components/workspace/AnalysisPanel.vue'
 import BufferPanel from '@/components/workspace/BufferPanel.vue'
 import RiskAnalysisPanel from '@/components/workspace/RiskAnalysisPanel.vue'
+import StudyAreaCoordinateInput from '@/components/workspace/StudyAreaCoordinateInput.vue'
 import StudyAreaPanel from '@/components/workspace/StudyAreaPanel.vue'
+import StudyAreaSearchInput from '@/components/workspace/StudyAreaSearchInput.vue'
 import RiskResultPanel from '@/components/risk-analysis/RiskResultPanel.vue'
 import WorkspaceResultDrawer from '@/components/workspace/WorkspaceResultDrawer.vue'
 import { useAnalysisStore } from '@/stores/analysis'
+import type { AnalysisAreaBufferResponse } from '@/types/analysisArea'
 import type { StudyPointCandidate } from '@/types/poi'
 import WorkspaceView from '@/views/WorkspaceView.vue'
 
@@ -89,6 +92,7 @@ async function selectWorkflowStep(
 beforeEach(() => {
   drawingCanvasMocks.startDrawing.mockReset()
   drawingCanvasMocks.cancelDrawing.mockReset()
+  vi.spyOn(ElMessageBox, 'confirm').mockReset().mockResolvedValue({} as never)
 })
 
 function coordinateInputs(wrapper: ReturnType<typeof mountWorkspace>['wrapper']) {
@@ -134,6 +138,33 @@ function deferred<T>() {
     reject = rejectPromise
   })
   return { promise, resolve, reject }
+}
+
+function bufferResult(distanceM = 3000): AnalysisAreaBufferResponse {
+  return {
+    source: {
+      crs: 'EPSG:4326' as const,
+      geometry_type: 'Point' as const,
+      bounds: [118.9, 32.1, 118.9, 32.1] as [number, number, number, number],
+    },
+    buffer: {
+      crs: 'EPSG:4326' as const,
+      distance_m: distanceM,
+      working_crs: 'EPSG:32650',
+      area_m2: 28_228_936.4,
+      area_km2: 28.2289364,
+      bounds: [118.86, 32.07, 118.94, 32.13] as [number, number, number, number],
+      geometry: {
+        type: 'Polygon' as const,
+        coordinates: [[
+          [118.86, 32.1],
+          [118.9, 32.13],
+          [118.94, 32.1],
+          [118.86, 32.1],
+        ]],
+      },
+    },
+  }
 }
 
 describe('WorkspaceView coordinate input', () => {
@@ -275,7 +306,7 @@ describe('WorkspaceView address or POI study point search', () => {
       type: 'Point',
       coordinates: selected.locationWgs84,
     })
-    expect(wrapper.get('.study-point-selected').text()).toContain('已选择：南京大学')
+    expect(wrapper.findAll('.workspace-workflow li')[1]?.attributes('data-state')).toBe('active')
   })
 
   it('shows empty and error states for the submitted keyword', async () => {
@@ -306,7 +337,7 @@ describe('WorkspaceView address or POI study point search', () => {
     expect(wrapper.get('.study-point-search-error').text()).toContain('请输入地址或 POI 关键词')
   })
 
-  it('clears candidates but preserves the selected name when the keyword draft changes', async () => {
+  it('auto-forwards after selecting a search candidate', async () => {
     mocks.searchAmapStudyPoints.mockResolvedValue([
       candidate('poi-1', '南京大学', [118.772, 32.061]),
     ])
@@ -319,18 +350,10 @@ describe('WorkspaceView address or POI study point search', () => {
     await flushPromises()
     expect(wrapper.find('.study-point-result').exists()).toBe(true)
     await wrapper.get('.study-point-result').trigger('click')
-    expect(wrapper.get('.study-point-selected').text()).toContain('已选择：南京大学')
-
-    await input.setValue('南京大学仙林校区')
-    expect(wrapper.find('.study-point-result').exists()).toBe(false)
-    expect(wrapper.get('.study-point-selected').text()).toContain('已选择：南京大学')
-
-    await studyPointSearchButton(wrapper).trigger('click')
-    await flushPromises()
-    expect(wrapper.get('.study-point-selected').text()).toContain('已选择：南京大学')
+    expect(wrapper.findAll('.workspace-workflow li')[1]?.attributes('data-state')).toBe('active')
   })
 
-  it('clears the selected search name when coordinate input changes the study point', async () => {
+  it('can return and replace a selected search point from coordinate input', async () => {
     mocks.searchAmapStudyPoints.mockResolvedValue([
       candidate('poi-1', '南京大学', [118.772, 32.061]),
     ])
@@ -341,8 +364,8 @@ describe('WorkspaceView address or POI study point search', () => {
     await studyPointSearchButton(wrapper).trigger('click')
     await flushPromises()
     await wrapper.get('.study-point-result').trigger('click')
-    expect(wrapper.get('.study-point-selected').text()).toContain('已选择：南京大学')
 
+    await selectWorkflowStep(wrapper, '研究区')
     await selectStudyAreaTab(wrapper, '坐标')
     const inputs = coordinateInputs(wrapper)
     await inputs.longitude.setValue('118.9')
@@ -350,7 +373,7 @@ describe('WorkspaceView address or POI study point search', () => {
     await applyButton(wrapper).trigger('click')
 
     expect(store.sourceGeometryWgs84?.coordinates).toEqual([118.9, 32.1])
-    expect(wrapper.find('.study-point-selected').exists()).toBe(false)
+    expect(wrapper.findAll('.workspace-workflow li')[1]?.attributes('data-state')).toBe('active')
   })
 
   it('ignores stale success, error, and empty responses after the keyword changes', async () => {
@@ -465,7 +488,61 @@ describe('WorkspaceView online drawing', () => {
 
     expect(setSourceGeometry).toHaveBeenCalledWith(geometry)
     expect(store.sourceGeometryWgs84).toEqual(geometry)
+    expect(ElMessageBox.confirm).not.toHaveBeenCalled()
+    expect(wrapper.findAll('.workspace-workflow li')[1]?.attributes('data-state')).toBe('active')
     wrapper.unmount()
+  })
+
+  it.each([
+    ['map point', null, 'point'],
+    ['map draw', null, 'draw'],
+    ['coordinate', '坐标', StudyAreaCoordinateInput],
+    ['search', '搜索', StudyAreaSearchInput],
+    ['administrative', '行政区', AdministrativeRegionInput],
+    ['file', '文件', ShapefileInput],
+  ] as const)('protects the %s Source entry with the shared destructive gate', async (_name, tab, entry) => {
+    const { wrapper, store } = mountWorkspace()
+    store.setSourcePoint([118.9, 32.1])
+    store.bufferResult = bufferResult()
+    store.poiHasSearched = true
+    store.taskError = '已有风险上下文'
+    await wrapper.vm.$nextTick()
+    const committed = {
+      source: store.sourceGeometryWgs84,
+      buffer: store.bufferResult,
+      poiHasSearched: store.poiHasSearched,
+      taskError: store.taskError,
+      weights: store.weights,
+    }
+    const setSourcePoint = vi.spyOn(store, 'setSourcePoint')
+    const setSourceGeometry = vi.spyOn(store, 'setSourceGeometry')
+    vi.mocked(ElMessageBox.confirm).mockRejectedValueOnce('cancel')
+
+    if (entry === 'point') {
+      wrapper.findComponent(MapCanvasStub).vm.$emit('select-point', [120, 30])
+    } else if (entry === 'draw') {
+      wrapper.findComponent(MapCanvasStub).vm.$emit('select-geometry', {
+        type: 'Point',
+        coordinates: [120, 30],
+      })
+    } else {
+      await selectStudyAreaTab(wrapper, tab as string)
+      wrapper.findComponent(entry).vm.$emit('confirm', { type: 'Point', coordinates: [120, 30] })
+    }
+    await flushPromises()
+
+    expect(ElMessageBox.confirm).toHaveBeenCalledOnce()
+    expect(setSourcePoint).not.toHaveBeenCalled()
+    expect(setSourceGeometry).not.toHaveBeenCalled()
+    expect(store.sourceGeometryWgs84).toBe(committed.source)
+    expect(store.bufferResult).toBe(committed.buffer)
+    expect(store.poiHasSearched).toBe(committed.poiHasSearched)
+    expect(store.taskError).toBe(committed.taskError)
+    expect(store.weights).toBe(committed.weights)
+    expect(wrapper.findAll('.workspace-workflow li')[0]?.attributes('data-state')).toBe('active')
+    if (entry === 'point' || entry === 'draw') {
+      expect(drawingCanvasMocks.cancelDrawing).toHaveBeenCalledOnce()
+    }
   })
 
   it('commits a normalized administrative geometry through the existing store action', async () => {
@@ -495,7 +572,7 @@ describe('WorkspaceView online drawing', () => {
     }
 
     wrapper.findComponent(AdministrativeRegionInput).vm.$emit('confirm', normalized)
-    await wrapper.vm.$nextTick()
+    await flushPromises()
 
     expect(setSourceGeometry).toHaveBeenCalledWith(normalized)
     expect(store.sourceGeometryWgs84).toEqual(normalized)
@@ -552,7 +629,7 @@ describe('WorkspaceView online drawing', () => {
     }
 
     wrapper.findComponent(ShapefileInput).vm.$emit('confirm', imported)
-    await wrapper.vm.$nextTick()
+    await flushPromises()
 
     expect(setSourceGeometry).toHaveBeenCalledWith(imported)
     expect(store.sourceGeometryWgs84).toEqual(imported)
@@ -622,7 +699,84 @@ describe('WorkspaceView online drawing', () => {
     expect(drawingCanvasMocks.cancelDrawing).toHaveBeenCalledOnce()
     expect(clearSelection).toHaveBeenCalledOnce()
     expect(store.sourceGeometryWgs84).toBeNull()
+    expect(ElMessageBox.confirm).not.toHaveBeenCalled()
+    expect(wrapper.findAll('.workspace-workflow li')[0]?.attributes('data-state')).toBe('active')
     wrapper.unmount()
+  })
+
+  it('keeps all committed state and local drafts when destructive Source clear is canceled', async () => {
+    const { wrapper, store } = mountWorkspace()
+    store.setSourcePoint([118.9, 32.1])
+    store.bufferResult = bufferResult()
+    store.poiHasSearched = true
+    store.poiItems = [{
+      id: 'poi-1', name: '学校', type: '', typeCode: '', address: '', locationWgs84: [118.81, 32.02],
+    }]
+    store.taskError = '已有风险上下文'
+    await wrapper.vm.$nextTick()
+    await selectWorkflowStep(wrapper, '分析')
+    const analysisPanel = wrapper.findComponent(AnalysisPanel)
+    const poiDraft = analysisPanel.get('input[aria-label="POI 关键词"]')
+    await poiDraft.setValue('医院')
+    await analysisPanel.findAll('button.analysis-tab').find((item) => item.text() === '风险')!.trigger('click')
+    const riskDraft = analysisPanel.findComponent(RiskAnalysisPanel).findAllComponents(ElInputNumber)[0]!
+    riskDraft.vm.$emit('update:modelValue', 35)
+    await wrapper.vm.$nextTick()
+    await selectWorkflowStep(wrapper, '研究区')
+    const committed = {
+      source: store.sourceGeometryWgs84,
+      buffer: store.bufferResult,
+      poiItems: store.poiItems,
+      taskError: store.taskError,
+      weights: store.weights,
+    }
+    const clearSelection = vi.spyOn(store, 'clearSelection')
+    vi.mocked(ElMessageBox.confirm).mockRejectedValueOnce('cancel')
+    const clearButton = wrapper.findAllComponents(ElButton).find(
+      (button) => button.text().trim() === '清除研究区',
+    )!
+
+    await clearButton.trigger('click')
+    await flushPromises()
+
+    expect(clearSelection).not.toHaveBeenCalled()
+    expect(store.sourceGeometryWgs84).toBe(committed.source)
+    expect(store.bufferResult).toBe(committed.buffer)
+    expect(store.poiItems).toBe(committed.poiItems)
+    expect(store.taskError).toBe(committed.taskError)
+    expect(store.weights).toBe(committed.weights)
+    expect(wrapper.findAll('.workspace-workflow li')[0]?.attributes('data-state')).toBe('active')
+    await selectWorkflowStep(wrapper, '分析')
+    expect((poiDraft.element as HTMLInputElement).value).toBe('医院')
+    expect(riskDraft.props('modelValue')).toBe(35)
+  })
+
+  it('continues through existing invalidation after destructive Source clear is confirmed', async () => {
+    const { wrapper, store } = mountWorkspace()
+    store.setSourcePoint([118.9, 32.1])
+    store.bufferResult = bufferResult()
+    store.poiHasSearched = true
+    store.taskError = '已有风险上下文'
+    await wrapper.vm.$nextTick()
+    const clearSelection = vi.spyOn(store, 'clearSelection')
+    const clearButton = wrapper.findAllComponents(ElButton).find(
+      (button) => button.text().trim() === '清除研究区',
+    )!
+
+    await clearButton.trigger('click')
+    await flushPromises()
+
+    expect(ElMessageBox.confirm).toHaveBeenCalledWith(
+      expect.stringContaining('清除研究区'),
+      '确认清除研究区',
+      expect.any(Object),
+    )
+    expect(clearSelection).toHaveBeenCalledOnce()
+    expect(store.sourceGeometryWgs84).toBeNull()
+    expect(store.bufferResult).toBeNull()
+    expect(store.poiHasSearched).toBe(false)
+    expect(store.taskError).toBeNull()
+    expect(wrapper.findAll('.workspace-workflow li')[0]?.attributes('data-state')).toBe('active')
   })
 
   it('renders LineString, Polygon hole, and MultiPolygon source summaries', async () => {
@@ -760,25 +914,7 @@ describe('WorkspaceView buffer panel wiring', () => {
 
   function prepareBuffer(store: ReturnType<typeof useAnalysisStore>) {
     store.setSourcePoint([118.9, 32.1])
-    store.bufferResult = {
-      source: {
-        crs: 'EPSG:4326',
-        geometry_type: 'Point',
-        bounds: [118.9, 32.1, 118.9, 32.1],
-      },
-      buffer: {
-        crs: 'EPSG:4326',
-        distance_m: 3000,
-        working_crs: 'EPSG:32650',
-        area_m2: 28_228_936.4,
-        area_km2: 28.2289364,
-        bounds: [118.86, 32.07, 118.94, 32.13],
-        geometry: {
-          type: 'Polygon',
-          coordinates: [[[118.86, 32.1], [118.9, 32.13], [118.94, 32.1], [118.86, 32.1]]],
-        },
-      },
-    }
+    store.bufferResult = bufferResult()
   }
 
   it('commits the generated distance before using the existing createBuffer action', async () => {
@@ -800,6 +936,137 @@ describe('WorkspaceView buffer panel wiring', () => {
     expect(setBufferDistance).toHaveBeenCalledWith(5000)
     expect(createBuffer).toHaveBeenCalledOnce()
     expect(calls).toEqual(['set:5000', 'create'])
+  })
+
+  it('does not confirm for an old Buffer alone and forwards only after the current request commits', async () => {
+    const { wrapper, store } = mountWorkspace()
+    prepareBuffer(store)
+    await wrapper.vm.$nextTick()
+    await selectWorkflowStep(wrapper, '缓冲区')
+    const request = deferred<void>()
+    vi.spyOn(store, 'createBuffer').mockImplementation(async () => {
+      const revision = ++store.bufferRequestRevision
+      store.bufferResult = null
+      store.bufferError = null
+      store.bufferLoading = true
+      await request.promise
+      if (revision !== store.bufferRequestRevision) return
+      store.bufferResult = bufferResult(store.bufferDistanceMeters)
+      store.bufferLoading = false
+    })
+
+    wrapper.findComponent(BufferPanel).vm.$emit('generate', 5000)
+    await wrapper.vm.$nextTick()
+
+    expect(ElMessageBox.confirm).not.toHaveBeenCalled()
+    expect(wrapper.findAll('.workspace-workflow li')[1]?.attributes('data-state')).toBe('active')
+
+    request.resolve()
+    await flushPromises()
+
+    expect(store.bufferResult?.buffer.distance_m).toBe(5000)
+    expect(wrapper.findAll('.workspace-workflow li')[2]?.attributes('data-state')).toBe('active')
+  })
+
+  it('keeps the old step when a new Buffer request fails after an old Buffer existed', async () => {
+    const { wrapper, store } = mountWorkspace()
+    prepareBuffer(store)
+    await wrapper.vm.$nextTick()
+    await selectWorkflowStep(wrapper, '缓冲区')
+    vi.spyOn(store, 'createBuffer').mockImplementation(async () => {
+      store.bufferRequestRevision += 1
+      store.bufferResult = null
+      store.bufferLoading = true
+      store.bufferError = null
+      await Promise.resolve()
+      store.bufferLoading = false
+      store.bufferError = '生成缓冲区失败'
+    })
+
+    wrapper.findComponent(BufferPanel).vm.$emit('generate', 5000)
+    await flushPromises()
+
+    expect(store.bufferResult).toBeNull()
+    expect(store.bufferError).toBe('生成缓冲区失败')
+    expect(wrapper.findAll('.workspace-workflow li')[1]?.attributes('data-state')).toBe('active')
+  })
+
+  it('does not forward for a stale Buffer completion and forwards for the latest committed Buffer', async () => {
+    const { wrapper, store } = mountWorkspace()
+    prepareBuffer(store)
+    await wrapper.vm.$nextTick()
+    await selectWorkflowStep(wrapper, '缓冲区')
+    const requests: Array<ReturnType<typeof deferred<void>>> = []
+    vi.spyOn(store, 'createBuffer').mockImplementation(async () => {
+      const revision = ++store.bufferRequestRevision
+      const distance = store.bufferDistanceMeters
+      const request = deferred<void>()
+      requests.push(request)
+      store.bufferResult = null
+      store.bufferLoading = true
+      store.bufferError = null
+      await request.promise
+      if (revision !== store.bufferRequestRevision) return
+      store.bufferResult = bufferResult(distance)
+      store.bufferLoading = false
+    })
+
+    wrapper.findComponent(BufferPanel).vm.$emit('generate', 4000)
+    await wrapper.vm.$nextTick()
+    wrapper.findComponent(BufferPanel).vm.$emit('generate', 5000)
+    await wrapper.vm.$nextTick()
+
+    requests[0]!.resolve()
+    await flushPromises()
+    expect(store.bufferResult).toBeNull()
+    expect(wrapper.findAll('.workspace-workflow li')[1]?.attributes('data-state')).toBe('active')
+
+    requests[1]!.resolve()
+    await flushPromises()
+    expect(store.bufferResult?.buffer.distance_m).toBe(5000)
+    expect(wrapper.findAll('.workspace-workflow li')[2]?.attributes('data-state')).toBe('active')
+  })
+
+  it('cancels or confirms destructive Buffer regeneration before any Store mutation', async () => {
+    const { wrapper, store } = mountWorkspace()
+    prepareBuffer(store)
+    store.poiHasSearched = true
+    store.taskError = '已有风险上下文'
+    await wrapper.vm.$nextTick()
+    await selectWorkflowStep(wrapper, '缓冲区')
+    const committed = {
+      distance: store.bufferDistanceMeters,
+      buffer: store.bufferResult,
+      poiHasSearched: store.poiHasSearched,
+      taskError: store.taskError,
+    }
+    const setBufferDistance = vi.spyOn(store, 'setBufferDistance')
+    const createBuffer = vi.spyOn(store, 'createBuffer').mockImplementation(async () => {
+      store.bufferRequestRevision += 1
+      store.bufferResult = bufferResult(store.bufferDistanceMeters)
+      store.bufferError = null
+      store.bufferLoading = false
+    })
+    vi.mocked(ElMessageBox.confirm).mockRejectedValueOnce('cancel')
+
+    wrapper.findComponent(BufferPanel).vm.$emit('generate', 5000)
+    await flushPromises()
+
+    expect(setBufferDistance).not.toHaveBeenCalled()
+    expect(createBuffer).not.toHaveBeenCalled()
+    expect(store.bufferDistanceMeters).toBe(committed.distance)
+    expect(store.bufferResult).toBe(committed.buffer)
+    expect(store.poiHasSearched).toBe(committed.poiHasSearched)
+    expect(store.taskError).toBe(committed.taskError)
+    expect(wrapper.findAll('.workspace-workflow li')[1]?.attributes('data-state')).toBe('active')
+
+    wrapper.findComponent(BufferPanel).vm.$emit('generate', 5000)
+    await flushPromises()
+
+    expect(ElMessageBox.confirm).toHaveBeenCalledTimes(2)
+    expect(setBufferDistance).toHaveBeenCalledWith(5000)
+    expect(createBuffer).toHaveBeenCalledOnce()
+    expect(wrapper.findAll('.workspace-workflow li')[2]?.attributes('data-state')).toBe('active')
   })
 
   it('preserves an unsubmitted Buffer draft across workflow navigation', async () => {

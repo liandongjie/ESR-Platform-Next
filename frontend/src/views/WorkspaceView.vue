@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { ElMessageBox } from 'element-plus'
 import { computed, onMounted, ref } from 'vue'
 
 import WorkspaceWorkflowNavigator from '@/components/workspace/WorkspaceWorkflowNavigator.vue'
@@ -32,6 +33,8 @@ const activeAnalysisTab = ref<'poi' | 'risk'>('poi')
 type ResultDrawerType = 'poi' | 'risk'
 const resultDrawerOpen = ref(false)
 const resultDrawerType = ref<ResultDrawerType | null>(null)
+let sourceMutationRevision = 0
+let bufferMutationRevision = 0
 
 const maxBufferMeters = computed(() => systemStore.capabilities?.limits.max_buffer_meters)
 const bufferGeometry = computed(
@@ -60,6 +63,9 @@ const riskHasTaskOrResult = computed(
 )
 const poiHasResult = computed(() => analysisStore.poiHasSearched)
 const resultAvailable = computed(() => poiHasResult.value || riskHasTaskOrResult.value)
+const hasSourceDownstream = computed(
+  () => !!analysisStore.bufferResult || resultAvailable.value,
+)
 const availableWorkflowSteps = computed<WorkflowStep[]>(() => {
   const available: WorkflowStep[] = [1]
   if (analysisStore.sourceGeometryWgs84) available.push(2)
@@ -82,24 +88,70 @@ const mapSelectionDisabled = computed(
     activeStudyAreaMethod.value !== 'draw',
 )
 
+async function confirmDestructiveMutation(message: string, title: string): Promise<boolean> {
+  try {
+    await ElMessageBox.confirm(message, title, {
+      type: 'warning',
+      confirmButtonText: '继续',
+      cancelButtonText: '取消',
+    })
+    return true
+  } catch {
+    return false
+  }
+}
+
+async function commitSourceMutation(
+  mutate: () => void,
+  kind: 'replace' | 'clear',
+  cancelDrawCandidateOnCancel = false,
+) {
+  if (activeWorkflowStep.value !== 1 || analysisStore.analysisLocked) return
+  const revision = ++sourceMutationRevision
+
+  if (hasSourceDownstream.value) {
+    const confirmed = await confirmDestructiveMutation(
+      kind === 'clear'
+        ? '清除研究区将同时清除已有缓冲区及后续分析状态。'
+        : '修改研究区将同时清除已有缓冲区及后续分析状态。',
+      kind === 'clear' ? '确认清除研究区' : '确认修改研究区',
+    )
+    if (
+      revision !== sourceMutationRevision ||
+      activeWorkflowStep.value !== 1 ||
+      analysisStore.analysisLocked
+    ) {
+      return
+    }
+    if (!confirmed) {
+      if (cancelDrawCandidateOnCancel) mapCanvasRef.value?.cancelDrawing()
+      return
+    }
+  }
+
+  mutate()
+  drawingError.value = null
+  if (kind === 'clear') {
+    mapCanvasRef.value?.cancelDrawing()
+    return
+  }
+  if (activeStudyAreaMethod.value !== 'draw') mapCanvasRef.value?.cancelDrawing()
+  selectWorkflowStep(2)
+}
+
 function handlePointSelected(coordinates: Coordinate) {
   if (mapSelectionDisabled.value) return
-  mapCanvasRef.value?.cancelDrawing()
-  analysisStore.setSourcePoint(coordinates)
-  drawingError.value = null
+  void commitSourceMutation(() => analysisStore.setSourcePoint(coordinates), 'replace', true)
 }
 
 function handleGeometrySelected(geometry: SourceGeometry) {
   if (mapSelectionDisabled.value) return
-  analysisStore.setSourceGeometry(geometry)
-  drawingError.value = null
+  void commitSourceMutation(() => analysisStore.setSourceGeometry(geometry), 'replace', true)
 }
 
 function handleConfirmedGeometrySelected(geometry: SourceGeometry) {
   if (activeWorkflowStep.value !== 1 || analysisStore.analysisLocked) return
-  mapCanvasRef.value?.cancelDrawing()
-  analysisStore.setSourceGeometry(geometry)
-  drawingError.value = null
+  void commitSourceMutation(() => analysisStore.setSourceGeometry(geometry), 'replace')
 }
 
 function handleDrawingModeChange(mode: DrawingMode | null) {
@@ -123,15 +175,41 @@ function cancelDrawing() {
 
 function clearStudyArea() {
   if (analysisStore.analysisLocked) return
-  mapCanvasRef.value?.cancelDrawing()
-  analysisStore.clearSelection()
-  drawingError.value = null
+  void commitSourceMutation(() => analysisStore.clearSelection(), 'clear')
 }
 
-function createBuffer(distance: number) {
-  if (analysisStore.analysisLocked) return
+async function createBuffer(distance: number) {
+  if (analysisStore.analysisLocked || activeWorkflowStep.value !== 2) return
+  const intentRevision = ++bufferMutationRevision
+  if (resultAvailable.value) {
+    const confirmed = await confirmDestructiveMutation(
+      '重新生成缓冲区将清除已有 POI 查询和风险分析状态。',
+      '确认重新生成缓冲区',
+    )
+    if (
+      !confirmed ||
+      intentRevision !== bufferMutationRevision ||
+      activeWorkflowStep.value !== 2 ||
+      analysisStore.analysisLocked
+    ) {
+      return
+    }
+  }
+
   analysisStore.setBufferDistance(distance)
-  void analysisStore.createBuffer()
+  const request = analysisStore.createBuffer()
+  const storeRequestRevision = analysisStore.bufferRequestRevision
+  await request
+  if (
+    intentRevision === bufferMutationRevision &&
+    activeWorkflowStep.value === 2 &&
+    analysisStore.bufferRequestRevision === storeRequestRevision &&
+    !analysisStore.bufferLoading &&
+    !analysisStore.bufferError &&
+    analysisStore.bufferResult
+  ) {
+    selectWorkflowStep(3)
+  }
 }
 
 function submitRiskAnalysis(weights: RiskIndicatorWeightInput[]) {
