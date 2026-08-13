@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 
-import StatusCard from '@/components/common/StatusCard.vue'
+import WorkspaceWorkflowNavigator from '@/components/workspace/WorkspaceWorkflowNavigator.vue'
 import AdministrativeRegionInput from '@/components/map/AdministrativeRegionInput.vue'
 import MapCanvas from '@/components/map/MapCanvas.vue'
 import ShapefileInput from '@/components/map/ShapefileInput.vue'
@@ -41,16 +41,6 @@ const drawingModes: Array<{ mode: DrawingMode; label: string }> = [
   { mode: 'rectangle', label: '矩形' },
   { mode: 'polygon', label: '多边形' },
 ]
-
-const backendText = computed(() => {
-  if (systemStore.loading) return '检查中'
-  return systemStore.backendOnline ? '在线' : '未连接'
-})
-
-const resultRetentionText = computed(() => {
-  const hours = systemStore.capabilities?.result_ttl_hours
-  return hours ? `${hours} 小时` : '读取中'
-})
 
 const maxBufferMeters = computed(() => systemStore.capabilities?.limits.max_buffer_meters)
 const bufferDistance = computed({
@@ -142,9 +132,9 @@ const progressPercentage = computed(() => {
   if (progress === null || progress === undefined) return 0
   return Math.max(0, Math.min(100, progress))
 })
-const activeWorkflowStep = computed(() => {
-  if (analysisStore.result) return 5
-  if (analysisStore.job) return 4
+const activeWorkflowStep = computed<1 | 2 | 3 | 4>(() => {
+  if (analysisStore.result) return 4
+  if (analysisStore.job) return 3
   if (!analysisStore.sourceGeometryWgs84) return 1
   if (!analysisStore.bufferResult) return 2
   return 3
@@ -316,71 +306,30 @@ onMounted(() => {
 
 <template>
   <div class="workspace-page">
-    <section class="page-heading">
-      <div>
-        <p class="eyebrow">ANALYSIS WORKSPACE</p>
-        <h1>环境社会风险分析工作台</h1>
-        <p>选择研究点、生成米制缓冲区，并提交真实栅格风险分析任务。</p>
-      </div>
-      <el-button type="primary" :loading="systemStore.loading" @click="systemStore.load">
-        检查服务
-      </el-button>
-    </section>
-
-    <section class="status-grid">
-      <StatusCard label="后端服务" :value="backendText" hint="Flask / API v1" />
-      <StatusCard label="内部坐标系" value="EPSG:4326" hint="地图展示适配 GCJ-02" />
-      <StatusCard label="结果保留" :value="resultRetentionText" hint="以后端 capabilities 为准" />
-      <StatusCard label="项目阶段" value="Phase 2C" hint="前端风险分析最小闭环" />
-    </section>
-
-    <section class="workspace-grid phase2c-workspace-grid">
-      <aside class="workflow-panel panel-card">
-        <div class="panel-heading">
-          <div>
-            <p class="eyebrow">WORKFLOW</p>
-            <h2>分析流程</h2>
-          </div>
+    <section class="workspace-header panel-card">
+      <div class="workspace-title">
+        <div>
+          <p class="eyebrow">ANALYSIS WORKSPACE</p>
+          <h1>环境社会风险分析工作台</h1>
         </div>
-        <ol class="workflow-list">
-          <li :class="{ active: activeWorkflowStep === 1 }">
-            <span>01</span>
-            <div>
-              <strong>选择研究区</strong>
-              <small>支持绘制、坐标、地点或行政区输入</small>
-            </div>
-          </li>
-          <li :class="{ active: activeWorkflowStep === 2 }">
-            <span>02</span>
-            <div>
-              <strong>设置缓冲区</strong>
-              <small>{{ bufferLimitText }}</small>
-            </div>
-          </li>
-          <li :class="{ active: activeWorkflowStep === 3 }">
-            <span>03</span>
-            <div>
-              <strong>配置风险指标</strong>
-              <small>PM25 / AQI / NDVI 权重合计 100%</small>
-            </div>
-          </li>
-          <li :class="{ active: activeWorkflowStep === 4 }">
-            <span>04</span>
-            <div>
-              <strong>提交异步任务</strong>
-              <small>轮询 Celery Job，终态自动停止</small>
-            </div>
-          </li>
-          <li :class="{ active: activeWorkflowStep === 5 }">
-            <span>05</span>
-            <div>
-              <strong>查看分析结果</strong>
-              <small>展示有效像元和真实风险统计</small>
-            </div>
-          </li>
-        </ol>
-      </aside>
+        <div class="workspace-status">
+          <span class="service-indicator">
+            <span class="status-dot" :class="{ online: systemStore.backendOnline }" />
+            {{
+              systemStore.loading ? '检查中' : systemStore.backendOnline ? '服务在线' : '服务未连接'
+            }}
+          </span>
+          <span class="crs-chip">EPSG:4326</span>
+          <el-button size="small" :loading="systemStore.loading" @click="systemStore.load">
+            检查服务
+          </el-button>
+        </div>
+      </div>
+    </section>
 
+    <WorkspaceWorkflowNavigator :active-step="activeWorkflowStep" />
+
+    <section class="workspace-main">
       <MapCanvas
         ref="mapCanvasRef"
         :source-geometry="analysisStore.sourceGeometryWgs84"
@@ -394,7 +343,7 @@ onMounted(() => {
         @drawing-error="handleDrawingError"
       />
 
-      <aside class="result-panel panel-card phase2c-result-panel">
+      <aside class="result-panel panel-card phase2c-result-panel workspace-context-panel">
         <div class="panel-heading">
           <div>
             <p class="eyebrow">ANALYSIS CONTROL</p>
@@ -567,9 +516,7 @@ onMounted(() => {
 
         <el-alert
           v-if="
-            analysisStore.job &&
-              !analysisStore.sourceGeometryWgs84 &&
-              analysisStore.submissionError
+            analysisStore.job && !analysisStore.sourceGeometryWgs84 && analysisStore.submissionError
           "
           :title="analysisStore.submissionError"
           type="warning"
@@ -735,11 +682,7 @@ onMounted(() => {
             :closable="false"
             show-icon
           />
-          <el-button
-            v-if="analysisStore.canResumePolling"
-            plain
-            @click="resumeRiskAnalysisPolling"
-          >
+          <el-button v-if="analysisStore.canResumePolling" plain @click="resumeRiskAnalysisPolling">
             重新查询当前任务
           </el-button>
         </section>
@@ -785,8 +728,8 @@ onMounted(() => {
           <div class="task-meta">
             <span>Grid</span>
             <strong>
-              {{ analysisStore.result.grid.shape[0] }} ×
-              {{ analysisStore.result.grid.shape[1] }} · {{ analysisStore.result.grid.crs }}
+              {{ analysisStore.result.grid.shape[0] }} × {{ analysisStore.result.grid.shape[1] }} ·
+              {{ analysisStore.result.grid.crs }}
             </strong>
           </div>
 
@@ -815,8 +758,76 @@ onMounted(() => {
 </template>
 
 <style scoped>
-.phase2c-workspace-grid {
-  grid-template-columns: 250px minmax(500px, 1fr) 340px;
+.workspace-page {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  overflow: hidden;
+}
+
+.workspace-header {
+  flex: none;
+  padding: 10px 14px;
+  box-shadow: 0 6px 20px rgba(43, 73, 121, 0.05);
+}
+
+.workspace-title,
+.workspace-status {
+  display: flex;
+  align-items: center;
+}
+
+.workspace-title {
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.workspace-title h1 {
+  margin: 3px 0 0;
+  font-size: 18px;
+  letter-spacing: -0.01em;
+}
+
+.workspace-status {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.service-indicator,
+.crs-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 28px;
+  padding: 0 9px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: #f8faff;
+  color: #60708d;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.workspace-main {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 360px;
+  gap: 14px;
+}
+
+.workspace-main :deep(.map-card) {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+}
+
+.workspace-context-panel {
+  height: 100%;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .phase2c-result-panel {
@@ -1031,8 +1042,17 @@ onMounted(() => {
 }
 
 @media (max-width: 1200px) {
-  .phase2c-workspace-grid {
-    grid-template-columns: 220px minmax(440px, 1fr) 310px;
+  .workspace-page {
+    gap: 10px;
+  }
+
+  .workspace-header {
+    padding: 9px 12px;
+  }
+
+  .workspace-main {
+    grid-template-columns: minmax(0, 1fr) 330px;
+    gap: 12px;
   }
 }
 </style>

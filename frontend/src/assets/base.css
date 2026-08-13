@@ -22,13 +22,14 @@
 html,
 body,
 #app {
-  min-width: 1180px;
+  min-width: 1024px;
   min-height: 100%;
   margin: 0;
 }
 
 body {
   min-height: 100vh;
+  overflow: hidden;
   background: #f4f7fb;
 }
 
@@ -40,18 +41,18 @@ select {
 }
 
 .app-shell {
-  min-height: 100vh;
+  height: 100vh;
+  overflow: hidden;
 }
 
 .topbar {
-  position: sticky;
-  top: 0;
+  position: relative;
   z-index: 30;
-  height: 68px;
+  height: 56px;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 28px;
+  padding: 0 20px;
   background: rgba(255, 255, 255, 0.96);
   border-bottom: 1px solid var(--border);
   backdrop-filter: blur(12px);
@@ -65,11 +66,11 @@ select {
 }
 
 .brand-mark {
-  width: 40px;
-  height: 40px;
+  width: 36px;
+  height: 36px;
   display: grid;
   place-items: center;
-  border-radius: 12px;
+  border-radius: 10px;
   color: #fff;
   background: linear-gradient(145deg, #3370ff, #69a1ff);
   font-size: 13px;
@@ -83,47 +84,40 @@ select {
   font-weight: 700;
 }
 
-.brand-subtitle {
-  margin-top: 2px;
-  color: var(--muted);
-  font-size: 11px;
-  letter-spacing: 0.06em;
-}
-
-.stage-badge {
-  padding: 6px 10px;
-  border: 1px solid #cfe0ff;
-  border-radius: 999px;
-  color: #285fc9;
-  background: #f3f7ff;
-  font-size: 12px;
-}
-
 .body-shell {
   display: flex;
-  min-height: calc(100vh - 68px);
+  height: calc(100vh - 56px);
+  min-height: 0;
 }
 
 .sidebar {
-  position: sticky;
-  top: 68px;
-  width: 196px;
-  height: calc(100vh - 68px);
-  padding: 20px 14px;
+  flex: 0 0 88px;
+  width: 88px;
+  height: 100%;
+  padding: 14px 10px;
   background: #fff;
   border-right: 1px solid var(--border);
 }
 
 .nav-item {
   display: flex;
+  flex-direction: column;
   align-items: center;
-  gap: 10px;
+  justify-content: center;
+  gap: 5px;
+  min-height: 58px;
   margin-bottom: 6px;
-  padding: 11px 13px;
+  padding: 9px 6px;
   color: #58657d;
   border-radius: 10px;
+  text-align: center;
   text-decoration: none;
-  font-size: 14px;
+  font-size: 11px;
+  line-height: 1.25;
+}
+
+.nav-item .el-icon {
+  font-size: 18px;
 }
 
 .nav-item:hover,
@@ -132,28 +126,21 @@ select {
   background: var(--primary-soft);
 }
 
-.sidebar-note {
-  position: absolute;
-  right: 14px;
-  bottom: 18px;
-  left: 14px;
-  display: flex;
-  gap: 8px;
-  padding: 12px;
-  color: #68758d;
-  background: #f6f8fc;
-  border-radius: 10px;
-  font-size: 12px;
-  line-height: 1.55;
-}
-
 .main-content {
   flex: 1;
   min-width: 0;
-  padding: 26px;
+  height: 100%;
+  padding: 18px;
+  overflow: auto;
 }
 
-.workspace-page,
+.workspace-page {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  margin: 0;
+}
+
 .tasks-page {
   max-width: 1640px;
   margin: 0 auto;
