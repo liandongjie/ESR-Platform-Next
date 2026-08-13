@@ -18,8 +18,9 @@ const createObjectURL = vi.fn<(blob: Blob) => string>(() => 'blob:poi-csv')
 const revokeObjectURL = vi.fn()
 const anchorClick = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
 
-function mountPanel() {
+function mountPanel(disabled = false) {
   return mount(PoiSearchPanel, {
+    props: { disabled },
     global: {
       plugins: [createPinia()],
       components: { ElAlert, ElButton, ElEmpty, ElInput, ElPagination, ElTag },
@@ -93,13 +94,97 @@ describe('PoiSearchPanel', () => {
   it('submits the first page from Enter', async () => {
     const wrapper = mountPanel()
     const store = useAnalysisStore()
-    const search = vi.spyOn(store, 'searchPois').mockResolvedValue()
+    const calls: string[] = []
+    const commitKeyword = store.setPoiKeyword.bind(store)
+    vi.spyOn(store, 'setPoiKeyword').mockImplementation((keyword) => {
+      calls.push(`set:${keyword}`)
+      commitKeyword(keyword)
+    })
+    const search = vi.spyOn(store, 'searchPois').mockImplementation(async (page) => {
+      calls.push(`search:${page}`)
+    })
 
     await wrapper.get('input').setValue('学校')
     await wrapper.get('input').trigger('keyup.enter')
 
     expect(store.poiKeyword).toBe('学校')
     expect(search).toHaveBeenCalledWith(1)
+    expect(calls).toEqual(['set:学校', 'search:1'])
+  })
+
+  it('synchronizes an external committed keyword into the draft', async () => {
+    const wrapper = mountPanel()
+    const store = useAnalysisStore()
+
+    store.setPoiKeyword('医院')
+    await wrapper.vm.$nextTick()
+
+    expect((wrapper.get('input').element as HTMLInputElement).value).toBe('医院')
+  })
+
+  it('keeps keyword edits local without clearing committed results', async () => {
+    const wrapper = mountPanel()
+    const store = useAnalysisStore()
+    populatePoiResult(store)
+    await wrapper.vm.$nextTick()
+    const committedItems = store.poiItems
+    const setKeyword = vi.spyOn(store, 'setPoiKeyword')
+    const search = vi.spyOn(store, 'searchPois').mockResolvedValue()
+
+    await wrapper.get('input').setValue('医院')
+
+    expect(setKeyword).not.toHaveBeenCalled()
+    expect(search).not.toHaveBeenCalled()
+    expect(store.poiKeyword).toBe('学校')
+    expect(store.poiItems).toBe(committedItems)
+    expect(wrapper.text()).toContain('学校')
+  })
+
+  it('keeps pagination and export bound to the committed query while draft differs', async () => {
+    const wrapper = mountPanel()
+    const store = useAnalysisStore()
+    populatePoiResult(store)
+    store.poiTotal = 20
+    await wrapper.vm.$nextTick()
+    const setKeyword = vi.spyOn(store, 'setPoiKeyword')
+    const changePage = vi.spyOn(store, 'changePoiPage').mockResolvedValue()
+    const prepareExport = vi
+      .spyOn(store, 'prepareCurrentPagePoiExport')
+      .mockReturnValue(exportData('current-page'))
+    await wrapper.get('input').setValue('医院')
+    wrapper.getComponent(ElPagination).vm.$emit('current-change', 2)
+    await wrapper.vm.$nextTick()
+    await exportButton(wrapper, '导出当前页').trigger('click')
+
+    expect(store.poiKeyword).toBe('学校')
+    expect(setKeyword).not.toHaveBeenCalled()
+    expect(changePage).toHaveBeenCalledWith(2)
+    expect(prepareExport).toHaveBeenCalledOnce()
+  })
+
+  it('locks new query mutation while keeping committed pagination and export available', async () => {
+    const wrapper = mountPanel(true)
+    const store = useAnalysisStore()
+    populatePoiResult(store)
+    store.poiTotal = 20
+    await wrapper.vm.$nextTick()
+    const setKeyword = vi.spyOn(store, 'setPoiKeyword')
+    const search = vi.spyOn(store, 'searchPois').mockResolvedValue()
+    const changePage = vi.spyOn(store, 'changePoiPage').mockResolvedValue()
+    vi.spyOn(store, 'prepareCurrentPagePoiExport').mockReturnValue(exportData('current-page'))
+    expect(wrapper.get('input').attributes('disabled')).toBeDefined()
+    const query = wrapper.findAllComponents(ElButton).find((item) => item.text() === '查询')
+    if (!query) throw new Error('missing query button')
+    expect(query.attributes('disabled')).toBeDefined()
+    query.vm.$emit('click')
+    wrapper.getComponent(ElPagination).vm.$emit('current-change', 2)
+    await wrapper.vm.$nextTick()
+    await exportButton(wrapper, '导出当前页').trigger('click')
+
+    expect(setKeyword).not.toHaveBeenCalled()
+    expect(search).not.toHaveBeenCalled()
+    expect(changePage).toHaveBeenCalledWith(2)
+    expect(anchorClick).toHaveBeenCalledOnce()
   })
 
   it('renders total, current results, and a page-count capped at 100', async () => {

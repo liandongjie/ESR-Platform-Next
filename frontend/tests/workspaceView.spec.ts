@@ -1,4 +1,4 @@
-import ElementPlus, { ElButton } from 'element-plus'
+import ElementPlus, { ElButton, ElInputNumber } from 'element-plus'
 import { createPinia, setActivePinia } from 'pinia'
 import { flushPromises, mount } from '@vue/test-utils'
 import { defineComponent, h } from 'vue'
@@ -6,7 +6,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import AdministrativeRegionInput from '@/components/map/AdministrativeRegionInput.vue'
 import ShapefileInput from '@/components/map/ShapefileInput.vue'
+import AnalysisPanel from '@/components/workspace/AnalysisPanel.vue'
 import BufferPanel from '@/components/workspace/BufferPanel.vue'
+import RiskAnalysisPanel from '@/components/workspace/RiskAnalysisPanel.vue'
 import { useAnalysisStore } from '@/stores/analysis'
 import type { StudyPointCandidate } from '@/types/poi'
 import WorkspaceView from '@/views/WorkspaceView.vue'
@@ -832,5 +834,126 @@ describe('WorkspaceView buffer panel wiring', () => {
     expect(store.bufferResult).toBe(committedBuffer)
     expect(store.poiItems).toBe(committedPoiItems)
     expect(store.result).toBe(committedRisk)
+  })
+})
+
+describe('WorkspaceView analysis panel wiring', () => {
+  beforeEach(() => {
+    window.sessionStorage.clear()
+  })
+
+  function prepareAnalysis(store: ReturnType<typeof useAnalysisStore>) {
+    store.setSourcePoint([118.9, 32.1])
+    store.bufferResult = {
+      source: {
+        crs: 'EPSG:4326',
+        geometry_type: 'Point',
+        bounds: [118.9, 32.1, 118.9, 32.1],
+      },
+      buffer: {
+        crs: 'EPSG:4326',
+        distance_m: 3000,
+        working_crs: 'EPSG:32650',
+        area_m2: 28_228_936.4,
+        area_km2: 28.2289364,
+        bounds: [118.86, 32.07, 118.94, 32.13],
+        geometry: {
+          type: 'Polygon',
+          coordinates: [[[118.86, 32.1], [118.9, 32.13], [118.94, 32.1], [118.86, 32.1]]],
+        },
+      },
+    }
+  }
+
+  function setRiskResult(store: ReturnType<typeof useAnalysisStore>) {
+    store.result = {
+      schema_version: 1,
+      task_id: 'task-1',
+      status: 'SUCCEEDED',
+      algorithm_version: 'v1',
+      geometry: { type: 'Polygon', bounds: [118.86, 32.07, 118.94, 32.13] },
+      grid: { crs: 'EPSG:4326', shape: [6, 8], nodata: -9999 },
+      statistics: { valid_pixel_count: 28, minimum: 0.36, maximum: 0.41, mean: 0.38 },
+      indicators: [],
+      artifacts: {
+        raster: 'risk-analysis/task-1/risk.tif',
+        manifest: 'risk-analysis/task-1/result.json',
+      },
+    }
+  }
+
+  it('commits all Risk weights before using the existing submit action', async () => {
+    const { wrapper, store } = mountWorkspace()
+    prepareAnalysis(store)
+    await wrapper.vm.$nextTick()
+    const calls: string[] = []
+    const setWeight = vi.spyOn(store, 'setWeight').mockImplementation((code, value) => {
+      calls.push(`set:${code}:${value}`)
+    })
+    const submit = vi.spyOn(store, 'submitRiskAnalysis').mockImplementation(async () => {
+      calls.push('submit')
+    })
+    const weights = [
+      { code: 'PM25', weight_percent: 35 },
+      { code: 'AQI', weight_percent: 35 },
+      { code: 'NDVI', weight_percent: 30 },
+    ]
+
+    wrapper.findComponent(AnalysisPanel).vm.$emit('submit-risk', weights)
+    await wrapper.vm.$nextTick()
+
+    expect(setWeight).toHaveBeenCalledTimes(3)
+    expect(submit).toHaveBeenCalledOnce()
+    expect(calls).toEqual(['set:PM25:35', 'set:AQI:35', 'set:NDVI:30', 'submit'])
+  })
+
+  it('does not change committed weights or Risk result while only editing the Risk draft', async () => {
+    const { wrapper, store } = mountWorkspace()
+    prepareAnalysis(store)
+    setRiskResult(store)
+    await wrapper.vm.$nextTick()
+    const committedWeights = store.weights.map((item) => ({ ...item }))
+    const committedResult = store.result
+    const setWeight = vi.spyOn(store, 'setWeight')
+    const submit = vi.spyOn(store, 'submitRiskAnalysis')
+    const analysisPanel = wrapper.findComponent(AnalysisPanel)
+    const riskTab = analysisPanel.findAll('button.analysis-tab').find((item) => item.text() === '风险')
+    if (!riskTab) throw new Error('missing Risk tab')
+    await riskTab.trigger('click')
+
+    analysisPanel
+      .findComponent(RiskAnalysisPanel)
+      .findAllComponents(ElInputNumber)[0]!
+      .vm.$emit('update:modelValue', 35)
+    await wrapper.vm.$nextTick()
+
+    expect(setWeight).not.toHaveBeenCalled()
+    expect(submit).not.toHaveBeenCalled()
+    expect(store.weights).toEqual(committedWeights)
+    expect(store.result).toBe(committedResult)
+  })
+
+  it('keeps Analysis tabs viewable while locked and guards Risk submission', async () => {
+    const { wrapper, store } = mountWorkspace()
+    prepareAnalysis(store)
+    store.polling = true
+    await wrapper.vm.$nextTick()
+    const setWeight = vi.spyOn(store, 'setWeight')
+    const submit = vi.spyOn(store, 'submitRiskAnalysis')
+    const panel = wrapper.findComponent(AnalysisPanel)
+    const riskTab = panel.findAll('button.analysis-tab').find((item) => item.text() === '风险')
+    if (!riskTab) throw new Error('missing Risk tab')
+
+    await riskTab.trigger('click')
+    panel.vm.$emit('submit-risk', [
+      { code: 'PM25', weight_percent: 30 },
+      { code: 'AQI', weight_percent: 40 },
+      { code: 'NDVI', weight_percent: 30 },
+    ])
+    await wrapper.vm.$nextTick()
+
+    expect(panel.props('activeTab')).toBe('risk')
+    expect(setWeight).not.toHaveBeenCalled()
+    expect(submit).not.toHaveBeenCalled()
   })
 })

@@ -3,14 +3,14 @@ import { computed, onMounted, ref } from 'vue'
 
 import WorkspaceWorkflowNavigator from '@/components/workspace/WorkspaceWorkflowNavigator.vue'
 import MapCanvas from '@/components/map/MapCanvas.vue'
-import PoiSearchPanel from '@/components/poi/PoiSearchPanel.vue'
 import RiskAnalysisResultDownloads from '@/components/risk-analysis/RiskAnalysisResultDownloads.vue'
+import AnalysisPanel from '@/components/workspace/AnalysisPanel.vue'
 import BufferPanel from '@/components/workspace/BufferPanel.vue'
 import StudyAreaPanel from '@/components/workspace/StudyAreaPanel.vue'
 import { useAnalysisStore } from '@/stores/analysis'
 import { useSystemStore } from '@/stores/system'
 import type { Coordinate, SourceGeometry } from '@/types/analysisArea'
-import type { RiskJobStatus } from '@/types/riskAnalysis'
+import type { RiskIndicatorWeightInput, RiskJobStatus } from '@/types/riskAnalysis'
 
 const systemStore = useSystemStore()
 const analysisStore = useAnalysisStore()
@@ -22,6 +22,7 @@ interface MapCanvasDrawingApi {
 const mapCanvasRef = ref<MapCanvasDrawingApi | null>(null)
 const activeDrawingMode = ref<DrawingMode | null>(null)
 const drawingError = ref<string | null>(null)
+const activeAnalysisTab = ref<'poi' | 'risk'>('poi')
 
 const maxBufferMeters = computed(() => systemStore.capabilities?.limits.max_buffer_meters)
 const bufferGeometry = computed(
@@ -37,17 +38,6 @@ const recoveryNoticeText = computed(() => {
   if (analysisStore.submissionLoading) return '已恢复当前任务状态，正在读取服务端提交上下文。'
   return '已恢复当前任务状态；原始研究点和缓冲区输入尚未恢复。'
 })
-const weightTotal = computed(() =>
-  analysisStore.weights.reduce((sum, item) => sum + item.weight_percent, 0),
-)
-const weightsValid = computed(
-  () =>
-    Math.abs(weightTotal.value - 100) <= 1e-6 &&
-    analysisStore.weights.some((item) => item.weight_percent > 0),
-)
-const canSubmitRiskAnalysis = computed(
-  () => !!analysisStore.bufferResult && weightsValid.value && !analysisStore.analysisLocked,
-)
 const jobStatusText = computed(() => {
   const status = analysisStore.jobStatus?.status
   if (!status) return '未提交'
@@ -132,13 +122,9 @@ function createBuffer(distance: number) {
   void analysisStore.createBuffer()
 }
 
-function updateWeight(code: string, value: number | undefined) {
-  if (analysisStore.analysisLocked || typeof value !== 'number' || !Number.isFinite(value)) return
-  analysisStore.setWeight(code, value)
-}
-
-function submitRiskAnalysis() {
-  if (!canSubmitRiskAnalysis.value) return
+function submitRiskAnalysis(weights: RiskIndicatorWeightInput[]) {
+  if (analysisStore.analysisLocked || !analysisStore.bufferResult) return
+  weights.forEach((item) => analysisStore.setWeight(item.code, item.weight_percent))
   void analysisStore.submitRiskAnalysis()
 }
 
@@ -274,46 +260,14 @@ onMounted(() => {
           </section>
 
           <section v-if="analysisStore.bufferResult" class="control-section">
-            <PoiSearchPanel />
-          </section>
-
-          <section v-if="analysisStore.bufferResult" class="control-section">
-            <div class="section-title-row">
-              <strong>风险指标</strong>
-              <el-tag :type="weightsValid ? 'success' : 'danger'" effect="plain" size="small">
-                合计 {{ weightTotal }}%
-              </el-tag>
-            </div>
-            <div class="weight-list">
-              <div v-for="item in analysisStore.weights" :key="item.code" class="weight-row">
-                <span>{{ item.code }}</span>
-                <el-input-number
-                  :model-value="item.weight_percent"
-                  :min="0"
-                  :max="100"
-                  :step="5"
-                  :precision="0"
-                  :disabled="analysisStore.analysisLocked"
-                  size="small"
-                  controls-position="right"
-                  @update:model-value="updateWeight(item.code, $event)"
-                />
-              </div>
-            </div>
-            <small class="section-hint">
-              前端只做即时提示；指标合法性和权重规则仍以后端 RiskAnalysisPipeline 为最终校验。
-            </small>
-            <small v-if="analysisStore.analysisLocked" class="section-hint">
-              当前任务仍在服务端执行，研究点、缓冲距离和权重暂时锁定，避免丢失正在运行的任务。
-            </small>
-            <el-button
-              type="primary"
-              :loading="analysisStore.jobSubmitting"
-              :disabled="!canSubmitRiskAnalysis"
-              @click="submitRiskAnalysis"
-            >
-              {{ analysisStore.polling ? '分析进行中' : '开始风险分析' }}
-            </el-button>
+            <AnalysisPanel
+              v-model:active-tab="activeAnalysisTab"
+              :disabled="analysisStore.analysisLocked"
+              :committed-weights="analysisStore.weights"
+              :risk-submitting="analysisStore.jobSubmitting"
+              :risk-polling="analysisStore.polling"
+              @submit-risk="submitRiskAnalysis"
+            />
           </section>
         </template>
 
@@ -550,10 +504,6 @@ onMounted(() => {
 .weight-row > span {
   font-size: 12px;
   font-weight: 700;
-}
-
-.weight-row :deep(.el-input-number) {
-  width: 126px;
 }
 
 .task-meta strong,

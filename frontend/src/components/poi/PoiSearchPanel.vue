@@ -1,17 +1,14 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 
 import { getApiErrorMessage } from '@/api/errors'
 import { createPoiCsvArtifact, type PoiExportData } from '@/export/poiCsv'
 import { useAnalysisStore } from '@/stores/analysis'
 
 const analysisStore = useAnalysisStore()
+const props = defineProps<{ disabled: boolean }>()
 const exportNotice = ref<string | null>(null)
-
-const keyword = computed({
-  get: () => analysisStore.poiKeyword,
-  set: (value: string) => analysisStore.setPoiKeyword(value),
-})
+const keywordDraft = ref(analysisStore.poiKeyword)
 const isComplexResult = computed(() => analysisStore.poiReportedCandidateCount !== null)
 const pageCount = computed(() => {
   const itemCount = isComplexResult.value
@@ -30,7 +27,16 @@ const truncatedMessage = computed(() => {
   return null
 })
 
+watch(
+  () => analysisStore.poiKeyword,
+  (keyword) => {
+    keywordDraft.value = keyword
+  },
+)
+
 function searchFirstPage() {
+  if (props.disabled || analysisStore.poiLoading) return
+  analysisStore.setPoiKeyword(keywordDraft.value)
   void analysisStore.searchPois(1)
 }
 
@@ -102,17 +108,18 @@ async function exportRetrievable() {
 
     <div class="poi-search-row">
       <el-input
-        v-model="keyword"
+        v-model="keywordDraft"
         aria-label="POI 关键词"
         placeholder="例如：学校"
         clearable
+        :disabled="disabled"
         @keyup.enter="searchFirstPage"
       />
       <el-button
         type="primary"
         plain
         :loading="analysisStore.poiLoading"
-        :disabled="!keyword.trim()"
+        :disabled="disabled || analysisStore.poiLoading || !keywordDraft.trim()"
         @click="searchFirstPage"
       >
         查询
