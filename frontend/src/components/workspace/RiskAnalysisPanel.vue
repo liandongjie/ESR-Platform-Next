@@ -8,9 +8,13 @@ const props = defineProps<{
   disabled: boolean
   submitting: boolean
   polling: boolean
+  hasTaskOrResult: boolean
 }>()
 
-const emit = defineEmits<{ submit: [weights: RiskIndicatorWeightInput[]] }>()
+const emit = defineEmits<{
+  submit: [weights: RiskIndicatorWeightInput[]]
+  'open-result': []
+}>()
 
 const weightsDraft = ref(props.committedWeights.map((item) => ({ ...item })))
 
@@ -53,9 +57,14 @@ function submit() {
   <section class="risk-analysis-panel">
     <div class="risk-analysis-heading">
       <strong>风险指标</strong>
-      <el-tag :type="weightsValid ? 'success' : 'danger'" effect="plain" size="small">
-        合计 {{ weightTotal }}%
-      </el-tag>
+      <div class="risk-analysis-heading-actions">
+        <el-button v-if="hasTaskOrResult" type="primary" link @click="$emit('open-result')">
+          查看任务/结果
+        </el-button>
+        <el-tag :type="weightsValid ? 'success' : 'danger'" effect="plain" size="small">
+          合计 {{ weightTotal }}%
+        </el-tag>
+      </div>
     </div>
 
     <div class="risk-weight-list">
@@ -108,6 +117,12 @@ function submit() {
 
 .risk-analysis-heading > strong {
   font-size: 13px;
+}
+
+.risk-analysis-heading-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .risk-weight-row > span {

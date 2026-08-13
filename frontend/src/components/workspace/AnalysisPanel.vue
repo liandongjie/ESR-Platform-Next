@@ -11,6 +11,7 @@ defineProps<{
   committedWeights: RiskIndicatorWeightInput[]
   riskSubmitting: boolean
   riskPolling: boolean
+  riskHasTaskOrResult: boolean
 }>()
 
 defineEmits<{
@@ -18,6 +19,7 @@ defineEmits<{
   'submit-risk': [weights: RiskIndicatorWeightInput[]]
   'poi-query-success': []
   'poi-open-result': []
+  'risk-open-result': []
 }>()
 </script>
 
@@ -62,7 +64,9 @@ defineEmits<{
         :disabled="disabled"
         :submitting="riskSubmitting"
         :polling="riskPolling"
+        :has-task-or-result="riskHasTaskOrResult"
         @submit="$emit('submit-risk', $event)"
+        @open-result="$emit('risk-open-result')"
       />
     </div>
   </section>

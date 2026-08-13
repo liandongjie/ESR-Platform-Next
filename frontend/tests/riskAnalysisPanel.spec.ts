@@ -18,6 +18,7 @@ function mountPanel(overrides: Record<string, unknown> = {}) {
       disabled: false,
       submitting: false,
       polling: false,
+      hasTaskOrResult: false,
       ...overrides,
     },
     global: {
@@ -112,5 +113,20 @@ describe('RiskAnalysisPanel', () => {
   it('keeps the analysis-in-progress label while polling', () => {
     const wrapper = mountPanel({ disabled: true, polling: true })
     expect(submitButton(wrapper).text()).toContain('分析进行中')
+  })
+
+  it('opens existing task or result without submitting the draft even while locked', async () => {
+    const wrapper = mountPanel({ hasTaskOrResult: true, disabled: true })
+    weightInputs(wrapper)[0]!.vm.$emit('update:modelValue', 35)
+    await wrapper.vm.$nextTick()
+    const viewButton = wrapper.findAllComponents(ElButton).find((item) =>
+      item.text().includes('查看任务/结果'),
+    )
+    if (!viewButton) throw new Error('missing view task/result button')
+
+    await viewButton.trigger('click')
+
+    expect(wrapper.emitted('open-result')).toHaveLength(1)
+    expect(wrapper.emitted('submit')).toBeUndefined()
   })
 })

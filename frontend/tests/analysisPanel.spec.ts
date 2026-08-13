@@ -22,6 +22,7 @@ function mountPanel(activeTab: 'poi' | 'risk' = 'poi', disabled = false) {
       ],
       riskSubmitting: false,
       riskPolling: false,
+      riskHasTaskOrResult: false,
     },
     global: { plugins: [pinia, ElementPlus] },
   })
@@ -104,5 +105,15 @@ describe('AnalysisPanel', () => {
     await wrapper.vm.$nextTick()
 
     expect(wrapper.emitted('poi-open-result')).toHaveLength(1)
+  })
+
+  it('forwards the committed Risk task or result open request', async () => {
+    const wrapper = mountPanel('risk')
+
+    wrapper.findComponent(RiskAnalysisPanel).vm.$emit('open-result')
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.emitted('risk-open-result')).toHaveLength(1)
+    expect(wrapper.emitted('submit-risk')).toBeUndefined()
   })
 })

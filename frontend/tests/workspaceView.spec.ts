@@ -9,6 +9,7 @@ import ShapefileInput from '@/components/map/ShapefileInput.vue'
 import AnalysisPanel from '@/components/workspace/AnalysisPanel.vue'
 import BufferPanel from '@/components/workspace/BufferPanel.vue'
 import RiskAnalysisPanel from '@/components/workspace/RiskAnalysisPanel.vue'
+import RiskResultPanel from '@/components/risk-analysis/RiskResultPanel.vue'
 import WorkspaceResultDrawer from '@/components/workspace/WorkspaceResultDrawer.vue'
 import { useAnalysisStore } from '@/stores/analysis'
 import type { StudyPointCandidate } from '@/types/poi'
@@ -906,6 +907,9 @@ describe('WorkspaceView analysis panel wiring', () => {
     expect(setWeight).toHaveBeenCalledTimes(3)
     expect(submit).toHaveBeenCalledOnce()
     expect(calls).toEqual(['set:PM25:35', 'set:AQI:35', 'set:NDVI:30', 'submit'])
+    expect(wrapper.findComponent(WorkspaceResultDrawer).props('open')).toBe(true)
+    expect(wrapper.findComponent(WorkspaceResultDrawer).props('title')).toBe('风险任务 / 结果')
+    expect(wrapper.findComponent(RiskResultPanel).exists()).toBe(true)
   })
 
   it('does not change committed weights or Risk result while only editing the Risk draft', async () => {
@@ -932,6 +936,132 @@ describe('WorkspaceView analysis panel wiring', () => {
     expect(submit).not.toHaveBeenCalled()
     expect(store.weights).toEqual(committedWeights)
     expect(store.result).toBe(committedResult)
+  })
+
+  it('reopens an existing Risk result without implicitly committing the local draft', async () => {
+    const { wrapper, store } = mountWorkspace()
+    prepareAnalysis(store)
+    setRiskResult(store)
+    store.job = { task_id: 'task-1' }
+    await wrapper.vm.$nextTick()
+    const committedWeights = store.weights.map((item) => ({ ...item }))
+    const committedResult = store.result
+    const setWeight = vi.spyOn(store, 'setWeight')
+    const submit = vi.spyOn(store, 'submitRiskAnalysis')
+    const panel = wrapper.findComponent(AnalysisPanel)
+    await panel.findAll('button.analysis-tab').find((item) => item.text() === '风险')!.trigger('click')
+    const riskPanel = panel.findComponent(RiskAnalysisPanel)
+    riskPanel.findAllComponents(ElInputNumber)[0]!.vm.$emit('update:modelValue', 35)
+    await wrapper.vm.$nextTick()
+    const draftValue = riskPanel.findAllComponents(ElInputNumber)[0]!.props('modelValue')
+    const view = riskPanel.findAllComponents(ElButton).find((item) => item.text().includes('查看任务/结果'))
+    if (!view) throw new Error('missing view task/result button')
+
+    await view.trigger('click')
+
+    expect(wrapper.findComponent(WorkspaceResultDrawer).props('open')).toBe(true)
+    expect(wrapper.findComponent(WorkspaceResultDrawer).props('title')).toBe('风险任务 / 结果')
+    expect(setWeight).not.toHaveBeenCalled()
+    expect(submit).not.toHaveBeenCalled()
+    expect(store.weights).toEqual(committedWeights)
+    expect(store.result).toBe(committedResult)
+    expect(riskPanel.findAllComponents(ElInputNumber)[0]!.props('modelValue')).toBe(draftValue)
+  })
+
+  it('keeps a closed running Risk drawer closed when the task reaches success', async () => {
+    const { wrapper, store } = mountWorkspace()
+    prepareAnalysis(store)
+    store.job = { task_id: 'task-1' }
+    store.jobStatus = {
+      task_id: 'task-1', status: 'RUNNING', stage: 'RUNNING', progress: 50,
+      result_available: false, submitted_at: null,
+    }
+    store.polling = true
+    await wrapper.vm.$nextTick()
+    const job = store.job
+    wrapper.findComponent(AnalysisPanel).vm.$emit('risk-open-result')
+    await wrapper.vm.$nextTick()
+    await wrapper.get('button[aria-label="关闭结果抽屉"]').trigger('click')
+
+    expect(wrapper.findComponent(WorkspaceResultDrawer).props('open')).toBe(false)
+    expect(store.job).toBe(job)
+    expect(store.polling).toBe(true)
+
+    store.polling = false
+    store.jobStatus.status = 'SUCCEEDED'
+    store.jobStatus.progress = 100
+    store.jobStatus.result_available = true
+    setRiskResult(store)
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.findComponent(WorkspaceResultDrawer).props('open')).toBe(false)
+    expect(store.job).toBe(job)
+    expect(store.result?.task_id).toBe('task-1')
+  })
+
+  it('keeps a restored Risk task closed and reopens it from the recovery entry without submit', async () => {
+    const { wrapper, store } = mountWorkspace()
+    store.job = { task_id: 'restored-task' }
+    store.jobStatus = {
+      task_id: 'restored-task', status: 'FAILED', stage: 'FAILED', progress: 60,
+      result_available: false, submitted_at: null,
+    }
+    store.taskError = '恢复的任务失败'
+    await wrapper.vm.$nextTick()
+    const submit = vi.spyOn(store, 'submitRiskAnalysis')
+
+    expect(wrapper.findComponent(WorkspaceResultDrawer).props('open')).toBe(false)
+    const view = wrapper.findAllComponents(ElButton).find((item) => item.text().includes('查看任务/结果'))
+    if (!view) throw new Error('missing restored task entry')
+    await view.trigger('click')
+
+    expect(wrapper.findComponent(WorkspaceResultDrawer).props('open')).toBe(true)
+    expect(wrapper.findComponent(WorkspaceResultDrawer).props('title')).toBe('风险任务 / 结果')
+    expect(submit).not.toHaveBeenCalled()
+  })
+
+  it('switches the existing drawer between POI and Risk content', async () => {
+    const { wrapper, store } = mountWorkspace()
+    prepareAnalysis(store)
+    store.poiHasSearched = true
+    store.job = { task_id: 'task-1' }
+    await wrapper.vm.$nextTick()
+    const panel = wrapper.findComponent(AnalysisPanel)
+
+    panel.vm.$emit('poi-open-result')
+    await wrapper.vm.$nextTick()
+    expect(wrapper.findComponent(WorkspaceResultDrawer).props('title')).toBe('POI 结果')
+    panel.vm.$emit('risk-open-result')
+    await wrapper.vm.$nextTick()
+    expect(wrapper.findComponent(WorkspaceResultDrawer).props('title')).toBe('风险任务 / 结果')
+    expect(wrapper.findComponent(RiskResultPanel).exists()).toBe(true)
+  })
+
+  it('does not open the Risk drawer for guarded submit callbacks', async () => {
+    const { wrapper, store } = mountWorkspace()
+    prepareAnalysis(store)
+    store.polling = true
+    await wrapper.vm.$nextTick()
+
+    wrapper.findComponent(AnalysisPanel).vm.$emit('submit-risk', store.weights)
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.findComponent(WorkspaceResultDrawer).props('open')).toBe(false)
+  })
+
+  it('renders Risk task and result only inside the drawer, not in the context panel', async () => {
+    const { wrapper, store } = mountWorkspace()
+    prepareAnalysis(store)
+    store.job = { task_id: 'task-1' }
+    setRiskResult(store)
+    await wrapper.vm.$nextTick()
+    wrapper.findComponent(AnalysisPanel).vm.$emit('risk-open-result')
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.find('.workspace-context-panel').text()).not.toContain('异步任务')
+    expect(wrapper.find('.workspace-context-panel').text()).not.toContain('分析结果')
+    expect(wrapper.findComponent(WorkspaceResultDrawer).text()).toContain('异步任务')
+    expect(wrapper.findComponent(WorkspaceResultDrawer).text()).toContain('分析结果')
   })
 
   it('keeps Analysis tabs viewable while locked and guards Risk submission', async () => {
