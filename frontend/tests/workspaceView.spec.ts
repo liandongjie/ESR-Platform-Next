@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import AdministrativeRegionInput from '@/components/map/AdministrativeRegionInput.vue'
 import ShapefileInput from '@/components/map/ShapefileInput.vue'
+import BufferPanel from '@/components/workspace/BufferPanel.vue'
 import { useAnalysisStore } from '@/stores/analysis'
 import type { StudyPointCandidate } from '@/types/poi'
 import WorkspaceView from '@/views/WorkspaceView.vue'
@@ -735,5 +736,101 @@ describe('WorkspaceView online drawing', () => {
     expect(setSourceGeometry).not.toHaveBeenCalled()
     expect(store.sourceGeometryWgs84).toEqual({ type: 'Point', coordinates: [118.9, 32.1] })
     wrapper.unmount()
+  })
+})
+
+describe('WorkspaceView buffer panel wiring', () => {
+  beforeEach(() => {
+    window.sessionStorage.clear()
+  })
+
+  function prepareBuffer(store: ReturnType<typeof useAnalysisStore>) {
+    store.setSourcePoint([118.9, 32.1])
+    store.bufferResult = {
+      source: {
+        crs: 'EPSG:4326',
+        geometry_type: 'Point',
+        bounds: [118.9, 32.1, 118.9, 32.1],
+      },
+      buffer: {
+        crs: 'EPSG:4326',
+        distance_m: 3000,
+        working_crs: 'EPSG:32650',
+        area_m2: 28_228_936.4,
+        area_km2: 28.2289364,
+        bounds: [118.86, 32.07, 118.94, 32.13],
+        geometry: {
+          type: 'Polygon',
+          coordinates: [[[118.86, 32.1], [118.9, 32.13], [118.94, 32.1], [118.86, 32.1]]],
+        },
+      },
+    }
+  }
+
+  it('commits the generated distance before using the existing createBuffer action', async () => {
+    const { wrapper, store } = mountWorkspace()
+    prepareBuffer(store)
+    await wrapper.vm.$nextTick()
+    const calls: string[] = []
+    const setBufferDistance = vi.spyOn(store, 'setBufferDistance').mockImplementation((distance) => {
+      calls.push(`set:${distance}`)
+    })
+    const createBuffer = vi.spyOn(store, 'createBuffer').mockImplementation(async () => {
+      calls.push('create')
+    })
+
+    wrapper.findComponent(BufferPanel).vm.$emit('generate', 5000)
+    await wrapper.vm.$nextTick()
+
+    expect(setBufferDistance).toHaveBeenCalledWith(5000)
+    expect(createBuffer).toHaveBeenCalledOnce()
+    expect(calls).toEqual(['set:5000', 'create'])
+  })
+
+  it('does not mutate committed Buffer, POI, or Risk state while only editing the draft', async () => {
+    const { wrapper, store } = mountWorkspace()
+    prepareBuffer(store)
+    store.poiItems = [
+      {
+        id: 'poi-1',
+        name: '学校一',
+        type: '',
+        typeCode: '',
+        address: '',
+        locationWgs84: [118.81, 32.02],
+      },
+    ]
+    store.result = {
+      schema_version: 1,
+      task_id: 'task-1',
+      status: 'SUCCEEDED',
+      algorithm_version: 'v1',
+      geometry: { type: 'Polygon', bounds: [118.86, 32.07, 118.94, 32.13] },
+      grid: { crs: 'EPSG:4326', shape: [6, 8], nodata: -9999 },
+      statistics: { valid_pixel_count: 28, minimum: 0.36, maximum: 0.41, mean: 0.38 },
+      indicators: [],
+      artifacts: {
+        raster: 'risk-analysis/task-1/risk.tif',
+        manifest: 'risk-analysis/task-1/result.json',
+      },
+    }
+    await wrapper.vm.$nextTick()
+    const committedDistance = store.bufferDistanceMeters
+    const committedBuffer = store.bufferResult
+    const committedPoiItems = store.poiItems
+    const committedRisk = store.result
+    const setBufferDistance = vi.spyOn(store, 'setBufferDistance')
+    const createBuffer = vi.spyOn(store, 'createBuffer')
+    const bufferPanel = wrapper.findComponent(BufferPanel)
+
+    bufferPanel.findComponent({ name: 'ElInputNumber' }).vm.$emit('update:modelValue', 5000)
+    await wrapper.vm.$nextTick()
+
+    expect(setBufferDistance).not.toHaveBeenCalled()
+    expect(createBuffer).not.toHaveBeenCalled()
+    expect(store.bufferDistanceMeters).toBe(committedDistance)
+    expect(store.bufferResult).toBe(committedBuffer)
+    expect(store.poiItems).toBe(committedPoiItems)
+    expect(store.result).toBe(committedRisk)
   })
 })

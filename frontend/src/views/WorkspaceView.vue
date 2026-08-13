@@ -5,6 +5,7 @@ import WorkspaceWorkflowNavigator from '@/components/workspace/WorkspaceWorkflow
 import MapCanvas from '@/components/map/MapCanvas.vue'
 import PoiSearchPanel from '@/components/poi/PoiSearchPanel.vue'
 import RiskAnalysisResultDownloads from '@/components/risk-analysis/RiskAnalysisResultDownloads.vue'
+import BufferPanel from '@/components/workspace/BufferPanel.vue'
 import StudyAreaPanel from '@/components/workspace/StudyAreaPanel.vue'
 import { useAnalysisStore } from '@/stores/analysis'
 import { useSystemStore } from '@/stores/system'
@@ -23,23 +24,6 @@ const activeDrawingMode = ref<DrawingMode | null>(null)
 const drawingError = ref<string | null>(null)
 
 const maxBufferMeters = computed(() => systemStore.capabilities?.limits.max_buffer_meters)
-const bufferDistance = computed({
-  get: () => analysisStore.bufferDistanceMeters,
-  set: (value: number | undefined) => {
-    if (typeof value === 'number' && Number.isFinite(value)) {
-      analysisStore.setBufferDistance(value)
-    }
-  },
-})
-const bufferDistanceValid = computed(() => {
-  const distance = analysisStore.bufferDistanceMeters
-  if (!Number.isFinite(distance) || distance <= 0) return false
-  return maxBufferMeters.value === undefined || distance <= maxBufferMeters.value
-})
-const bufferLimitText = computed(() => {
-  if (maxBufferMeters.value === undefined) return '上限以服务端校验为准'
-  return `服务端当前上限 ${maxBufferMeters.value.toLocaleString()} 米`
-})
 const bufferGeometry = computed(
   () =>
     analysisStore.bufferResult?.buffer.geometry ??
@@ -142,8 +126,9 @@ function clearStudyArea() {
   drawingError.value = null
 }
 
-function createBuffer() {
-  if (!bufferDistanceValid.value || analysisStore.analysisLocked) return
+function createBuffer(distance: number) {
+  if (analysisStore.analysisLocked) return
+  analysisStore.setBufferDistance(distance)
   void analysisStore.createBuffer()
 }
 
@@ -277,54 +262,15 @@ onMounted(() => {
 
         <template v-if="analysisStore.sourceGeometryWgs84">
           <section class="control-section">
-            <div class="section-title-row">
-              <strong>缓冲区</strong>
-              <small>{{ bufferLimitText }}</small>
-            </div>
-            <el-input-number
-              v-model="bufferDistance"
-              aria-label="缓冲距离"
-              :min="1"
-              :max="maxBufferMeters"
-              :step="100"
-              :precision="0"
+            <BufferPanel
+              :committed-distance="analysisStore.bufferDistanceMeters"
+              :max-distance="maxBufferMeters"
               :disabled="analysisStore.analysisLocked"
-              controls-position="right"
-            />
-            <el-button
-              type="primary"
-              plain
               :loading="analysisStore.bufferLoading"
-              :disabled="!bufferDistanceValid || analysisStore.analysisLocked"
-              @click="createBuffer"
-            >
-              生成缓冲区
-            </el-button>
-
-            <el-alert
-              v-if="analysisStore.bufferError"
-              :title="analysisStore.bufferError"
-              type="error"
-              :closable="false"
-              show-icon
+              :error="analysisStore.bufferError"
+              :result="analysisStore.bufferResult"
+              @generate="createBuffer"
             />
-
-            <div v-if="analysisStore.bufferResult" class="compact-result-grid">
-              <div>
-                <span>面积</span>
-                <strong>{{ analysisStore.bufferResult.buffer.area_km2.toFixed(3) }} km²</strong>
-              </div>
-              <div>
-                <span>实际距离</span>
-                <strong>
-                  {{ analysisStore.bufferResult.buffer.distance_m.toLocaleString() }} m
-                </strong>
-              </div>
-              <div>
-                <span>米制工作 CRS</span>
-                <strong>{{ analysisStore.bufferResult.buffer.working_crs }}</strong>
-              </div>
-            </div>
           </section>
 
           <section v-if="analysisStore.bufferResult" class="control-section">
@@ -563,7 +509,6 @@ onMounted(() => {
 
 .section-title-row small,
 .section-hint,
-.compact-result-grid span,
 .statistics-grid span,
 .task-meta span,
 .indicator-results small,
@@ -584,7 +529,6 @@ onMounted(() => {
 
 .section-title-row,
 .weight-row,
-.compact-result-grid > div,
 .task-meta,
 .indicator-results > div {
   display: flex;
@@ -598,7 +542,6 @@ onMounted(() => {
 }
 
 .weight-list,
-.compact-result-grid,
 .indicator-results {
   display: grid;
   gap: 9px;
@@ -613,13 +556,6 @@ onMounted(() => {
   width: 126px;
 }
 
-.compact-result-grid {
-  padding: 11px;
-  border-radius: 9px;
-  background: #f6f8fc;
-}
-
-.compact-result-grid strong,
 .task-meta strong,
 .indicator-results > div > span {
   font-size: 12px;
