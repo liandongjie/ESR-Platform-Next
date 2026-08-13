@@ -1,4 +1,4 @@
-import ElementPlus, { ElButton, ElInputNumber, ElMessageBox } from 'element-plus'
+import ElementPlus, { ElButton, ElInputNumber, ElMessage, ElMessageBox } from 'element-plus'
 import { createPinia, setActivePinia } from 'pinia'
 import { flushPromises, mount } from '@vue/test-utils'
 import { defineComponent, h } from 'vue'
@@ -17,6 +17,7 @@ import WorkspaceResultDrawer from '@/components/workspace/WorkspaceResultDrawer.
 import { useAnalysisStore } from '@/stores/analysis'
 import type { AnalysisAreaBufferResponse } from '@/types/analysisArea'
 import type { StudyPointCandidate } from '@/types/poi'
+import type { RiskJobStatus } from '@/types/riskAnalysis'
 import WorkspaceView from '@/views/WorkspaceView.vue'
 
 const mocks = vi.hoisted(() => ({
@@ -53,9 +54,14 @@ vi.mock('@/api/system', () => ({
   }),
 }))
 
-function mountWorkspace() {
-  const pinia = createPinia()
+function mountWorkspace(
+  prepareStore?: (store: ReturnType<typeof useAnalysisStore>) => void,
+  pinia = createPinia(),
+) {
   setActivePinia(pinia)
+  const store = useAnalysisStore()
+  if (prepareStore) prepareStore(store)
+  else vi.spyOn(store, 'restoreRiskAnalysis').mockImplementation(() => new Promise(() => undefined))
   const wrapper = mount(WorkspaceView, {
     global: {
       plugins: [pinia, ElementPlus],
@@ -68,7 +74,7 @@ function mountWorkspace() {
       },
     },
   })
-  return { wrapper, store: useAnalysisStore() }
+  return { wrapper, store, pinia }
 }
 
 async function selectStudyAreaTab(
@@ -93,6 +99,8 @@ beforeEach(() => {
   drawingCanvasMocks.startDrawing.mockReset()
   drawingCanvasMocks.cancelDrawing.mockReset()
   vi.spyOn(ElMessageBox, 'confirm').mockReset().mockResolvedValue({} as never)
+  vi.spyOn(ElMessage, 'success').mockReset().mockReturnValue({ close: vi.fn() } as never)
+  vi.spyOn(ElMessage, 'error').mockReset().mockReturnValue({ close: vi.fn() } as never)
 })
 
 function coordinateInputs(wrapper: ReturnType<typeof mountWorkspace>['wrapper']) {
@@ -165,6 +173,26 @@ function bufferResult(distanceM = 3000): AnalysisAreaBufferResponse {
       },
     },
   }
+}
+
+function setRiskJobStatus(
+  store: ReturnType<typeof useAnalysisStore>,
+  status: RiskJobStatus,
+  taskId = 'task-1',
+) {
+  store.job = { task_id: taskId }
+  store.jobStatus = {
+    task_id: taskId,
+    status,
+    stage: status,
+    progress: status === 'SUCCEEDED' ? 100 : 50,
+    result_available: status === 'SUCCEEDED',
+    submitted_at: null,
+  }
+}
+
+function activeWorkflowLabel(wrapper: ReturnType<typeof mountWorkspace>['wrapper']) {
+  return wrapper.get('.workspace-workflow li[data-state="active"] .step-label').text()
 }
 
 describe('WorkspaceView coordinate input', () => {
@@ -1706,5 +1734,207 @@ describe('WorkspaceView analysis panel wiring', () => {
     expect(store.job).toBe(state.job)
     expect(store.result).toBe(state.result)
     expect(store.weights).toBe(state.weights)
+  })
+})
+
+describe('WorkspaceView recovery and background Risk completion', () => {
+  beforeEach(() => {
+    window.sessionStorage.clear()
+  })
+
+  it('derives the initial step once from restored Source and Buffer prerequisites', async () => {
+    const scenarios: Array<{
+      name: string
+      expected: string
+      prepare: (store: ReturnType<typeof useAnalysisStore>) => void
+    }> = [
+      { name: 'empty', expected: '研究区', prepare: () => undefined },
+      {
+        name: 'Source',
+        expected: '缓冲区',
+        prepare: (store) => store.setSourcePoint([118.9, 32.1]),
+      },
+      {
+        name: 'Buffer',
+        expected: '分析',
+        prepare: (store) => {
+          store.setSourcePoint([118.9, 32.1])
+          store.bufferResult = bufferResult()
+        },
+      },
+    ]
+
+    for (const scenario of scenarios) {
+      const { wrapper, store } = mountWorkspace((candidate) => {
+        scenario.prepare(candidate)
+        vi.spyOn(candidate, 'restoreRiskAnalysis').mockResolvedValue(undefined)
+      })
+      await flushPromises()
+
+      expect(activeWorkflowLabel(wrapper), scenario.name).toBe(scenario.expected)
+      store.bufferResult = bufferResult()
+      await wrapper.vm.$nextTick()
+      expect(activeWorkflowLabel(wrapper), `${scenario.name} once-only`).toBe(scenario.expected)
+      wrapper.unmount()
+    }
+  })
+
+  it('does not skip prerequisites for restored Risk tasks and keeps their viewing entries available', async () => {
+    const withSource = mountWorkspace((store) => {
+      store.setSourcePoint([118.9, 32.1])
+      setRiskJobStatus(store, 'FAILED', 'risk-with-source')
+      vi.spyOn(store, 'restoreRiskAnalysis').mockResolvedValue(undefined)
+    })
+    await flushPromises()
+
+    expect(activeWorkflowLabel(withSource.wrapper)).toBe('缓冲区')
+    await selectWorkflowStep(withSource.wrapper, '结果')
+    expect(withSource.wrapper.findComponent(WorkspaceResultDrawer).props('open')).toBe(true)
+    expect(withSource.wrapper.findComponent(WorkspaceResultDrawer).props('title')).toBe('风险任务 / 结果')
+    withSource.wrapper.unmount()
+
+    const withoutSource = mountWorkspace((store) => {
+      setRiskJobStatus(store, 'FAILED', 'risk-without-source')
+      vi.spyOn(store, 'restoreRiskAnalysis').mockResolvedValue(undefined)
+    })
+    await flushPromises()
+
+    expect(activeWorkflowLabel(withoutSource.wrapper)).toBe('研究区')
+    const recoveryEntry = withoutSource.wrapper
+      .findAllComponents(ElButton)
+      .find((button) => button.text().includes('查看任务/结果'))
+    if (!recoveryEntry) throw new Error('missing restored Risk recovery entry')
+    await recoveryEntry.trigger('click')
+    expect(withoutSource.wrapper.findComponent(WorkspaceResultDrawer).props('open')).toBe(true)
+    withoutSource.wrapper.unmount()
+  })
+
+  it('does not let late recovery override manual or Source-driven workflow navigation', async () => {
+    const manualRecovery = deferred<void>()
+    const manual = mountWorkspace((store) => {
+      store.setSourcePoint([118.9, 32.1])
+      vi.spyOn(store, 'restoreRiskAnalysis').mockImplementation(() => manualRecovery.promise)
+    })
+    await selectWorkflowStep(manual.wrapper, '缓冲区')
+    manual.store.bufferResult = bufferResult()
+    manualRecovery.resolve()
+    await flushPromises()
+    expect(activeWorkflowLabel(manual.wrapper)).toBe('缓冲区')
+    manual.wrapper.unmount()
+
+    const sourceRecovery = deferred<void>()
+    const sourceDriven = mountWorkspace((store) => {
+      vi.spyOn(store, 'restoreRiskAnalysis').mockImplementation(() => sourceRecovery.promise)
+    })
+    sourceDriven.wrapper.findComponent(MapCanvasStub).vm.$emit('select-point', [118.9, 32.1])
+    await flushPromises()
+    expect(activeWorkflowLabel(sourceDriven.wrapper)).toBe('缓冲区')
+    sourceDriven.store.bufferResult = bufferResult()
+    sourceRecovery.resolve()
+    await flushPromises()
+    expect(activeWorkflowLabel(sourceDriven.wrapper)).toBe('缓冲区')
+    sourceDriven.wrapper.unmount()
+  })
+
+  it('keeps the active Study method when recovery finishes after foreground interaction', async () => {
+    const restoration = deferred<void>()
+    const { wrapper, store } = mountWorkspace((candidate) => {
+      vi.spyOn(candidate, 'restoreRiskAnalysis').mockImplementation(() => restoration.promise)
+    })
+
+    await selectStudyAreaTab(wrapper, '坐标')
+    store.setSourcePoint([118.9, 32.1])
+    store.bufferResult = bufferResult()
+    restoration.resolve()
+    await flushPromises()
+
+    expect(activeWorkflowLabel(wrapper)).toBe('研究区')
+    expect(wrapper.get('button.study-area-tab.active').text()).toBe('坐标')
+    expect(wrapper.find('input[aria-label="研究点经度"]').exists()).toBe(true)
+  })
+
+  it('keeps the result drawer collapsed after remount with restored state', async () => {
+    const first = mountWorkspace((store) => {
+      store.setSourcePoint([118.9, 32.1])
+      store.bufferResult = bufferResult()
+      setRiskJobStatus(store, 'RUNNING')
+      vi.spyOn(store, 'restoreRiskAnalysis').mockResolvedValue(undefined)
+    })
+    await flushPromises()
+    first.wrapper.findComponent(AnalysisPanel).vm.$emit('risk-open-result')
+    await first.wrapper.vm.$nextTick()
+    expect(first.wrapper.findComponent(WorkspaceResultDrawer).props('open')).toBe(true)
+    first.wrapper.unmount()
+
+    const remounted = mountWorkspace((store) => {
+      vi.spyOn(store, 'restoreRiskAnalysis').mockResolvedValue(undefined)
+    }, first.pinia)
+    await flushPromises()
+    expect(activeWorkflowLabel(remounted.wrapper)).toBe('分析')
+    expect(remounted.wrapper.findComponent(WorkspaceResultDrawer).props('open')).toBe(false)
+    remounted.wrapper.unmount()
+  })
+
+  it.each([
+    ['SUCCEEDED', 'success'],
+    ['FAILED', 'error'],
+  ] as const)('notifies for a background active-to-%s transition without changing the UI', async (status, method) => {
+    const { wrapper, store } = mountWorkspace((candidate) => {
+      candidate.setSourcePoint([118.9, 32.1])
+      candidate.bufferResult = bufferResult()
+      vi.spyOn(candidate, 'restoreRiskAnalysis').mockResolvedValue(undefined)
+    })
+    await flushPromises()
+    const panel = wrapper.findComponent(AnalysisPanel)
+
+    setRiskJobStatus(store, 'RUNNING')
+    await wrapper.vm.$nextTick()
+    setRiskJobStatus(store, status)
+    await wrapper.vm.$nextTick()
+
+    expect(ElMessage[method]).toHaveBeenCalledOnce()
+    expect(activeWorkflowLabel(wrapper)).toBe('分析')
+    expect(panel.props('activeTab')).toBe('poi')
+    expect(wrapper.findComponent(WorkspaceResultDrawer).props('open')).toBe(false)
+    expect(wrapper.findComponent(WorkspaceResultDrawer).props('title')).toBe('POI 结果')
+  })
+
+  it('updates a foreground Risk drawer without a duplicate terminal message', async () => {
+    const { wrapper, store } = mountWorkspace((candidate) => {
+      candidate.setSourcePoint([118.9, 32.1])
+      candidate.bufferResult = bufferResult()
+      vi.spyOn(candidate, 'restoreRiskAnalysis').mockResolvedValue(undefined)
+    })
+    await flushPromises()
+    setRiskJobStatus(store, 'RUNNING')
+    await wrapper.vm.$nextTick()
+    const panel = wrapper.findComponent(AnalysisPanel)
+    const riskTab = panel.findAll('button.analysis-tab').find((button) => button.text() === '风险')
+    if (!riskTab) throw new Error('missing Risk tab')
+    await riskTab.trigger('click')
+    panel.vm.$emit('risk-open-result')
+    await wrapper.vm.$nextTick()
+
+    setRiskJobStatus(store, 'FAILED')
+    await wrapper.vm.$nextTick()
+
+    expect(ElMessage.success).not.toHaveBeenCalled()
+    expect(ElMessage.error).not.toHaveBeenCalled()
+    expect(activeWorkflowLabel(wrapper)).toBe('分析')
+    expect(panel.props('activeTab')).toBe('risk')
+    expect(wrapper.findComponent(WorkspaceResultDrawer).props('open')).toBe(true)
+    expect(wrapper.findComponent(WorkspaceResultDrawer).props('title')).toBe('风险任务 / 结果')
+  })
+
+  it('does not notify for an initially restored terminal task', async () => {
+    const { wrapper } = mountWorkspace((store) => {
+      setRiskJobStatus(store, 'FAILED', 'restored-terminal')
+      vi.spyOn(store, 'restoreRiskAnalysis').mockResolvedValue(undefined)
+    })
+    await flushPromises()
+
+    expect(ElMessage.success).not.toHaveBeenCalled()
+    expect(ElMessage.error).not.toHaveBeenCalled()
+    expect(activeWorkflowLabel(wrapper)).toBe('研究区')
   })
 })

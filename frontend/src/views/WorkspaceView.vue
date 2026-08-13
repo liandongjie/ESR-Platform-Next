@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { ElMessageBox } from 'element-plus'
-import { computed, onMounted, ref } from 'vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { computed, onMounted, ref, watch } from 'vue'
 
 import WorkspaceWorkflowNavigator from '@/components/workspace/WorkspaceWorkflowNavigator.vue'
 import MapCanvas from '@/components/map/MapCanvas.vue'
@@ -35,6 +35,10 @@ const resultDrawerOpen = ref(false)
 const resultDrawerType = ref<ResultDrawerType | null>(null)
 let sourceMutationRevision = 0
 let bufferMutationRevision = 0
+let initialStepDerived = false
+let workflowTakenOver = false
+let riskNotificationsArmed = false
+const activeRiskStatuses = new Set(['QUEUED', 'RUNNING', 'RETRYING'])
 
 const maxBufferMeters = computed(() => systemStore.capabilities?.limits.max_buffer_meters)
 const bufferGeometry = computed(
@@ -107,6 +111,7 @@ async function commitSourceMutation(
   cancelDrawCandidateOnCancel = false,
 ) {
   if (activeWorkflowStep.value !== 1 || analysisStore.analysisLocked) return
+  workflowTakenOver = true
   const revision = ++sourceMutationRevision
 
   if (hasSourceDownstream.value) {
@@ -164,6 +169,7 @@ function handleDrawingError(message: string) {
 
 function startDrawing(mode: DrawingMode) {
   if (mapSelectionDisabled.value) return
+  workflowTakenOver = true
   drawingError.value = null
   mapCanvasRef.value?.startDrawing(mode)
 }
@@ -244,6 +250,7 @@ function openAvailableResult() {
 
 function selectWorkflowStep(step: WorkflowStep) {
   if (!availableWorkflowSteps.value.includes(step)) return
+  workflowTakenOver = true
   if (activeWorkflowStep.value === 1 && step !== 1 && activeStudyAreaMethod.value === 'draw') {
     cancelDrawing()
   }
@@ -253,13 +260,48 @@ function selectWorkflowStep(step: WorkflowStep) {
 }
 
 function handleStudyAreaMethodChange(method: StudyAreaMethod) {
+  if (activeStudyAreaMethod.value === method) return
+  workflowTakenOver = true
   if (activeStudyAreaMethod.value === 'draw' && method !== 'draw') cancelDrawing()
   activeStudyAreaMethod.value = method
 }
 
-onMounted(() => {
+function deriveInitialWorkflowStep() {
+  if (initialStepDerived) return
+  initialStepDerived = true
+  if (workflowTakenOver) return
+
+  if (analysisStore.bufferResult) activeWorkflowStep.value = 3
+  else if (analysisStore.sourceGeometryWgs84) activeWorkflowStep.value = 2
+  else activeWorkflowStep.value = 1
+}
+
+watch(
+  () => [analysisStore.job?.task_id ?? null, analysisStore.jobStatus?.status ?? null] as const,
+  ([taskId, status], [previousTaskId, previousStatus]) => {
+    if (
+      !riskNotificationsArmed ||
+      !taskId ||
+      taskId !== previousTaskId ||
+      !previousStatus ||
+      !status ||
+      !activeRiskStatuses.has(previousStatus) ||
+      (status !== 'SUCCEEDED' && status !== 'FAILED')
+    ) {
+      return
+    }
+    if (resultDrawerOpen.value && resultDrawerType.value === 'risk') return
+
+    if (status === 'SUCCEEDED') ElMessage.success('风险分析已完成，可在结果中查看')
+    else ElMessage.error('风险分析失败，可查看任务详情')
+  },
+)
+
+onMounted(async () => {
   void systemStore.load()
-  void analysisStore.restoreRiskAnalysis()
+  await analysisStore.restoreRiskAnalysis()
+  deriveInitialWorkflowStep()
+  riskNotificationsArmed = true
 })
 </script>
 
@@ -500,8 +542,9 @@ onMounted(() => {
   flex: 1;
   min-height: 0;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 360px;
+  grid-template-columns: minmax(0, 1fr) 380px;
   gap: 14px;
+  overflow: hidden;
 }
 
 .workspace-main.is-result-step {
@@ -518,11 +561,14 @@ onMounted(() => {
   position: relative;
   min-width: 0;
   min-height: 0;
+  overflow: hidden;
 }
 
 .workspace-context-panel {
+  min-width: 0;
   height: 100%;
   min-height: 0;
+  overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior: contain;
 }
@@ -591,8 +637,24 @@ onMounted(() => {
   }
 
   .workspace-main {
-    grid-template-columns: minmax(0, 1fr) 330px;
+    grid-template-columns: minmax(0, 1fr) 340px;
     gap: 12px;
+  }
+}
+
+@media (max-width: 900px) {
+  .workspace-page {
+    gap: 8px;
+  }
+
+  .workspace-main {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(240px, 3fr) minmax(220px, 2fr);
+    gap: 10px;
+  }
+
+  .workspace-main.is-result-step {
+    grid-template-rows: minmax(0, 1fr);
   }
 }
 </style>
