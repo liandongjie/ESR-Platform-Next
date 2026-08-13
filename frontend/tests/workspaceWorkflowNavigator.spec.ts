@@ -4,37 +4,69 @@ import { describe, expect, it } from 'vitest'
 import WorkspaceWorkflowNavigator from '@/components/workspace/WorkspaceWorkflowNavigator.vue'
 
 describe('WorkspaceWorkflowNavigator', () => {
-  it('renders the four Workspace V2 stages', () => {
-    const wrapper = mount(WorkspaceWorkflowNavigator, { props: { activeStep: 1 } })
-
-    expect(wrapper.text()).toContain('研究区')
-    expect(wrapper.text()).toContain('缓冲区')
-    expect(wrapper.text()).toContain('分析')
-    expect(wrapper.text()).toContain('结果')
-    expect(wrapper.findAll('li')).toHaveLength(4)
-  })
-
-  it('marks the current stage without introducing click behavior', () => {
-    const wrapper = mount(WorkspaceWorkflowNavigator, { props: { activeStep: 3 } })
+  it('renders four controlled workflow buttons with independent states', () => {
+    const wrapper = mount(WorkspaceWorkflowNavigator, {
+      props: {
+        activeStep: 2,
+        availableSteps: [1, 2, 4],
+        completedSteps: [1, 4],
+      },
+    })
     const steps = wrapper.findAll('li')
 
-    expect(steps[0]?.attributes('data-state')).toBe('complete')
-    expect(steps[1]?.attributes('data-state')).toBe('complete')
-    expect(steps[2]?.attributes('data-state')).toBe('active')
-    expect(steps[2]?.attributes('aria-current')).toBe('step')
-    expect(steps[3]?.attributes('data-state')).toBe('pending')
-    expect(wrapper.findAll('button')).toHaveLength(0)
+    expect(wrapper.findAll('button')).toHaveLength(4)
+    expect(wrapper.findAll('.step-label').map((item) => item.text())).toEqual([
+      '研究区',
+      '缓冲区',
+      '分析',
+      '结果',
+    ])
+    expect(steps.map((step) => step.attributes('data-state'))).toEqual([
+      'complete',
+      'active',
+      'unavailable',
+      'complete',
+    ])
+    expect(steps[1]?.attributes('aria-current')).toBe('step')
+    expect(steps[2]?.get('button').attributes('disabled')).toBeDefined()
   })
 
-  it('updates the visual state when the active step changes', async () => {
-    const wrapper = mount(WorkspaceWorkflowNavigator, { props: { activeStep: 2 } })
+  it('emits only available step clicks', async () => {
+    const wrapper = mount(WorkspaceWorkflowNavigator, {
+      props: {
+        activeStep: 1,
+        availableSteps: [1, 2],
+        completedSteps: [1],
+      },
+    })
+    const buttons = wrapper.findAll('button')
 
-    await wrapper.setProps({ activeStep: 4 })
+    await buttons[1]?.trigger('click')
+    await buttons[2]?.trigger('click')
 
-    const steps = wrapper.findAll('li')
-    expect(steps[0]?.attributes('data-state')).toBe('complete')
-    expect(steps[1]?.attributes('data-state')).toBe('complete')
-    expect(steps[2]?.attributes('data-state')).toBe('complete')
-    expect(steps[3]?.attributes('data-state')).toBe('active')
+    expect(wrapper.emitted('select-step')).toEqual([[2]])
+  })
+
+  it('updates visual state only from controlled props', async () => {
+    const wrapper = mount(WorkspaceWorkflowNavigator, {
+      props: {
+        activeStep: 1,
+        availableSteps: [1],
+        completedSteps: [],
+      },
+    })
+
+    await wrapper.setProps({
+      activeStep: 4,
+      availableSteps: [1, 2, 3, 4],
+      completedSteps: [1, 2, 3, 4],
+    })
+
+    expect(wrapper.findAll('li').map((step) => step.attributes('data-state'))).toEqual([
+      'complete',
+      'complete',
+      'complete',
+      'active',
+    ])
   })
 })

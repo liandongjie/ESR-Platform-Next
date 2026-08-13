@@ -9,6 +9,7 @@ import ShapefileInput from '@/components/map/ShapefileInput.vue'
 import AnalysisPanel from '@/components/workspace/AnalysisPanel.vue'
 import BufferPanel from '@/components/workspace/BufferPanel.vue'
 import RiskAnalysisPanel from '@/components/workspace/RiskAnalysisPanel.vue'
+import StudyAreaPanel from '@/components/workspace/StudyAreaPanel.vue'
 import RiskResultPanel from '@/components/risk-analysis/RiskResultPanel.vue'
 import WorkspaceResultDrawer from '@/components/workspace/WorkspaceResultDrawer.vue'
 import { useAnalysisStore } from '@/stores/analysis'
@@ -74,6 +75,15 @@ async function selectStudyAreaTab(
   const tab = wrapper.findAll('button.study-area-tab').find((item) => item.text() === label)
   if (!tab) throw new Error(`missing ${label} study area tab`)
   await tab.trigger('click')
+}
+
+async function selectWorkflowStep(
+  wrapper: ReturnType<typeof mountWorkspace>['wrapper'],
+  label: string,
+) {
+  const step = wrapper.findAll('.workspace-workflow button').find((item) => item.text().includes(label))
+  if (!step) throw new Error(`missing ${label} workflow step`)
+  await step.trigger('click')
 }
 
 beforeEach(() => {
@@ -775,6 +785,7 @@ describe('WorkspaceView buffer panel wiring', () => {
     const { wrapper, store } = mountWorkspace()
     prepareBuffer(store)
     await wrapper.vm.$nextTick()
+    await selectWorkflowStep(wrapper, '缓冲区')
     const calls: string[] = []
     const setBufferDistance = vi.spyOn(store, 'setBufferDistance').mockImplementation((distance) => {
       calls.push(`set:${distance}`)
@@ -791,7 +802,7 @@ describe('WorkspaceView buffer panel wiring', () => {
     expect(calls).toEqual(['set:5000', 'create'])
   })
 
-  it('does not mutate committed Buffer, POI, or Risk state while only editing the draft', async () => {
+  it('preserves an unsubmitted Buffer draft across workflow navigation', async () => {
     const { wrapper, store } = mountWorkspace()
     prepareBuffer(store)
     store.poiItems = [
@@ -819,6 +830,7 @@ describe('WorkspaceView buffer panel wiring', () => {
       },
     }
     await wrapper.vm.$nextTick()
+    await selectWorkflowStep(wrapper, '缓冲区')
     const committedDistance = store.bufferDistanceMeters
     const committedBuffer = store.bufferResult
     const committedPoiItems = store.poiItems
@@ -829,9 +841,12 @@ describe('WorkspaceView buffer panel wiring', () => {
 
     bufferPanel.findComponent({ name: 'ElInputNumber' }).vm.$emit('update:modelValue', 5000)
     await wrapper.vm.$nextTick()
+    await selectWorkflowStep(wrapper, '研究区')
+    await selectWorkflowStep(wrapper, '缓冲区')
 
     expect(setBufferDistance).not.toHaveBeenCalled()
     expect(createBuffer).not.toHaveBeenCalled()
+    expect(bufferPanel.findComponent({ name: 'ElInputNumber' }).props('modelValue')).toBe(5000)
     expect(store.bufferDistanceMeters).toBe(committedDistance)
     expect(store.bufferResult).toBe(committedBuffer)
     expect(store.poiItems).toBe(committedPoiItems)
@@ -888,6 +903,7 @@ describe('WorkspaceView analysis panel wiring', () => {
     const { wrapper, store } = mountWorkspace()
     prepareAnalysis(store)
     await wrapper.vm.$nextTick()
+    await selectWorkflowStep(wrapper, '分析')
     const calls: string[] = []
     const setWeight = vi.spyOn(store, 'setWeight').mockImplementation((code, value) => {
       calls.push(`set:${code}:${value}`)
@@ -917,6 +933,7 @@ describe('WorkspaceView analysis panel wiring', () => {
     prepareAnalysis(store)
     setRiskResult(store)
     await wrapper.vm.$nextTick()
+    await selectWorkflowStep(wrapper, '分析')
     const committedWeights = store.weights.map((item) => ({ ...item }))
     const committedResult = store.result
     const setWeight = vi.spyOn(store, 'setWeight')
@@ -944,6 +961,7 @@ describe('WorkspaceView analysis panel wiring', () => {
     setRiskResult(store)
     store.job = { task_id: 'task-1' }
     await wrapper.vm.$nextTick()
+    await selectWorkflowStep(wrapper, '分析')
     const committedWeights = store.weights.map((item) => ({ ...item }))
     const committedResult = store.result
     const setWeight = vi.spyOn(store, 'setWeight')
@@ -978,6 +996,7 @@ describe('WorkspaceView analysis panel wiring', () => {
     }
     store.polling = true
     await wrapper.vm.$nextTick()
+    await selectWorkflowStep(wrapper, '分析')
     const job = store.job
     wrapper.findComponent(AnalysisPanel).vm.$emit('risk-open-result')
     await wrapper.vm.$nextTick()
@@ -1026,6 +1045,7 @@ describe('WorkspaceView analysis panel wiring', () => {
     store.poiHasSearched = true
     store.job = { task_id: 'task-1' }
     await wrapper.vm.$nextTick()
+    await selectWorkflowStep(wrapper, '分析')
     const panel = wrapper.findComponent(AnalysisPanel)
 
     panel.vm.$emit('poi-open-result')
@@ -1042,6 +1062,7 @@ describe('WorkspaceView analysis panel wiring', () => {
     prepareAnalysis(store)
     store.polling = true
     await wrapper.vm.$nextTick()
+    await selectWorkflowStep(wrapper, '分析')
 
     wrapper.findComponent(AnalysisPanel).vm.$emit('submit-risk', store.weights)
     await wrapper.vm.$nextTick()
@@ -1055,6 +1076,7 @@ describe('WorkspaceView analysis panel wiring', () => {
     store.job = { task_id: 'task-1' }
     setRiskResult(store)
     await wrapper.vm.$nextTick()
+    await selectWorkflowStep(wrapper, '分析')
     wrapper.findComponent(AnalysisPanel).vm.$emit('risk-open-result')
     await wrapper.vm.$nextTick()
 
@@ -1069,6 +1091,7 @@ describe('WorkspaceView analysis panel wiring', () => {
     prepareAnalysis(store)
     store.polling = true
     await wrapper.vm.$nextTick()
+    await selectWorkflowStep(wrapper, '分析')
     const setWeight = vi.spyOn(store, 'setWeight')
     const submit = vi.spyOn(store, 'submitRiskAnalysis')
     const panel = wrapper.findComponent(AnalysisPanel)
@@ -1095,6 +1118,7 @@ describe('WorkspaceView analysis panel wiring', () => {
     store.poiHasSearched = true
     store.poiItems = []
     await wrapper.vm.$nextTick()
+    await selectWorkflowStep(wrapper, '分析')
     const drawer = wrapper.findComponent(WorkspaceResultDrawer)
 
     expect(drawer.props('open')).toBe(false)
@@ -1114,6 +1138,7 @@ describe('WorkspaceView analysis panel wiring', () => {
       id: 'poi-1', name: '学校', type: '', typeCode: '', address: '', locationWgs84: [118.81, 32.02],
     }]
     await wrapper.vm.$nextTick()
+    await selectWorkflowStep(wrapper, '分析')
 
     expect(wrapper.findComponent(WorkspaceResultDrawer).props('open')).toBe(false)
   })
@@ -1128,6 +1153,7 @@ describe('WorkspaceView analysis panel wiring', () => {
       id: 'poi-1', name: '学校', type: '', typeCode: '', address: '', locationWgs84: [118.81, 32.02],
     }]
     await wrapper.vm.$nextTick()
+    await selectWorkflowStep(wrapper, '分析')
     const items = store.poiItems
     const setKeyword = vi.spyOn(store, 'setPoiKeyword')
     const search = vi.spyOn(store, 'searchPois').mockResolvedValue()
@@ -1159,11 +1185,259 @@ describe('WorkspaceView analysis panel wiring', () => {
     store.polling = true
     store.poiHasSearched = true
     await wrapper.vm.$nextTick()
+    await selectWorkflowStep(wrapper, '分析')
 
     wrapper.findComponent(AnalysisPanel).vm.$emit('poi-query-success')
     await wrapper.vm.$nextTick()
     expect(wrapper.findComponent(WorkspaceResultDrawer).props('open')).toBe(true)
     await wrapper.get('button[aria-label="关闭结果抽屉"]').trigger('click')
     expect(wrapper.findComponent(WorkspaceResultDrawer).props('open')).toBe(false)
+  })
+
+  it('derives availability and completion from committed Store state', async () => {
+    const { wrapper, store } = mountWorkspace()
+    const states = () =>
+      wrapper.findAll('.workspace-workflow li').map((step) => step.attributes('data-state'))
+    const buttons = () => wrapper.findAll('.workspace-workflow button')
+
+    expect(states()).toEqual(['active', 'unavailable', 'unavailable', 'unavailable'])
+    store.setSourcePoint([118.9, 32.1])
+    await wrapper.vm.$nextTick()
+    expect(buttons()[1]?.attributes('disabled')).toBeUndefined()
+
+    prepareAnalysis(store)
+    await selectWorkflowStep(wrapper, '缓冲区')
+    expect(states()).toEqual(['complete', 'active', 'pending', 'unavailable'])
+
+    store.job = { task_id: 'task-1' }
+    await wrapper.vm.$nextTick()
+    expect(states()).toEqual(['complete', 'active', 'complete', 'pending'])
+
+    setRiskResult(store)
+    await wrapper.vm.$nextTick()
+    expect(states()).toEqual(['complete', 'active', 'complete', 'complete'])
+  })
+
+  it('renders only the active context and uses map plus drawer for Result', async () => {
+    const { wrapper, store } = mountWorkspace()
+
+    expect(wrapper.get('.study-area-context').attributes('style') ?? '').not.toContain('display: none')
+    expect(wrapper.get('.buffer-context').attributes('style')).toContain('display: none')
+    expect(wrapper.get('.analysis-context').attributes('style')).toContain('display: none')
+
+    store.setSourcePoint([118.9, 32.1])
+    await wrapper.vm.$nextTick()
+    await selectWorkflowStep(wrapper, '缓冲区')
+    expect(wrapper.find('.study-area-context').exists()).toBe(false)
+    expect(wrapper.get('.buffer-context').attributes('style') ?? '').not.toContain('display: none')
+    expect(wrapper.get('.analysis-context').attributes('style')).toContain('display: none')
+
+    prepareAnalysis(store)
+    await wrapper.vm.$nextTick()
+    await selectWorkflowStep(wrapper, '分析')
+    expect(wrapper.find('.study-area-context').exists()).toBe(false)
+    expect(wrapper.get('.buffer-context').attributes('style')).toContain('display: none')
+    expect(wrapper.get('.analysis-context').attributes('style') ?? '').not.toContain('display: none')
+
+    store.poiHasSearched = true
+    await wrapper.vm.$nextTick()
+    await selectWorkflowStep(wrapper, '结果')
+    expect(wrapper.find('.workspace-context-panel').exists()).toBe(true)
+    expect(wrapper.find('.workspace-context-panel').attributes('style')).toContain('display: none')
+    expect(wrapper.findComponent(StudyAreaPanel).exists()).toBe(false)
+    expect(wrapper.findComponent(BufferPanel).exists()).toBe(true)
+    expect(wrapper.findComponent(AnalysisPanel).exists()).toBe(true)
+    expect(wrapper.findComponent(WorkspaceResultDrawer).props('open')).toBe(true)
+    expect(wrapper.findComponent(WorkspaceResultDrawer).props('title')).toBe('POI 结果')
+  })
+
+  it('ignores a late async Study Area confirmation after workflow navigation unmounts it', async () => {
+    const { wrapper, store } = mountWorkspace()
+    store.setSourcePoint([118.9, 32.1])
+    store.bufferResult = {
+      source: { crs: 'EPSG:4326', geometry_type: 'Point', bounds: [118.9, 32.1, 118.9, 32.1] },
+      buffer: {
+        crs: 'EPSG:4326', distance_m: 3000, working_crs: 'EPSG:32650', area_m2: 1,
+        area_km2: 0.000001, bounds: [118.8, 32, 119, 32.2],
+        geometry: { type: 'Polygon', coordinates: [[[118.8, 32], [119, 32], [119, 32.2], [118.8, 32]]] },
+      },
+    }
+    store.poiHasSearched = true
+    store.poiItems = [{
+      id: 'poi-1', name: '学校', type: '', typeCode: '', address: '', locationWgs84: [118.81, 32.02],
+    }]
+    store.job = { task_id: 'task-1' }
+    setRiskResult(store)
+    await wrapper.vm.$nextTick()
+    await selectStudyAreaTab(wrapper, '行政区')
+    const pendingInput = wrapper.findComponent(AdministrativeRegionInput)
+    const state = {
+      source: store.sourceGeometryWgs84,
+      buffer: store.bufferResult,
+      poiItems: store.poiItems,
+      job: store.job,
+      result: store.result,
+    }
+    const setSourceGeometry = vi.spyOn(store, 'setSourceGeometry')
+
+    await selectWorkflowStep(wrapper, '缓冲区')
+    expect(wrapper.findComponent(StudyAreaPanel).exists()).toBe(false)
+    pendingInput.vm.$emit('confirm', { type: 'Point', coordinates: [120, 30] })
+    await wrapper.vm.$nextTick()
+
+    expect(setSourceGeometry).not.toHaveBeenCalled()
+    expect(store.sourceGeometryWgs84).toBe(state.source)
+    expect(store.bufferResult).toBe(state.buffer)
+    expect(store.poiItems).toBe(state.poiItems)
+    expect(store.job).toBe(state.job)
+    expect(store.result).toBe(state.result)
+  })
+
+  it('preserves unsubmitted POI and Risk drafts across Analysis and Result navigation', async () => {
+    const { wrapper, store } = mountWorkspace()
+    prepareAnalysis(store)
+    store.poiHasSearched = true
+    store.job = { task_id: 'task-1' }
+    setRiskResult(store)
+    await wrapper.vm.$nextTick()
+    await selectWorkflowStep(wrapper, '分析')
+    const analysisPanel = wrapper.findComponent(AnalysisPanel)
+    const poiInput = analysisPanel.get('input[aria-label="POI 关键词"]')
+    const actions = [
+      vi.spyOn(store, 'createBuffer'),
+      vi.spyOn(store, 'searchPois'),
+      vi.spyOn(store, 'submitRiskAnalysis'),
+      vi.spyOn(store, 'setPoiKeyword'),
+      vi.spyOn(store, 'setSourceGeometry'),
+      vi.spyOn(store, 'setSourcePoint'),
+      vi.spyOn(store, 'setBufferDistance'),
+      vi.spyOn(store, 'setWeight'),
+      vi.spyOn(store, 'clearSelection'),
+    ]
+    const committedWeights = store.weights.map((item) => ({ ...item }))
+
+    await poiInput.setValue('医院')
+    await analysisPanel
+      .findAll('button.analysis-tab')
+      .find((item) => item.text() === '风险')!
+      .trigger('click')
+    const riskInput = analysisPanel
+      .findComponent(RiskAnalysisPanel)
+      .findAllComponents(ElInputNumber)[0]!
+    riskInput.vm.$emit('update:modelValue', 35)
+    await wrapper.vm.$nextTick()
+
+    await selectWorkflowStep(wrapper, '结果')
+    await selectWorkflowStep(wrapper, '分析')
+
+    expect((poiInput.element as HTMLInputElement).value).toBe('医院')
+    expect(riskInput.props('modelValue')).toBe(35)
+    expect(store.poiKeyword).toBe('')
+    expect(store.weights).toEqual(committedWeights)
+    actions.forEach((action) => expect(action).not.toHaveBeenCalled())
+  })
+
+  it('allows map editing only in unlocked Study Area Draw and preserves committed Source', async () => {
+    const { wrapper, store } = mountWorkspace()
+    const map = wrapper.findComponent(MapCanvasStub)
+
+    expect(map.props('selectionDisabled')).toBe(false)
+    await selectStudyAreaTab(wrapper, '坐标')
+    expect(map.props('selectionDisabled')).toBe(true)
+    expect(drawingCanvasMocks.cancelDrawing).toHaveBeenCalledOnce()
+
+    await selectStudyAreaTab(wrapper, '绘制')
+    expect(map.props('selectionDisabled')).toBe(false)
+    store.setSourcePoint([118.9, 32.1])
+    const committedSource = store.sourceGeometryWgs84
+    map.vm.$emit('drawing-mode-change', 'polygon')
+    await wrapper.vm.$nextTick()
+    drawingCanvasMocks.cancelDrawing.mockClear()
+
+    await selectWorkflowStep(wrapper, '缓冲区')
+
+    expect(map.props('selectionDisabled')).toBe(true)
+    expect(drawingCanvasMocks.cancelDrawing).toHaveBeenCalledOnce()
+    expect(store.sourceGeometryWgs84).toBe(committedSource)
+
+    await selectWorkflowStep(wrapper, '研究区')
+    store.polling = true
+    await wrapper.vm.$nextTick()
+    expect(map.props('selectionDisabled')).toBe(true)
+  })
+
+  it('revalidates the recent drawer type before applying Risk then POI fallback', async () => {
+    const { wrapper, store } = mountWorkspace()
+    prepareAnalysis(store)
+    store.poiHasSearched = true
+    store.job = { task_id: 'task-1' }
+    setRiskResult(store)
+    await wrapper.vm.$nextTick()
+    await selectWorkflowStep(wrapper, '分析')
+    const analysisPanel = wrapper.findComponent(AnalysisPanel)
+
+    analysisPanel.vm.$emit('poi-open-result')
+    await wrapper.vm.$nextTick()
+    await wrapper.get('button[aria-label="关闭结果抽屉"]').trigger('click')
+    store.poiHasSearched = false
+    store.poiItems = []
+    await wrapper.vm.$nextTick()
+    await selectWorkflowStep(wrapper, '结果')
+    expect(wrapper.findComponent(WorkspaceResultDrawer).props('title')).toBe('风险任务 / 结果')
+    expect(wrapper.findComponent(RiskResultPanel).exists()).toBe(true)
+
+    await selectWorkflowStep(wrapper, '分析')
+    store.poiHasSearched = true
+    store.job = null
+    store.jobStatus = null
+    store.result = null
+    store.taskError = null
+    await wrapper.vm.$nextTick()
+    await selectWorkflowStep(wrapper, '结果')
+    expect(wrapper.findComponent(WorkspaceResultDrawer).props('title')).toBe('POI 结果')
+    expect(wrapper.findComponent(RiskResultPanel).exists()).toBe(false)
+  })
+
+  it('switches every workflow context without invoking or changing Store business state', async () => {
+    const { wrapper, store } = mountWorkspace()
+    prepareAnalysis(store)
+    store.poiHasSearched = true
+    store.poiItems = [{
+      id: 'poi-1', name: '学校', type: '', typeCode: '', address: '', locationWgs84: [118.81, 32.02],
+    }]
+    store.job = { task_id: 'task-1' }
+    setRiskResult(store)
+    await flushPromises()
+    const state = {
+      source: store.sourceGeometryWgs84,
+      buffer: store.bufferResult,
+      poiItems: store.poiItems,
+      job: store.job,
+      result: store.result,
+      weights: store.weights,
+    }
+    const actions = [
+      vi.spyOn(store, 'createBuffer'),
+      vi.spyOn(store, 'searchPois'),
+      vi.spyOn(store, 'submitRiskAnalysis'),
+      vi.spyOn(store, 'setPoiKeyword'),
+      vi.spyOn(store, 'setSourceGeometry'),
+      vi.spyOn(store, 'setSourcePoint'),
+      vi.spyOn(store, 'setBufferDistance'),
+      vi.spyOn(store, 'setWeight'),
+      vi.spyOn(store, 'clearSelection'),
+    ]
+
+    for (const step of ['研究区', '缓冲区', '分析', '结果']) {
+      await selectWorkflowStep(wrapper, step)
+    }
+
+    actions.forEach((action) => expect(action).not.toHaveBeenCalled())
+    expect(store.sourceGeometryWgs84).toBe(state.source)
+    expect(store.bufferResult).toBe(state.buffer)
+    expect(store.poiItems).toBe(state.poiItems)
+    expect(store.job).toBe(state.job)
+    expect(store.result).toBe(state.result)
+    expect(store.weights).toBe(state.weights)
   })
 })

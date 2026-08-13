@@ -1,6 +1,14 @@
 <script setup lang="ts">
+type WorkflowStep = 1 | 2 | 3 | 4
+
 const props = defineProps<{
-  activeStep: 1 | 2 | 3 | 4
+  activeStep: WorkflowStep
+  availableSteps: readonly WorkflowStep[]
+  completedSteps: readonly WorkflowStep[]
+}>()
+
+const emit = defineEmits<{
+  'select-step': [step: WorkflowStep]
 }>()
 
 const steps = [
@@ -10,10 +18,16 @@ const steps = [
   { id: 4, label: '结果' },
 ] as const
 
-function stateFor(step: (typeof steps)[number]['id']) {
+function stateFor(step: WorkflowStep) {
   if (step === props.activeStep) return 'active'
-  if (step < props.activeStep) return 'complete'
+  if (!props.availableSteps.includes(step)) return 'unavailable'
+  if (props.completedSteps.includes(step)) return 'complete'
   return 'pending'
+}
+
+function selectStep(step: WorkflowStep) {
+  if (!props.availableSteps.includes(step)) return
+  emit('select-step', step)
 }
 </script>
 
@@ -27,11 +41,18 @@ function stateFor(step: (typeof steps)[number]['id']) {
         :data-state="stateFor(step.id)"
         :aria-current="step.id === activeStep ? 'step' : undefined"
       >
-        <span class="step-marker">
-          <span v-if="step.id < activeStep" aria-hidden="true">✓</span>
-          <span v-else>{{ step.id }}</span>
-        </span>
-        <span class="step-label">{{ step.label }}</span>
+        <button
+          type="button"
+          class="step-button"
+          :disabled="!availableSteps.includes(step.id)"
+          @click="selectStep(step.id)"
+        >
+          <span class="step-marker">
+            <span v-if="stateFor(step.id) === 'complete'" aria-hidden="true">✓</span>
+            <span v-else>{{ step.id }}</span>
+          </span>
+          <span class="step-label">{{ step.label }}</span>
+        </button>
       </li>
     </ol>
   </nav>
@@ -61,14 +82,35 @@ function stateFor(step: (typeof steps)[number]['id']) {
 
 .workspace-workflow li {
   position: relative;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
   min-width: 0;
   color: #7b879f;
   font-size: 13px;
   font-weight: 600;
+}
+
+.step-button {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.step-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.step-button:focus-visible {
+  border-radius: 8px;
+  outline: 2px solid var(--primary);
+  outline-offset: 3px;
 }
 
 .workspace-workflow li:not(:last-child)::after {

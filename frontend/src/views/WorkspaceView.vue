@@ -17,6 +17,8 @@ import type { RiskIndicatorWeightInput } from '@/types/riskAnalysis'
 const systemStore = useSystemStore()
 const analysisStore = useAnalysisStore()
 type DrawingMode = 'point' | 'polyline' | 'rectangle' | 'polygon'
+type WorkflowStep = 1 | 2 | 3 | 4
+type StudyAreaMethod = 'draw' | 'coordinate' | 'search' | 'administrative' | 'file'
 interface MapCanvasDrawingApi {
   startDrawing: (mode: DrawingMode) => void
   cancelDrawing: () => void
@@ -24,6 +26,8 @@ interface MapCanvasDrawingApi {
 const mapCanvasRef = ref<MapCanvasDrawingApi | null>(null)
 const activeDrawingMode = ref<DrawingMode | null>(null)
 const drawingError = ref<string | null>(null)
+const activeWorkflowStep = ref<WorkflowStep>(1)
+const activeStudyAreaMethod = ref<StudyAreaMethod>('draw')
 const activeAnalysisTab = ref<'poi' | 'risk'>('poi')
 type ResultDrawerType = 'poi' | 'risk'
 const resultDrawerOpen = ref(false)
@@ -54,30 +58,48 @@ const riskHasTaskOrResult = computed(
     !!analysisStore.result ||
     !!analysisStore.taskError,
 )
-const activeWorkflowStep = computed<1 | 2 | 3 | 4>(() => {
-  if (analysisStore.result) return 4
-  if (analysisStore.job) return 3
-  if (!analysisStore.sourceGeometryWgs84) return 1
-  if (!analysisStore.bufferResult) return 2
-  return 3
+const poiHasResult = computed(() => analysisStore.poiHasSearched)
+const resultAvailable = computed(() => poiHasResult.value || riskHasTaskOrResult.value)
+const availableWorkflowSteps = computed<WorkflowStep[]>(() => {
+  const available: WorkflowStep[] = [1]
+  if (analysisStore.sourceGeometryWgs84) available.push(2)
+  if (analysisStore.bufferResult) available.push(3)
+  if (resultAvailable.value) available.push(4)
+  return available
 })
+const completedWorkflowSteps = computed<WorkflowStep[]>(() => {
+  const completed: WorkflowStep[] = []
+  if (analysisStore.sourceGeometryWgs84) completed.push(1)
+  if (analysisStore.bufferResult) completed.push(2)
+  if (resultAvailable.value) completed.push(3)
+  if (poiHasResult.value || analysisStore.result) completed.push(4)
+  return completed
+})
+const mapSelectionDisabled = computed(
+  () =>
+    analysisStore.analysisLocked ||
+    activeWorkflowStep.value !== 1 ||
+    activeStudyAreaMethod.value !== 'draw',
+)
 
 function handlePointSelected(coordinates: Coordinate) {
+  if (mapSelectionDisabled.value) return
   mapCanvasRef.value?.cancelDrawing()
   analysisStore.setSourcePoint(coordinates)
   drawingError.value = null
 }
 
 function handleGeometrySelected(geometry: SourceGeometry) {
-  if (analysisStore.analysisLocked) return
+  if (mapSelectionDisabled.value) return
   analysisStore.setSourceGeometry(geometry)
   drawingError.value = null
 }
 
 function handleConfirmedGeometrySelected(geometry: SourceGeometry) {
-  if (analysisStore.analysisLocked) return
+  if (activeWorkflowStep.value !== 1 || analysisStore.analysisLocked) return
   mapCanvasRef.value?.cancelDrawing()
-  handleGeometrySelected(geometry)
+  analysisStore.setSourceGeometry(geometry)
+  drawingError.value = null
 }
 
 function handleDrawingModeChange(mode: DrawingMode | null) {
@@ -89,7 +111,7 @@ function handleDrawingError(message: string) {
 }
 
 function startDrawing(mode: DrawingMode) {
-  if (analysisStore.analysisLocked) return
+  if (mapSelectionDisabled.value) return
   drawingError.value = null
   mapCanvasRef.value?.startDrawing(mode)
 }
@@ -129,6 +151,34 @@ function openRiskResult() {
   resultDrawerOpen.value = true
 }
 
+function resultTypeAvailable(type: ResultDrawerType) {
+  return type === 'risk' ? riskHasTaskOrResult.value : poiHasResult.value
+}
+
+function openAvailableResult() {
+  if (resultDrawerType.value && resultTypeAvailable(resultDrawerType.value)) {
+    resultDrawerOpen.value = true
+    return
+  }
+  if (riskHasTaskOrResult.value) openRiskResult()
+  else if (poiHasResult.value) openPoiResult()
+}
+
+function selectWorkflowStep(step: WorkflowStep) {
+  if (!availableWorkflowSteps.value.includes(step)) return
+  if (activeWorkflowStep.value === 1 && step !== 1 && activeStudyAreaMethod.value === 'draw') {
+    cancelDrawing()
+  }
+  activeWorkflowStep.value = step
+  if (step === 4) openAvailableResult()
+  else resultDrawerOpen.value = false
+}
+
+function handleStudyAreaMethodChange(method: StudyAreaMethod) {
+  if (activeStudyAreaMethod.value === 'draw' && method !== 'draw') cancelDrawing()
+  activeStudyAreaMethod.value = method
+}
+
 onMounted(() => {
   void systemStore.load()
   void analysisStore.restoreRiskAnalysis()
@@ -158,9 +208,14 @@ onMounted(() => {
       </div>
     </section>
 
-    <WorkspaceWorkflowNavigator :active-step="activeWorkflowStep" />
+    <WorkspaceWorkflowNavigator
+      :active-step="activeWorkflowStep"
+      :available-steps="availableWorkflowSteps"
+      :completed-steps="completedWorkflowSteps"
+      @select-step="selectWorkflowStep"
+    />
 
-    <section class="workspace-main">
+    <section class="workspace-main" :class="{ 'is-result-step': activeWorkflowStep === 4 }">
       <div class="workspace-map-region">
         <MapCanvas
           ref="mapCanvasRef"
@@ -168,7 +223,7 @@ onMounted(() => {
           :buffer-geometry="bufferGeometry"
           :risk-spatial-result="analysisStore.spatialResult"
           :poi-items="analysisStore.poiItems"
-          :selection-disabled="analysisStore.analysisLocked"
+          :selection-disabled="mapSelectionDisabled"
           @select-point="handlePointSelected"
           @select-geometry="handleGeometrySelected"
           @drawing-mode-change="handleDrawingModeChange"
@@ -185,7 +240,10 @@ onMounted(() => {
         </WorkspaceResultDrawer>
       </div>
 
-      <aside class="result-panel panel-card phase2c-result-panel workspace-context-panel">
+      <aside
+        v-show="activeWorkflowStep !== 4"
+        class="result-panel panel-card phase2c-result-panel workspace-context-panel"
+      >
         <div class="panel-heading">
           <div>
             <p class="eyebrow">ANALYSIS CONTROL</p>
@@ -193,27 +251,29 @@ onMounted(() => {
           </div>
         </div>
 
-        <section class="control-section">
+        <section v-if="activeWorkflowStep === 1" class="control-section study-area-context">
           <StudyAreaPanel
             :disabled="analysisStore.analysisLocked"
             :source-geometry="analysisStore.sourceGeometryWgs84"
             :active-drawing-mode="activeDrawingMode"
             :drawing-error="drawingError"
+            :active-method="activeStudyAreaMethod"
             @confirm="handleConfirmedGeometrySelected"
             @start-drawing="startDrawing"
             @cancel-drawing="cancelDrawing"
+            @update:active-method="handleStudyAreaMethodChange"
             @clear="clearStudyArea"
           />
         </section>
 
         <el-empty
-          v-if="!analysisStore.sourceGeometryWgs84 && !analysisStore.job"
+          v-if="activeWorkflowStep === 1 && !analysisStore.sourceGeometryWgs84 && !analysisStore.job"
           description="绘制或输入研究区"
           :image-size="86"
         />
 
         <el-alert
-          v-if="analysisStore.job && !analysisStore.sourceGeometryWgs84"
+          v-if="activeWorkflowStep === 1 && analysisStore.job && !analysisStore.sourceGeometryWgs84"
           :title="recoveryNoticeText"
           type="info"
           :closable="false"
@@ -221,7 +281,7 @@ onMounted(() => {
         />
 
         <el-button
-          v-if="analysisStore.job && !analysisStore.sourceGeometryWgs84"
+          v-if="activeWorkflowStep === 1 && analysisStore.job && !analysisStore.sourceGeometryWgs84"
           type="primary"
           plain
           @click="openRiskResult"
@@ -231,7 +291,10 @@ onMounted(() => {
 
         <el-alert
           v-if="
-            analysisStore.job && !analysisStore.sourceGeometryWgs84 && analysisStore.submissionError
+            analysisStore.job &&
+              !analysisStore.sourceGeometryWgs84 &&
+              analysisStore.submissionError &&
+              activeWorkflowStep === 1
           "
           :title="analysisStore.submissionError"
           type="warning"
@@ -240,7 +303,7 @@ onMounted(() => {
         />
 
         <section
-          v-if="!analysisStore.sourceGeometryWgs84 && analysisStore.submissionContext"
+          v-if="activeWorkflowStep === 1 && !analysisStore.sourceGeometryWgs84 && analysisStore.submissionContext"
           class="control-section"
         >
           <div class="section-title-row">
@@ -263,34 +326,32 @@ onMounted(() => {
           </div>
         </section>
 
-        <template v-if="analysisStore.sourceGeometryWgs84">
-          <section class="control-section">
-            <BufferPanel
-              :committed-distance="analysisStore.bufferDistanceMeters"
-              :max-distance="maxBufferMeters"
-              :disabled="analysisStore.analysisLocked"
-              :loading="analysisStore.bufferLoading"
-              :error="analysisStore.bufferError"
-              :result="analysisStore.bufferResult"
-              @generate="createBuffer"
-            />
-          </section>
+        <section v-show="activeWorkflowStep === 2" class="control-section buffer-context">
+          <BufferPanel
+            :committed-distance="analysisStore.bufferDistanceMeters"
+            :max-distance="maxBufferMeters"
+            :disabled="analysisStore.analysisLocked"
+            :loading="analysisStore.bufferLoading"
+            :error="analysisStore.bufferError"
+            :result="analysisStore.bufferResult"
+            @generate="createBuffer"
+          />
+        </section>
 
-          <section v-if="analysisStore.bufferResult" class="control-section">
-            <AnalysisPanel
-              v-model:active-tab="activeAnalysisTab"
-              :disabled="analysisStore.analysisLocked"
-              :committed-weights="analysisStore.weights"
-              :risk-submitting="analysisStore.jobSubmitting"
-              :risk-polling="analysisStore.polling"
-              :risk-has-task-or-result="riskHasTaskOrResult"
-              @poi-query-success="openPoiResult"
-              @poi-open-result="openPoiResult"
-              @risk-open-result="openRiskResult"
-              @submit-risk="submitRiskAnalysis"
-            />
-          </section>
-        </template>
+        <section v-show="activeWorkflowStep === 3" class="control-section analysis-context">
+          <AnalysisPanel
+            v-model:active-tab="activeAnalysisTab"
+            :disabled="analysisStore.analysisLocked"
+            :committed-weights="analysisStore.weights"
+            :risk-submitting="analysisStore.jobSubmitting"
+            :risk-polling="analysisStore.polling"
+            :risk-has-task-or-result="riskHasTaskOrResult"
+            @poi-query-success="openPoiResult"
+            @poi-open-result="openPoiResult"
+            @risk-open-result="openRiskResult"
+            @submit-risk="submitRiskAnalysis"
+          />
+        </section>
       </aside>
     </section>
 
@@ -363,6 +424,10 @@ onMounted(() => {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 360px;
   gap: 14px;
+}
+
+.workspace-main.is-result-step {
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .workspace-main :deep(.map-card) {

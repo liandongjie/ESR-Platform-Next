@@ -1,5 +1,5 @@
 import ElementPlus, { ElButton, ElSelect } from 'element-plus'
-import { flushPromises, mount } from '@vue/test-utils'
+import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { defineComponent, h, onUnmounted } from 'vue'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -49,12 +49,16 @@ const AdministrativeStub = inputStub('AdministrativeRegionInput', administrative
 const ShapefileStub = inputStub('ShapefileInput', shapefileUnmounted)
 
 function mountPanel(sourceGeometry: SourceGeometry | null = null, disabled = false) {
-  return mount(StudyAreaPanel, {
+  const controlled = { wrapper: undefined as VueWrapper | undefined }
+  const wrapper = mount(StudyAreaPanel, {
     props: {
       disabled,
       sourceGeometry,
       activeDrawingMode: null,
       drawingError: null,
+      activeMethod: 'draw',
+      'onUpdate:activeMethod': (method) =>
+        controlled.wrapper?.setProps({ activeMethod: method }),
     },
     global: {
       plugins: [ElementPlus],
@@ -67,15 +71,21 @@ function mountPanel(sourceGeometry: SourceGeometry | null = null, disabled = fal
       },
     },
   })
+  controlled.wrapper = wrapper
+  return wrapper
 }
 
 function mountPanelWithRealAsyncInputs() {
-  return mount(StudyAreaPanel, {
+  const controlled = { wrapper: undefined as VueWrapper | undefined }
+  const wrapper = mount(StudyAreaPanel, {
     props: {
       disabled: false,
       sourceGeometry: null,
       activeDrawingMode: null,
       drawingError: null,
+      activeMethod: 'draw',
+      'onUpdate:activeMethod': (method) =>
+        controlled.wrapper?.setProps({ activeMethod: method }),
     },
     global: {
       plugins: [ElementPlus],
@@ -86,6 +96,8 @@ function mountPanelWithRealAsyncInputs() {
       },
     },
   })
+  controlled.wrapper = wrapper
+  return wrapper
 }
 
 function deferred<T>() {
@@ -135,15 +147,16 @@ describe('StudyAreaPanel input modes', () => {
     expect(wrapper.findComponent(ShapefileInput).exists()).toBe(false)
   })
 
-  it('cancels drawing when leaving its tab without emitting geometry', async () => {
+  it('requests a controlled method change without emitting geometry', async () => {
     const geometry: SourceGeometry = { type: 'Point', coordinates: [118.9, 32.1] }
     const wrapper = mountPanel(geometry)
 
     await tabButton(wrapper, '坐标').trigger('click')
 
-    expect(wrapper.emitted('cancel-drawing')).toHaveLength(1)
+    expect(wrapper.emitted('update:activeMethod')).toEqual([['coordinate']])
+    expect(wrapper.emitted('cancel-drawing')).toBeUndefined()
     expect(wrapper.emitted('confirm')).toBeUndefined()
-    expect(wrapper.props('sourceGeometry')).toEqual(geometry)
+    expect(wrapper.props()).toMatchObject({ sourceGeometry: geometry })
     expect(wrapper.findComponent(StudyAreaDrawInput).exists()).toBe(false)
     expect(wrapper.findComponent(StudyAreaCoordinateInput).exists()).toBe(true)
   })

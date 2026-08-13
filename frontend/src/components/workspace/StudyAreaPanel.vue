@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed } from 'vue'
 
 import AdministrativeRegionInput from '@/components/map/AdministrativeRegionInput.vue'
 import ShapefileInput from '@/components/map/ShapefileInput.vue'
@@ -9,30 +9,31 @@ import StudyAreaSearchInput from '@/components/workspace/StudyAreaSearchInput.vu
 import type { SourceGeometry } from '@/types/analysisArea'
 
 type DrawingMode = 'point' | 'polyline' | 'rectangle' | 'polygon'
-type StudyAreaInputMode = 'draw' | 'coordinate' | 'search' | 'administrative' | 'file'
+type StudyAreaMethod = 'draw' | 'coordinate' | 'search' | 'administrative' | 'file'
 
 const props = defineProps<{
   disabled: boolean
   sourceGeometry: SourceGeometry | null
   activeDrawingMode: DrawingMode | null
   drawingError: string | null
+  activeMethod: StudyAreaMethod
 }>()
 
 const emit = defineEmits<{
   confirm: [geometry: SourceGeometry]
   'start-drawing': [mode: DrawingMode]
   'cancel-drawing': []
+  'update:activeMethod': [method: StudyAreaMethod]
   clear: []
 }>()
 
-const tabs: Array<{ mode: StudyAreaInputMode; label: string }> = [
+const tabs: Array<{ mode: StudyAreaMethod; label: string }> = [
   { mode: 'draw', label: '绘制' },
   { mode: 'coordinate', label: '坐标' },
   { mode: 'search', label: '搜索' },
   { mode: 'administrative', label: '行政区' },
   { mode: 'file', label: '文件' },
 ]
-const activeMode = ref<StudyAreaInputMode>('draw')
 
 const sourceGeometrySummary = computed(() => {
   const geometry = props.sourceGeometry
@@ -57,10 +58,9 @@ const sourceGeometrySummary = computed(() => {
   return `MultiPolygon · ${geometry.coordinates.length} 个面 · ${holeCount} 个孔洞`
 })
 
-function selectMode(mode: StudyAreaInputMode) {
-  if (mode === activeMode.value) return
-  if (activeMode.value === 'draw') emit('cancel-drawing')
-  activeMode.value = mode
+function selectMode(mode: StudyAreaMethod) {
+  if (mode === props.activeMethod) return
+  emit('update:activeMethod', mode)
 }
 </script>
 
@@ -77,8 +77,8 @@ function selectMode(mode: StudyAreaInputMode) {
         :key="tab.mode"
         type="button"
         class="study-area-tab"
-        :class="{ active: activeMode === tab.mode }"
-        :aria-pressed="activeMode === tab.mode"
+        :class="{ active: activeMethod === tab.mode }"
+        :aria-pressed="activeMethod === tab.mode"
         @click="selectMode(tab.mode)"
       >
         {{ tab.label }}
@@ -87,7 +87,7 @@ function selectMode(mode: StudyAreaInputMode) {
 
     <div class="study-area-input-content">
       <StudyAreaDrawInput
-        v-if="activeMode === 'draw'"
+        v-if="activeMethod === 'draw'"
         :disabled="disabled"
         :active-drawing-mode="activeDrawingMode"
         :drawing-error="drawingError"
@@ -95,18 +95,18 @@ function selectMode(mode: StudyAreaInputMode) {
         @cancel-drawing="emit('cancel-drawing')"
       />
       <StudyAreaCoordinateInput
-        v-else-if="activeMode === 'coordinate'"
+        v-else-if="activeMethod === 'coordinate'"
         :disabled="disabled"
         @confirm="emit('confirm', $event)"
       />
       <StudyAreaSearchInput
-        v-else-if="activeMode === 'search'"
+        v-else-if="activeMethod === 'search'"
         :disabled="disabled"
         :source-geometry="sourceGeometry"
         @confirm="emit('confirm', $event)"
       />
       <AdministrativeRegionInput
-        v-else-if="activeMode === 'administrative'"
+        v-else-if="activeMethod === 'administrative'"
         :disabled="disabled"
         @confirm="emit('confirm', $event)"
       />
