@@ -16,6 +16,8 @@ defineProps<{
 defineEmits<{
   'update:activeTab': [tab: AnalysisTab]
   'submit-risk': [weights: RiskIndicatorWeightInput[]]
+  'poi-query-success': []
+  'poi-open-result': []
 }>()
 </script>
 
@@ -48,7 +50,11 @@ defineEmits<{
     </div>
 
     <div v-show="activeTab === 'poi'" class="analysis-tab-content" role="tabpanel">
-      <PoiSearchPanel :disabled="disabled" />
+      <PoiSearchPanel
+        :disabled="disabled"
+        @query-success="$emit('poi-query-success')"
+        @open-result="$emit('poi-open-result')"
+      />
     </div>
     <div v-show="activeTab === 'risk'" class="analysis-tab-content" role="tabpanel">
       <RiskAnalysisPanel

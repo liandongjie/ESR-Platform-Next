@@ -86,4 +86,23 @@ describe('AnalysisPanel', () => {
     expect(wrapper.emitted('submit-risk')).toEqual([[weights]])
     expect(wrapper.emitted('update:activeTab')).toBeUndefined()
   })
+
+  it('forwards POI query success without changing the active tab', async () => {
+    const wrapper = mountPanel()
+
+    wrapper.findComponent(PoiSearchPanel).vm.$emit('query-success')
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.emitted('poi-query-success')).toHaveLength(1)
+    expect(wrapper.emitted('update:activeTab')).toBeUndefined()
+  })
+
+  it('forwards the committed POI result open request', async () => {
+    const wrapper = mountPanel()
+
+    wrapper.findComponent(PoiSearchPanel).vm.$emit('open-result')
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.emitted('poi-open-result')).toHaveLength(1)
+  })
 })

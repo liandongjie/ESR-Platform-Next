@@ -3,10 +3,12 @@ import { computed, onMounted, ref } from 'vue'
 
 import WorkspaceWorkflowNavigator from '@/components/workspace/WorkspaceWorkflowNavigator.vue'
 import MapCanvas from '@/components/map/MapCanvas.vue'
+import PoiResultPanel from '@/components/poi/PoiResultPanel.vue'
 import RiskAnalysisResultDownloads from '@/components/risk-analysis/RiskAnalysisResultDownloads.vue'
 import AnalysisPanel from '@/components/workspace/AnalysisPanel.vue'
 import BufferPanel from '@/components/workspace/BufferPanel.vue'
 import StudyAreaPanel from '@/components/workspace/StudyAreaPanel.vue'
+import WorkspaceResultDrawer from '@/components/workspace/WorkspaceResultDrawer.vue'
 import { useAnalysisStore } from '@/stores/analysis'
 import { useSystemStore } from '@/stores/system'
 import type { Coordinate, SourceGeometry } from '@/types/analysisArea'
@@ -23,6 +25,9 @@ const mapCanvasRef = ref<MapCanvasDrawingApi | null>(null)
 const activeDrawingMode = ref<DrawingMode | null>(null)
 const drawingError = ref<string | null>(null)
 const activeAnalysisTab = ref<'poi' | 'risk'>('poi')
+type ResultDrawerType = 'poi' | 'risk'
+const resultDrawerOpen = ref(false)
+const resultDrawerType = ref<ResultDrawerType | null>(null)
 
 const maxBufferMeters = computed(() => systemStore.capabilities?.limits.max_buffer_meters)
 const bufferGeometry = computed(
@@ -128,6 +133,11 @@ function submitRiskAnalysis(weights: RiskIndicatorWeightInput[]) {
   void analysisStore.submitRiskAnalysis()
 }
 
+function openPoiResult() {
+  resultDrawerType.value = 'poi'
+  resultDrawerOpen.value = true
+}
+
 function resumeRiskAnalysisPolling() {
   analysisStore.resumeRiskAnalysisPolling()
 }
@@ -164,18 +174,28 @@ onMounted(() => {
     <WorkspaceWorkflowNavigator :active-step="activeWorkflowStep" />
 
     <section class="workspace-main">
-      <MapCanvas
-        ref="mapCanvasRef"
-        :source-geometry="analysisStore.sourceGeometryWgs84"
-        :buffer-geometry="bufferGeometry"
-        :risk-spatial-result="analysisStore.spatialResult"
-        :poi-items="analysisStore.poiItems"
-        :selection-disabled="analysisStore.analysisLocked"
-        @select-point="handlePointSelected"
-        @select-geometry="handleGeometrySelected"
-        @drawing-mode-change="handleDrawingModeChange"
-        @drawing-error="handleDrawingError"
-      />
+      <div class="workspace-map-region">
+        <MapCanvas
+          ref="mapCanvasRef"
+          :source-geometry="analysisStore.sourceGeometryWgs84"
+          :buffer-geometry="bufferGeometry"
+          :risk-spatial-result="analysisStore.spatialResult"
+          :poi-items="analysisStore.poiItems"
+          :selection-disabled="analysisStore.analysisLocked"
+          @select-point="handlePointSelected"
+          @select-geometry="handleGeometrySelected"
+          @drawing-mode-change="handleDrawingModeChange"
+          @drawing-error="handleDrawingError"
+        />
+
+        <WorkspaceResultDrawer
+          :open="resultDrawerOpen"
+          title="POI 结果"
+          @close="resultDrawerOpen = false"
+        >
+          <PoiResultPanel v-if="resultDrawerType === 'poi'" />
+        </WorkspaceResultDrawer>
+      </div>
 
       <aside class="result-panel panel-card phase2c-result-panel workspace-context-panel">
         <div class="panel-heading">
@@ -266,6 +286,8 @@ onMounted(() => {
               :committed-weights="analysisStore.weights"
               :risk-submitting="analysisStore.jobSubmitting"
               :risk-polling="analysisStore.polling"
+              @poi-query-success="openPoiResult"
+              @poi-open-result="openPoiResult"
               @submit-risk="submitRiskAnalysis"
             />
           </section>
@@ -441,6 +463,12 @@ onMounted(() => {
 .workspace-main :deep(.map-card) {
   width: 100%;
   height: 100%;
+  min-height: 0;
+}
+
+.workspace-map-region {
+  position: relative;
+  min-width: 0;
   min-height: 0;
 }
 

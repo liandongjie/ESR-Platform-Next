@@ -9,6 +9,7 @@ import ShapefileInput from '@/components/map/ShapefileInput.vue'
 import AnalysisPanel from '@/components/workspace/AnalysisPanel.vue'
 import BufferPanel from '@/components/workspace/BufferPanel.vue'
 import RiskAnalysisPanel from '@/components/workspace/RiskAnalysisPanel.vue'
+import WorkspaceResultDrawer from '@/components/workspace/WorkspaceResultDrawer.vue'
 import { useAnalysisStore } from '@/stores/analysis'
 import type { StudyPointCandidate } from '@/types/poi'
 import WorkspaceView from '@/views/WorkspaceView.vue'
@@ -25,6 +26,7 @@ const MapCanvasStub = defineComponent({
   name: 'MapCanvas',
   props: {
     sourceGeometry: { type: Object, default: null },
+    poiItems: { type: Array, default: () => [] },
     selectionDisabled: Boolean,
   },
   emits: ['select-point', 'select-geometry', 'drawing-mode-change', 'drawing-error'],
@@ -56,7 +58,6 @@ function mountWorkspace() {
         AdministrativeRegionInput: true,
         ShapefileInput: true,
         MapCanvas: MapCanvasStub,
-        PoiSearchPanel: true,
         RiskAnalysisResultDownloads: true,
         StatusCard: true,
       },
@@ -955,5 +956,84 @@ describe('WorkspaceView analysis panel wiring', () => {
     expect(panel.props('activeTab')).toBe('risk')
     expect(setWeight).not.toHaveBeenCalled()
     expect(submit).not.toHaveBeenCalled()
+  })
+
+  it('opens the POI result drawer only from a successful query event', async () => {
+    const { wrapper, store } = mountWorkspace()
+    prepareAnalysis(store)
+    store.poiCommittedKeyword = '学校'
+    store.poiHasSearched = true
+    store.poiItems = []
+    await wrapper.vm.$nextTick()
+    const drawer = wrapper.findComponent(WorkspaceResultDrawer)
+
+    expect(drawer.props('open')).toBe(false)
+    wrapper.findComponent(AnalysisPanel).vm.$emit('poi-query-success')
+    await wrapper.vm.$nextTick()
+
+    expect(drawer.props('open')).toBe(true)
+    expect(wrapper.text()).toContain('当前缓冲区内未找到匹配 POI')
+  })
+
+  it('keeps the drawer closed for restored results until a new query succeeds', async () => {
+    const { wrapper, store } = mountWorkspace()
+    prepareAnalysis(store)
+    store.poiCommittedKeyword = '学校'
+    store.poiHasSearched = true
+    store.poiItems = [{
+      id: 'poi-1', name: '学校', type: '', typeCode: '', address: '', locationWgs84: [118.81, 32.02],
+    }]
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.findComponent(WorkspaceResultDrawer).props('open')).toBe(false)
+  })
+
+  it('closes only the POI drawer without clearing committed results or map markers', async () => {
+    const { wrapper, store } = mountWorkspace()
+    prepareAnalysis(store)
+    store.poiKeyword = '学校'
+    store.poiCommittedKeyword = '学校'
+    store.poiHasSearched = true
+    store.poiItems = [{
+      id: 'poi-1', name: '学校', type: '', typeCode: '', address: '', locationWgs84: [118.81, 32.02],
+    }]
+    await wrapper.vm.$nextTick()
+    const items = store.poiItems
+    const setKeyword = vi.spyOn(store, 'setPoiKeyword')
+    const search = vi.spyOn(store, 'searchPois').mockResolvedValue()
+    wrapper.findComponent(AnalysisPanel).vm.$emit('poi-query-success')
+    await wrapper.vm.$nextTick()
+
+    await wrapper.get('button[aria-label="关闭结果抽屉"]').trigger('click')
+
+    expect(wrapper.findComponent(WorkspaceResultDrawer).props('open')).toBe(false)
+    expect(store.poiCommittedKeyword).toBe('学校')
+    expect(store.poiItems).toBe(items)
+    expect(wrapper.findComponent(MapCanvasStub).props('poiItems')).toBe(items)
+
+    const viewResult = wrapper.findAll('button').find((item) => item.text() === '查看结果')
+    if (!viewResult) throw new Error('missing view result button')
+    await viewResult.trigger('click')
+
+    expect(wrapper.findComponent(WorkspaceResultDrawer).props('open')).toBe(true)
+    expect(setKeyword).not.toHaveBeenCalled()
+    expect(search).not.toHaveBeenCalled()
+    expect(store.poiCommittedKeyword).toBe('学校')
+    expect(store.poiItems).toBe(items)
+    expect(wrapper.findComponent(MapCanvasStub).props('poiItems')).toBe(items)
+  })
+
+  it('allows opening and closing existing POI results while analysis is locked', async () => {
+    const { wrapper, store } = mountWorkspace()
+    prepareAnalysis(store)
+    store.polling = true
+    store.poiHasSearched = true
+    await wrapper.vm.$nextTick()
+
+    wrapper.findComponent(AnalysisPanel).vm.$emit('poi-query-success')
+    await wrapper.vm.$nextTick()
+    expect(wrapper.findComponent(WorkspaceResultDrawer).props('open')).toBe(true)
+    await wrapper.get('button[aria-label="关闭结果抽屉"]').trigger('click')
+    expect(wrapper.findComponent(WorkspaceResultDrawer).props('open')).toBe(false)
   })
 })
