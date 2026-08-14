@@ -5,6 +5,7 @@ import type {
   RiskAnalysisSpatialResult,
   RiskIndicatorResult,
 } from '@/types/riskAnalysis'
+import { parseRiskModelContract } from '@/validation/riskIndicatorCatalog'
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -83,6 +84,13 @@ export function parseRiskAnalysisResult(value: unknown): RiskAnalysisResult {
   if (value.schema_version !== 1 || value.status !== 'SUCCEEDED') throw invalid
   if (typeof value.task_id !== 'string' || typeof value.algorithm_version !== 'string') {
     throw invalid
+  }
+  if (value.model_contract !== undefined && value.model_contract !== null) {
+    try {
+      parseRiskModelContract(value.model_contract)
+    } catch {
+      throw invalid
+    }
   }
 
   if (!isRecord(value.geometry)) throw invalid

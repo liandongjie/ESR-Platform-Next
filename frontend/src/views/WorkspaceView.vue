@@ -229,7 +229,7 @@ async function createBuffer(distance: number) {
 
 function submitRiskAnalysis(weights: RiskIndicatorWeightInput[]) {
   if (analysisStore.analysisLocked || !analysisStore.bufferResult) return
-  weights.forEach((item) => analysisStore.setWeight(item.code, item.weight_percent))
+  if (!analysisStore.setRiskWeights(weights)) return
   void analysisStore.submitRiskAnalysis()
   openRiskResult()
 }
@@ -308,7 +308,10 @@ watch(
 
 onMounted(async () => {
   void loadSystemStatus()
-  await analysisStore.restoreRiskAnalysis()
+  const catalogLoading = analysisStore.loadRiskIndicatorCatalog()
+  const riskRecovery = analysisStore.restoreRiskAnalysis()
+  await Promise.allSettled([catalogLoading, riskRecovery])
+  analysisStore.initializeLegacyRiskWeights()
   deriveInitialWorkflowStep()
   riskNotificationsArmed = true
 })
@@ -453,9 +456,13 @@ onMounted(async () => {
             :risk-submitting="analysisStore.jobSubmitting"
             :risk-polling="analysisStore.polling"
             :risk-has-task-or-result="riskHasTaskOrResult"
+            :risk-indicator-catalog="analysisStore.riskIndicatorCatalog"
+            :risk-indicator-catalog-loading="analysisStore.riskIndicatorCatalogLoading"
+            :risk-indicator-catalog-error="analysisStore.riskIndicatorCatalogError"
             @poi-query-success="openPoiResult"
             @poi-open-result="openPoiResult"
             @risk-open-result="openRiskResult"
+            @retry-risk-catalog="analysisStore.loadRiskIndicatorCatalog"
             @submit-risk="submitRiskAnalysis"
           />
         </section>

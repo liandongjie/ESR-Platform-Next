@@ -21,6 +21,7 @@ import type { AnalysisAreaBufferResponse } from '@/types/analysisArea'
 import type { StudyPointCandidate } from '@/types/poi'
 import type { RiskJobStatus } from '@/types/riskAnalysis'
 import WorkspaceView from '@/views/WorkspaceView.vue'
+import { makeRiskIndicatorCatalog } from './fixtures/riskIndicatorCatalog'
 
 const mocks = vi.hoisted(() => ({
   searchAmapStudyPoints: vi.fn(),
@@ -62,8 +63,13 @@ function mountWorkspace(
 ) {
   setActivePinia(pinia)
   const store = useAnalysisStore()
+  store.riskIndicatorCatalog = makeRiskIndicatorCatalog()
+  store.initializeLegacyRiskWeights()
   if (prepareStore) prepareStore(store)
   else vi.spyOn(store, 'restoreRiskAnalysis').mockImplementation(() => new Promise(() => undefined))
+  if (!vi.isMockFunction(store.loadRiskIndicatorCatalog)) {
+    vi.spyOn(store, 'loadRiskIndicatorCatalog').mockResolvedValue()
+  }
   const wrapper = mount(WorkspaceView, {
     global: {
       plugins: [pinia, ElementPlus],
@@ -1246,14 +1252,57 @@ describe('WorkspaceView analysis panel wiring', () => {
     }
   }
 
+  it('applies legacy defaults when catalog retry succeeds in a new Workspace', async () => {
+    let attempt = 0
+    const { wrapper, store } = mountWorkspace((candidate) => {
+      prepareAnalysis(candidate)
+      window.sessionStorage.clear()
+      candidate.weights = []
+      candidate.riskIndicatorCatalog = null
+      candidate.riskIndicatorCatalogError = null
+      vi.spyOn(candidate, 'restoreRiskAnalysis').mockResolvedValue()
+      vi.spyOn(candidate, 'loadRiskIndicatorCatalog').mockImplementation(async () => {
+        attempt += 1
+        if (attempt === 1) {
+          candidate.riskIndicatorCatalog = null
+          candidate.riskIndicatorCatalogError = '目录请求失败'
+          return
+        }
+        candidate.riskIndicatorCatalog = makeRiskIndicatorCatalog()
+        candidate.riskIndicatorCatalogError = null
+        candidate.initializeLegacyRiskWeights()
+      })
+    })
+    await flushPromises()
+    await selectWorkflowStep(wrapper, '分析')
+    const panel = wrapper.findComponent(AnalysisPanel)
+    await panel.findAll('button.analysis-tab').find((item) => item.text() === '风险')!.trigger('click')
+    const retry = panel
+      .findComponent(RiskAnalysisPanel)
+      .findAllComponents(ElButton)
+      .find((item) => item.text().includes('重试加载'))
+    if (!retry) throw new Error('missing catalog retry button')
+
+    await retry.trigger('click')
+    await flushPromises()
+
+    expect(attempt).toBe(2)
+    expect(store.weights).toEqual([
+      { code: 'PM25', weight_percent: 30 },
+      { code: 'AQI', weight_percent: 40 },
+      { code: 'NDVI', weight_percent: 30 },
+    ])
+  })
+
   it('commits all Risk weights before using the existing submit action', async () => {
     const { wrapper, store } = mountWorkspace()
     prepareAnalysis(store)
     await wrapper.vm.$nextTick()
     await selectWorkflowStep(wrapper, '分析')
     const calls: string[] = []
-    const setWeight = vi.spyOn(store, 'setWeight').mockImplementation((code, value) => {
-      calls.push(`set:${code}:${value}`)
+    const setWeights = vi.spyOn(store, 'setRiskWeights').mockImplementation(() => {
+      calls.push('set-all')
+      return true
     })
     const submit = vi.spyOn(store, 'submitRiskAnalysis').mockImplementation(async () => {
       calls.push('submit')
@@ -1267,9 +1316,10 @@ describe('WorkspaceView analysis panel wiring', () => {
     wrapper.findComponent(AnalysisPanel).vm.$emit('submit-risk', weights)
     await wrapper.vm.$nextTick()
 
-    expect(setWeight).toHaveBeenCalledTimes(3)
+    expect(setWeights).toHaveBeenCalledOnce()
+    expect(setWeights).toHaveBeenCalledWith(weights)
     expect(submit).toHaveBeenCalledOnce()
-    expect(calls).toEqual(['set:PM25:35', 'set:AQI:35', 'set:NDVI:30', 'submit'])
+    expect(calls).toEqual(['set-all', 'submit'])
     expect(wrapper.findComponent(WorkspaceResultDrawer).props('open')).toBe(true)
     expect(wrapper.findComponent(WorkspaceResultDrawer).props('title')).toBe('风险任务 / 结果')
     expect(wrapper.findComponent(RiskResultPanel).exists()).toBe(true)
@@ -1283,7 +1333,7 @@ describe('WorkspaceView analysis panel wiring', () => {
     await selectWorkflowStep(wrapper, '分析')
     const committedWeights = store.weights.map((item) => ({ ...item }))
     const committedResult = store.result
-    const setWeight = vi.spyOn(store, 'setWeight')
+    const setWeight = vi.spyOn(store, 'setRiskWeights')
     const submit = vi.spyOn(store, 'submitRiskAnalysis')
     const analysisPanel = wrapper.findComponent(AnalysisPanel)
     const riskTab = analysisPanel.findAll('button.analysis-tab').find((item) => item.text() === '风险')
@@ -1311,7 +1361,7 @@ describe('WorkspaceView analysis panel wiring', () => {
     await selectWorkflowStep(wrapper, '分析')
     const committedWeights = store.weights.map((item) => ({ ...item }))
     const committedResult = store.result
-    const setWeight = vi.spyOn(store, 'setWeight')
+    const setWeight = vi.spyOn(store, 'setRiskWeights')
     const submit = vi.spyOn(store, 'submitRiskAnalysis')
     const panel = wrapper.findComponent(AnalysisPanel)
     await panel.findAll('button.analysis-tab').find((item) => item.text() === '风险')!.trigger('click')
@@ -1439,7 +1489,7 @@ describe('WorkspaceView analysis panel wiring', () => {
     store.polling = true
     await wrapper.vm.$nextTick()
     await selectWorkflowStep(wrapper, '分析')
-    const setWeight = vi.spyOn(store, 'setWeight')
+    const setWeight = vi.spyOn(store, 'setRiskWeights')
     const submit = vi.spyOn(store, 'submitRiskAnalysis')
     const panel = wrapper.findComponent(AnalysisPanel)
     const riskTab = panel.findAll('button.analysis-tab').find((item) => item.text() === '风险')
@@ -1658,7 +1708,7 @@ describe('WorkspaceView analysis panel wiring', () => {
       vi.spyOn(store, 'setSourceGeometry'),
       vi.spyOn(store, 'setSourcePoint'),
       vi.spyOn(store, 'setBufferDistance'),
-      vi.spyOn(store, 'setWeight'),
+      vi.spyOn(store, 'setRiskWeights'),
       vi.spyOn(store, 'clearSelection'),
     ]
     const committedWeights = store.weights.map((item) => ({ ...item }))
@@ -1771,7 +1821,7 @@ describe('WorkspaceView analysis panel wiring', () => {
       vi.spyOn(store, 'setSourceGeometry'),
       vi.spyOn(store, 'setSourcePoint'),
       vi.spyOn(store, 'setBufferDistance'),
-      vi.spyOn(store, 'setWeight'),
+      vi.spyOn(store, 'setRiskWeights'),
       vi.spyOn(store, 'clearSelection'),
     ]
 

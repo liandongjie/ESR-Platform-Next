@@ -1,9 +1,10 @@
-import ElementPlus, { ElButton, ElInputNumber } from 'element-plus'
+import ElementPlus, { ElButton, ElCheckbox, ElInputNumber } from 'element-plus'
 import { mount } from '@vue/test-utils'
 import { describe, expect, it } from 'vitest'
 
 import RiskAnalysisPanel from '@/components/workspace/RiskAnalysisPanel.vue'
 import type { RiskIndicatorWeightInput } from '@/types/riskAnalysis'
+import { makeRiskIndicatorCatalog } from './fixtures/riskIndicatorCatalog'
 
 const committedWeights: RiskIndicatorWeightInput[] = [
   { code: 'PM25', weight_percent: 30 },
@@ -19,6 +20,9 @@ function mountPanel(overrides: Record<string, unknown> = {}) {
       submitting: false,
       polling: false,
       hasTaskOrResult: false,
+      catalog: makeRiskIndicatorCatalog(),
+      catalogLoading: false,
+      catalogError: null,
       ...overrides,
     },
     global: {
@@ -39,6 +43,26 @@ function submitButton(wrapper: ReturnType<typeof mountPanel>) {
 }
 
 describe('RiskAnalysisPanel', () => {
+  it('shows only the applicable catalog status message', () => {
+    const loading = mountPanel({ catalogLoading: true })
+    expect(loading.text()).toContain('正在加载风险指标目录')
+    expect(loading.text()).not.toContain('目录尚未就绪')
+
+    const failed = mountPanel({ catalog: null, catalogError: '目录请求失败' })
+    expect(failed.text()).toContain('目录请求失败')
+    expect(failed.text()).toContain('重试加载')
+
+    const mismatched = mountPanel({
+      committedWeights: [{ code: 'legacy-unknown', weight_percent: 100 }],
+    })
+    expect(mismatched.text()).toContain('不属于当前目录')
+
+    const ready = mountPanel()
+    expect(ready.text()).not.toContain('正在加载风险指标目录')
+    expect(ready.text()).not.toContain('目录尚未就绪')
+    expect(ready.text()).not.toContain('不属于当前目录')
+  })
+
   it('keeps weight edits local and emits a cloned draft only on submit', async () => {
     const source = committedWeights.map((item) => ({ ...item }))
     const wrapper = mountPanel({ committedWeights: source })
@@ -58,6 +82,33 @@ describe('RiskAnalysisPanel', () => {
       ],
     ]])
     expect(wrapper.emitted('submit')![0]![0]).not.toBe(source)
+  })
+
+  it('keeps selections and weights while switching among all three categories', async () => {
+    const wrapper = mountPanel()
+    const tabs = wrapper.findAll('button.risk-category-tab')
+    expect(tabs.map((tab) => tab.text())).toEqual(['环境因素', '人口因素', '社会因素'])
+
+    weightInputs(wrapper)[0]!.vm.$emit('update:modelValue', 35)
+    await tabs[1]!.trigger('click')
+    await tabs[0]!.trigger('click')
+
+    expect(weightInputs(wrapper)[0]!.props('modelValue')).toBe(35)
+    expect(wrapper.emitted('submit')).toBeUndefined()
+  })
+
+  it('keeps indicator selection local and gives newly selected indicators zero weight', async () => {
+    const wrapper = mountPanel()
+    await wrapper.findAll('button.risk-category-tab')[1]!.trigger('click')
+    wrapper.findAllComponents(ElCheckbox)[0]!.vm.$emit('update:modelValue', true)
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.emitted('submit')).toBeUndefined()
+    await submitButton(wrapper).trigger('click')
+    expect(wrapper.emitted('submit')?.[0]?.[0]).toContainEqual({
+      code: 'rkmd',
+      weight_percent: 0,
+    })
   })
 
   it.each([
@@ -92,7 +143,9 @@ describe('RiskAnalysisPanel', () => {
       ],
     })
 
-    expect(weightInputs(wrapper).map((input) => input.props('modelValue'))).toEqual([20, 50, 30])
+    expect(weightInputs(wrapper).map((input) => input.props('modelValue'))).toEqual([
+      20, 50, 30, 0,
+    ])
   })
 
   it.each([

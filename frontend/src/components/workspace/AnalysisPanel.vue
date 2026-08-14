@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import PoiSearchPanel from '@/components/poi/PoiSearchPanel.vue'
 import RiskAnalysisPanel from '@/components/workspace/RiskAnalysisPanel.vue'
-import type { RiskIndicatorWeightInput } from '@/types/riskAnalysis'
+import type { RiskIndicatorCatalog, RiskIndicatorWeightInput } from '@/types/riskAnalysis'
 
 type AnalysisTab = 'poi' | 'risk'
 
@@ -12,6 +12,9 @@ defineProps<{
   riskSubmitting: boolean
   riskPolling: boolean
   riskHasTaskOrResult: boolean
+  riskIndicatorCatalog?: RiskIndicatorCatalog | null
+  riskIndicatorCatalogLoading?: boolean
+  riskIndicatorCatalogError?: string | null
 }>()
 
 defineEmits<{
@@ -20,6 +23,7 @@ defineEmits<{
   'poi-query-success': []
   'poi-open-result': []
   'risk-open-result': []
+  'retry-risk-catalog': []
 }>()
 </script>
 
@@ -65,8 +69,12 @@ defineEmits<{
         :submitting="riskSubmitting"
         :polling="riskPolling"
         :has-task-or-result="riskHasTaskOrResult"
+        :catalog="riskIndicatorCatalog"
+        :catalog-loading="riskIndicatorCatalogLoading"
+        :catalog-error="riskIndicatorCatalogError"
         @submit="$emit('submit-risk', $event)"
         @open-result="$emit('risk-open-result')"
+        @retry-catalog="$emit('retry-risk-catalog')"
       />
     </div>
   </section>

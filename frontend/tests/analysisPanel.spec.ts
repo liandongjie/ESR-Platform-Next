@@ -7,6 +7,7 @@ import PoiSearchPanel from '@/components/poi/PoiSearchPanel.vue'
 import AnalysisPanel from '@/components/workspace/AnalysisPanel.vue'
 import RiskAnalysisPanel from '@/components/workspace/RiskAnalysisPanel.vue'
 import { useAnalysisStore } from '@/stores/analysis'
+import { makeRiskIndicatorCatalog } from './fixtures/riskIndicatorCatalog'
 
 function mountPanel(activeTab: 'poi' | 'risk' = 'poi', disabled = false) {
   const pinia = createPinia()
@@ -23,6 +24,9 @@ function mountPanel(activeTab: 'poi' | 'risk' = 'poi', disabled = false) {
       riskSubmitting: false,
       riskPolling: false,
       riskHasTaskOrResult: false,
+      riskIndicatorCatalog: makeRiskIndicatorCatalog(),
+      riskIndicatorCatalogLoading: false,
+      riskIndicatorCatalogError: null,
     },
     global: { plugins: [pinia, ElementPlus] },
   })
