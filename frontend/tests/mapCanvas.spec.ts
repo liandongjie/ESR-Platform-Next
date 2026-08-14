@@ -2,6 +2,7 @@ import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import MapCanvas from '../src/components/map/MapCanvas.vue'
+import { loadAmap } from '../src/map/amap'
 import { gcj02ToWgs84, wgs84ToGcj02 } from '../src/map/coordinates'
 import { RISK_VALUE_COLOR_BINS, riskColorForValue } from '../src/map/riskSpatial'
 import type { MultiPolygonGeometry, PolygonGeometry } from '../src/types/analysisArea'
@@ -17,7 +18,12 @@ const polygons: FakePolygon[] = []
 const polylines: FakePolyline[] = []
 const mouseTools: FakeMouseTool[] = []
 const maps: FakeMap[] = []
+const standardLayers: FakeStandardLayer[] = []
+const satelliteLayers: FakeSatelliteLayer[] = []
+const roadNetLayers: FakeRoadNetLayer[] = []
+const toolBars: FakeToolBar[] = []
 let mapClickHandler: ((event: unknown) => void) | undefined
+let mapMouseMoveHandler: ((event: unknown) => void) | undefined
 let drawHandler: ((event: { obj: unknown }) => void) | undefined
 let failNextDrawListenerRegistration = false
 let failNextDrawingMode: DrawingMode | null = null
@@ -26,15 +32,63 @@ class FakeMap {
   on = vi.fn((eventName: string, handler: (event: unknown) => void) => {
     if (eventName === 'click') {
       mapClickHandler = handler
+    } else if (eventName === 'mousemove') {
+      mapMouseMoveHandler = handler
     }
   })
 
   off = vi.fn()
+  addControl = vi.fn()
+  removeControl = vi.fn()
   destroy = vi.fn()
   setFitView = vi.fn()
+  setLayers = vi.fn((layers: object[]) => {
+    this.layers = layers
+  })
+  setCenter = vi.fn()
+  setZoom = vi.fn()
+  layers: object[] = []
+  readonly center: [number, number]
+  readonly zoom: number
+  readonly options: {
+    center: [number, number]
+    zoom: number
+    mapStyle: string
+    layers: object[]
+  }
 
-  constructor() {
+  constructor(
+    _container: HTMLElement,
+    options: { center: [number, number]; zoom: number; mapStyle: string; layers: object[] },
+  ) {
+    this.options = options
+    this.center = options.center
+    this.zoom = options.zoom
     maps.push(this)
+  }
+}
+
+class FakeStandardLayer {
+  constructor() {
+    standardLayers.push(this)
+  }
+}
+
+class FakeSatelliteLayer {
+  constructor() {
+    satelliteLayers.push(this)
+  }
+}
+
+class FakeRoadNetLayer {
+  constructor() {
+    roadNetLayers.push(this)
+  }
+}
+
+class FakeToolBar {
+  constructor() {
+    toolBars.push(this)
   }
 }
 
@@ -102,6 +156,12 @@ interface TestAmapNamespace {
   Marker: typeof FakeMarker
   Polygon: typeof FakePolygon
   Polyline: typeof FakePolyline
+  createDefaultLayer: ReturnType<typeof vi.fn>
+  TileLayer: {
+    Satellite: typeof FakeSatelliteLayer
+    RoadNet: typeof FakeRoadNetLayer
+  }
+  ToolBar: typeof FakeToolBar
   MouseTool?: typeof FakeMouseTool
   plugin: ReturnType<typeof vi.fn>
 }
@@ -180,6 +240,7 @@ function completeDraw(obj: unknown) {
 }
 
 beforeEach(() => {
+  vi.mocked(loadAmap).mockClear()
   markerOptions.length = 0
   polygonOptions.length = 0
   polylineOptions.length = 0
@@ -188,15 +249,27 @@ beforeEach(() => {
   polylines.length = 0
   mouseTools.length = 0
   maps.length = 0
+  standardLayers.length = 0
+  satelliteLayers.length = 0
+  roadNetLayers.length = 0
+  toolBars.length = 0
   mapClickHandler = undefined
+  mapMouseMoveHandler = undefined
   drawHandler = undefined
   failNextDrawListenerRegistration = false
   failNextDrawingMode = null
+  const TileLayer = {
+    Satellite: FakeSatelliteLayer,
+    RoadNet: FakeRoadNetLayer,
+  }
   amapNamespace = {
     Map: FakeMap,
     Marker: FakeMarker,
     Polygon: FakePolygon,
     Polyline: FakePolyline,
+    createDefaultLayer: vi.fn(() => new FakeStandardLayer()),
+    TileLayer,
+    ToolBar: FakeToolBar,
     MouseTool: FakeMouseTool,
     plugin: vi.fn((_plugins: string | string[], callback: () => void) => callback()),
   }
@@ -488,15 +561,116 @@ describe('MapCanvas source and spatial overlays', () => {
   })
 
   it.each([
-    [{ readOnly: true, selectionDisabled: false }, '历史结果只读展示'],
-    [{ readOnly: false, selectionDisabled: true }, '分析任务进行中，暂不可更换研究点'],
-  ])('blocks ordinary map selection in guarded mode', async (mode, expectedTip) => {
+    { readOnly: true, selectionDisabled: false },
+    { readOnly: false, selectionDisabled: true },
+  ])('blocks ordinary map selection without a persistent tip in guarded mode', async (mode) => {
     const wrapper = await mountReady(mode)
 
     mapClickHandler?.({ lnglat: lngLat(116.403, 39.91) })
 
-    expect(wrapper.text()).toContain(expectedTip)
+    expect(wrapper.find('.map-tip').exists()).toBe(false)
     expect(wrapper.emitted('select-point')).toBeUndefined()
+    wrapper.unmount()
+  })
+
+  it('uses the official default layer and owns one ToolBar for the map lifecycle', async () => {
+    const wrapper = await mountReady()
+    const map = maps[0]!
+    const toolBar = toolBars[0]!
+
+    expect(amapNamespace.createDefaultLayer).toHaveBeenCalledOnce()
+    expect(map.options.mapStyle).toBe('amap://styles/whitesmoke')
+    expect(map.options.layers).toEqual([standardLayers[0]])
+    expect(map.addControl).toHaveBeenCalledWith(toolBar)
+    expect(map.on).toHaveBeenCalledWith('mousemove', expect.any(Function))
+
+    wrapper.unmount()
+
+    expect(map.off).toHaveBeenCalledWith('mousemove', expect.any(Function))
+    expect(map.removeControl).toHaveBeenCalledWith(toolBar)
+    expect(map.destroy).toHaveBeenCalledOnce()
+  })
+
+  it('throttles mousemove and displays the latest coordinate as WGS84 with six decimals', async () => {
+    const callbacks: FrameRequestCallback[] = []
+    const requestFrame = vi
+      .spyOn(window, 'requestAnimationFrame')
+      .mockImplementation((callback) => callbacks.push(callback))
+    const wrapper = await mountReady()
+
+    mapMouseMoveHandler?.({ lnglat: lngLat(116.403, 39.91) })
+    mapMouseMoveHandler?.({ lnglat: lngLat(116.404, 39.911) })
+    expect(requestFrame).toHaveBeenCalledOnce()
+    callbacks[0]?.(0)
+    await flushPromises()
+
+    const expected = gcj02ToWgs84([116.404, 39.911])
+    expect(wrapper.get('.coordinate-status').text()).toBe(
+      `WGS84：${expected[0].toFixed(6)}, ${expected[1].toFixed(6)}`,
+    )
+    requestFrame.mockRestore()
+    wrapper.unmount()
+  })
+
+  it('switches official base layers without disturbing business overlays or map view', async () => {
+    const wrapper = await mountReady({
+      sourceGeometry: { type: 'Point', coordinates: [116.397, 39.908] },
+      bufferGeometry: {
+        type: 'Polygon',
+        coordinates: [
+          [
+            [116.39, 39.9],
+            [116.42, 39.9],
+            [116.42, 39.93],
+            [116.39, 39.9],
+          ],
+        ],
+      },
+      poiItems: [
+        {
+          id: 'poi-1',
+          name: '学校',
+          type: '',
+          typeCode: '',
+          address: '',
+          locationWgs84: [116.407, 39.918],
+        },
+      ],
+      riskSpatialResult: riskSpatialResult('task-layer-switch', [0.6]),
+    })
+    const map = maps[0]!
+    const businessMarkers = [...markers]
+    const businessPolygons = [...polygons]
+    const originalCenter = [...map.center]
+    const originalZoom = map.zoom
+    const buttons = wrapper.findAll('.map-layer-options button')
+
+    expect(loadAmap).toHaveBeenCalledTimes(1)
+    expect(map.options.layers).toEqual([standardLayers[0]])
+    expect(map.setLayers).not.toHaveBeenCalled()
+
+    await buttons[1]!.trigger('click')
+    expect(map.setLayers).toHaveBeenLastCalledWith([satelliteLayers[0]])
+
+    await wrapper.get('.road-net-toggle input').setValue(true)
+    expect(map.setLayers).toHaveBeenLastCalledWith([satelliteLayers[0], roadNetLayers[0]])
+
+    await buttons[0]!.trigger('click')
+    expect(map.setLayers).toHaveBeenLastCalledWith([standardLayers[0]])
+
+    expect(maps).toHaveLength(1)
+    expect(markers).toEqual(businessMarkers)
+    expect(polygons).toEqual(businessPolygons)
+    businessMarkers.forEach((overlay) => expect(overlay.setMap).not.toHaveBeenCalledWith(null))
+    businessPolygons.forEach((overlay) => expect(overlay.setMap).not.toHaveBeenCalledWith(null))
+    expect(map.center).toEqual(originalCenter)
+    expect(map.zoom).toBe(originalZoom)
+    expect(map.setCenter).not.toHaveBeenCalled()
+    expect(map.setZoom).not.toHaveBeenCalled()
+    expect(wrapper.emitted('select-point')).toBeUndefined()
+    expect(wrapper.emitted('select-geometry')).toBeUndefined()
+    expect(wrapper.emitted('drawing-mode-change')).toBeUndefined()
+    expect(wrapper.emitted('drawing-error')).toBeUndefined()
     wrapper.unmount()
   })
 })

@@ -22,7 +22,7 @@ defineEmits<{ close: [] }>()
 <style scoped>
 .workspace-result-drawer {
   position: absolute;
-  z-index: 10;
+  z-index: 200;
   right: 12px;
   bottom: 12px;
   left: 12px;
@@ -33,6 +33,8 @@ defineEmits<{ close: [] }>()
   flex-direction: column;
   overflow: hidden;
   padding: 0;
+  border-radius: 2px;
+  box-shadow: none;
 }
 
 .workspace-result-drawer-header {

@@ -88,7 +88,7 @@ defineEmits<{
   grid-template-columns: repeat(2, minmax(0, 1fr));
   overflow: hidden;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: 5px;
 }
 
 .analysis-tab {
@@ -107,7 +107,7 @@ defineEmits<{
 }
 
 .analysis-tab.active {
-  background: #edf3ff;
+  background: var(--primary-soft);
   color: var(--primary);
   font-weight: 700;
 }
@@ -122,7 +122,7 @@ defineEmits<{
 .analysis-tab-content {
   padding: 12px;
   border: 1px solid var(--border);
-  border-radius: 10px;
-  background: #fbfcff;
+  border-radius: 5px;
+  background: var(--surface-subtle);
 }
 </style>

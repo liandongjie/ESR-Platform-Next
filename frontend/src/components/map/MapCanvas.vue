@@ -38,6 +38,12 @@ interface OverlayInstance {
   setMap: (map: MapInstance | null) => void
 }
 
+interface TileLayerInstance {
+  destroy?: () => void
+}
+
+type MapControlInstance = object
+
 interface DrawingOverlay extends OverlayInstance {
   getPosition?: () => unknown
   getPath?: () => unknown
@@ -50,9 +56,12 @@ interface AMapBounds {
 }
 
 interface MapInstance {
-  on: (event: 'click', handler: (event: AMapMouseEvent) => void) => void
-  off: (event: 'click', handler: (event: AMapMouseEvent) => void) => void
+  on: (event: 'click' | 'mousemove', handler: (event: AMapMouseEvent) => void) => void
+  off: (event: 'click' | 'mousemove', handler: (event: AMapMouseEvent) => void) => void
+  addControl: (control: MapControlInstance) => void
+  removeControl: (control: MapControlInstance) => void
   setFitView: (overlays?: OverlayInstance[]) => void
+  setLayers: (layers: TileLayerInstance[]) => void
   destroy: () => void
 }
 
@@ -60,8 +69,15 @@ interface AMapNamespace {
   plugin: (name: string, callback: () => void) => void
   Map: new (
     container: HTMLElement,
-    options: { zoom: number; center: Coordinate; viewMode: string },
+    options: {
+      zoom: number
+      center: Coordinate
+      viewMode: string
+      mapStyle: string
+      layers: TileLayerInstance[]
+    },
   ) => MapInstance
+  createDefaultLayer: () => TileLayerInstance
   Marker: new (options: { position: Coordinate; title?: string }) => OverlayInstance
   Polyline: new (options: {
     path: Coordinate[]
@@ -78,6 +94,11 @@ interface AMapNamespace {
     fillOpacity: number
     zIndex: number
   }) => OverlayInstance
+  TileLayer: {
+    Satellite: new () => TileLayerInstance
+    RoadNet: new () => TileLayerInstance
+  }
+  ToolBar: new (options?: { position?: string | Record<string, number> }) => MapControlInstance
   MouseTool?: new (map: MapInstance) => MouseToolInstance
 }
 
@@ -109,8 +130,15 @@ const emit = defineEmits<{
 const container = ref<HTMLElement | null>(null)
 const state = ref<'loading' | 'ready' | 'missing-key' | 'error'>('loading')
 const errorMessage = ref('')
+const baseLayerMode = ref<'standard' | 'satellite'>('standard')
+const roadNetEnabled = ref(false)
+const pointerWgs84 = ref<Coordinate | null>(null)
 let map: MapInstance | null = null
 let amap: AMapNamespace | null = null
+let toolBar: MapControlInstance | null = null
+let standardLayer: TileLayerInstance | null = null
+let satelliteLayer: TileLayerInstance | null = null
+let roadNetLayer: TileLayerInstance | null = null
 let sourceOverlays: OverlayInstance[] = []
 let bufferOverlays: OverlayInstance[] = []
 let riskCellOverlays: OverlayInstance[] = []
@@ -122,10 +150,41 @@ let activeDrawingMode: DrawingMode | null = null
 let drawingRevision = 0
 let suppressNextMapClick = false
 let suppressMapClickTimer: number | null = null
+let latestPointerGcj02: Coordinate | null = null
+let pointerFrame: number | null = null
 
 function parseNumber(value: string | undefined, fallback: number): number {
   const parsed = Number(value)
   return Number.isFinite(parsed) ? parsed : fallback
+}
+
+function applyBaseLayers() {
+  if (!map || !standardLayer || !satelliteLayer || !roadNetLayer) return
+  if (baseLayerMode.value === 'standard') {
+    map.setLayers([standardLayer])
+    return
+  }
+  map.setLayers(roadNetEnabled.value ? [satelliteLayer, roadNetLayer] : [satelliteLayer])
+}
+
+function selectBaseLayer(mode: 'standard' | 'satellite') {
+  if (baseLayerMode.value === mode) return
+  baseLayerMode.value = mode
+  applyBaseLayers()
+}
+
+function handleMapMouseMove(event: AMapMouseEvent) {
+  latestPointerGcj02 = [event.lnglat.getLng(), event.lnglat.getLat()]
+  if (pointerFrame !== null) return
+  pointerFrame = window.requestAnimationFrame(() => {
+    pointerFrame = null
+    if (latestPointerGcj02) pointerWgs84.value = gcj02ToWgs84(latestPointerGcj02)
+  })
+}
+
+function pointerStatusText(): string {
+  if (!pointerWgs84.value) return 'WGS84：--'
+  return `WGS84：${pointerWgs84.value[0].toFixed(6)}, ${pointerWgs84.value[1].toFixed(6)}`
 }
 
 function removeSourceOverlays() {
@@ -563,6 +622,9 @@ onMounted(async () => {
 
   try {
     amap = await loadAmap<AMapNamespace>()
+    standardLayer = amap.createDefaultLayer()
+    satelliteLayer = new amap.TileLayer.Satellite()
+    roadNetLayer = new amap.TileLayer.RoadNet()
     map = new amap.Map(container.value, {
       zoom: parseNumber(import.meta.env.VITE_AMAP_ZOOM, 13),
       center: [
@@ -570,8 +632,13 @@ onMounted(async () => {
         parseNumber(import.meta.env.VITE_AMAP_CENTER_LAT, 32.1),
       ],
       viewMode: '2D',
+      mapStyle: 'amap://styles/whitesmoke',
+      layers: [standardLayer],
     })
+    toolBar = new amap.ToolBar({ position: 'LT' })
+    map.addControl(toolBar)
     map.on('click', handleMapClick)
+    map.on('mousemove', handleMapMouseMove)
     state.value = 'ready'
     renderSourceGeometry()
     renderBufferGeometry()
@@ -586,10 +653,15 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   drawingRevision += 1
   clearMapClickSuppression()
+  if (pointerFrame !== null) window.cancelAnimationFrame(pointerFrame)
+  pointerFrame = null
+  latestPointerGcj02 = null
   disposeMouseTool()
   if (map) {
     // AMap 实例和覆盖物只属于当前组件生命周期，不进入 Pinia；卸载时统一解除事件并销毁，避免热更新/路由切换残留监听。
     map.off('click', handleMapClick)
+    map.off('mousemove', handleMapMouseMove)
+    if (toolBar) map.removeControl(toolBar)
   }
   removeSourceOverlays()
   removeBufferOverlays()
@@ -598,6 +670,10 @@ onBeforeUnmount(() => {
   map?.destroy()
   map = null
   amap = null
+  toolBar = null
+  standardLayer = null
+  satelliteLayer = null
+  roadNetLayer = null
   mouseToolPluginPromise = null
 })
 </script>
@@ -619,15 +695,40 @@ onBeforeUnmount(() => {
         </template>
       </div>
     </div>
-    <div v-else class="map-tip">
-      {{
-        props.readOnly
-          ? '历史结果只读展示'
-          : props.selectionDisabled
-            ? '分析任务进行中，暂不可更换研究点'
-            : '点击地图选择研究点'
-      }}
+    <div
+      v-if="state === 'ready' && !props.readOnly && !props.selectionDisabled"
+      class="map-tip"
+      role="status"
+    >
+      单击地图选择研究点
     </div>
+    <details v-if="state === 'ready'" class="map-layer-control">
+      <summary>图层</summary>
+      <div class="map-layer-panel" aria-label="底图切换">
+        <div class="map-layer-options">
+          <button
+            type="button"
+            :class="{ active: baseLayerMode === 'standard' }"
+            :aria-pressed="baseLayerMode === 'standard'"
+            @click="selectBaseLayer('standard')"
+          >
+            标准
+          </button>
+          <button
+            type="button"
+            :class="{ active: baseLayerMode === 'satellite' }"
+            :aria-pressed="baseLayerMode === 'satellite'"
+            @click="selectBaseLayer('satellite')"
+          >
+            卫星
+          </button>
+        </div>
+        <label v-if="baseLayerMode === 'satellite'" class="road-net-toggle">
+          <input v-model="roadNetEnabled" type="checkbox" @change="applyBaseLayers">
+          叠加路网
+        </label>
+      </div>
+    </details>
     <div v-if="state === 'ready' && props.riskSpatialResult" class="risk-legend">
       <strong>综合风险值</strong>
       <div v-for="bin in RISK_VALUE_COLOR_BINS" :key="bin.label" class="risk-legend-row">
@@ -635,9 +736,12 @@ onBeforeUnmount(() => {
         <span>{{ bin.label }}</span>
       </div>
     </div>
-    <div class="map-status">
-      <span class="status-dot" :class="{ online: state === 'ready' }" />
-      {{ state === 'ready' ? '地图已连接' : '地图待配置' }}
+    <div class="map-footer-status">
+      <span v-if="state === 'ready'" class="coordinate-status">{{ pointerStatusText() }}</span>
+      <span class="map-status">
+        <span class="status-dot" :class="{ online: state === 'ready' }" />
+        {{ state === 'ready' ? '地图已连接' : '地图待配置' }}
+      </span>
     </div>
   </section>
 </template>
@@ -646,16 +750,109 @@ onBeforeUnmount(() => {
 .map-tip {
   position: absolute;
   top: 14px;
-  left: 14px;
+  left: 52px;
   z-index: 2;
-  padding: 8px 11px;
-  border: 1px solid rgba(220, 228, 240, 0.92);
-  border-radius: 9px;
-  color: #52627f;
-  background: rgba(255, 255, 255, 0.92);
-  font-size: 12px;
-  box-shadow: 0 8px 22px rgba(43, 73, 121, 0.08);
-  backdrop-filter: blur(8px);
+  padding: 4px 7px;
+  border: 1px solid rgba(207, 215, 211, 0.82);
+  border-radius: 4px;
+  color: #64706b;
+  background: rgba(249, 250, 249, 0.82);
+  font-size: 11px;
+}
+
+.map-layer-control {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 2;
+  border: 1px solid rgba(207, 215, 211, 0.94);
+  border-radius: 3px;
+  background: rgba(249, 250, 249, 0.94);
+  color: #52605b;
+  font-size: 11px;
+}
+
+.map-layer-control summary {
+  padding: 5px 9px;
+  cursor: pointer;
+  font-weight: 600;
+  list-style: none;
+}
+
+.map-layer-control summary::-webkit-details-marker {
+  display: none;
+}
+
+.map-layer-control[open] summary {
+  border-bottom: 1px solid var(--border);
+}
+
+.map-layer-panel {
+  display: grid;
+  gap: 6px;
+  padding: 6px;
+}
+
+.map-layer-options {
+  display: flex;
+}
+
+.map-layer-options button {
+  padding: 4px 8px;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.map-layer-options button.active {
+  background: var(--primary);
+  color: #fff;
+}
+
+.map-layer-options button:focus-visible,
+.road-net-toggle:focus-within {
+  outline: 2px solid var(--primary);
+  outline-offset: 1px;
+}
+
+.road-net-toggle {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding-right: 3px;
+  cursor: pointer;
+}
+
+.road-net-toggle input {
+  margin: 0;
+  accent-color: var(--primary);
+}
+
+.map-footer-status {
+  position: absolute;
+  right: 10px;
+  bottom: 10px;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #555b60;
+  font-size: 10px;
+}
+
+.coordinate-status,
+.map-footer-status .map-status {
+  position: static;
+  min-height: 0;
+  padding: 4px 6px;
+  border: 1px solid rgba(191, 196, 200, 0.85);
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.88);
+  color: inherit;
+  font-size: inherit;
+  backdrop-filter: none;
 }
 
 .risk-legend {
@@ -665,14 +862,12 @@ onBeforeUnmount(() => {
   z-index: 2;
   display: grid;
   gap: 5px;
-  padding: 10px 12px;
-  border: 1px solid rgba(220, 228, 240, 0.92);
-  border-radius: 9px;
-  color: #52627f;
-  background: rgba(255, 255, 255, 0.92);
+  padding: 8px 10px;
+  border: 1px solid rgba(207, 215, 211, 0.9);
+  border-radius: 5px;
+  color: #52605b;
+  background: rgba(249, 250, 249, 0.9);
   font-size: 11px;
-  box-shadow: 0 8px 22px rgba(43, 73, 121, 0.08);
-  backdrop-filter: blur(8px);
 }
 
 .risk-legend strong {

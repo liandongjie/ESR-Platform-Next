@@ -49,7 +49,10 @@ function updateWeight(code: string, value: number | undefined) {
 
 function submit() {
   if (props.disabled || props.submitting || !weightsValid.value) return
-  emit('submit', weightsDraft.value.map((item) => ({ ...item })))
+  emit(
+    'submit',
+    weightsDraft.value.map((item) => ({ ...item })),
+  )
 }
 </script>
 
@@ -83,9 +86,9 @@ function submit() {
         />
       </div>
     </div>
-    <small class="risk-analysis-hint">
+    <!-- <small class="risk-analysis-hint">
       前端只做即时提示；指标合法性和权重规则仍以后端 RiskAnalysisPipeline 为最终校验。
-    </small>
+    </small> -->
     <small v-if="disabled" class="risk-analysis-hint">
       当前任务仍在服务端执行，权重暂时锁定，避免丢失正在运行的任务。
     </small>

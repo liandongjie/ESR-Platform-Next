@@ -167,7 +167,7 @@ function selectMode(mode: StudyAreaMethod) {
   grid-template-columns: repeat(5, minmax(0, 1fr));
   overflow: hidden;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: 5px;
 }
 
 .study-area-tab {
@@ -187,7 +187,7 @@ function selectMode(mode: StudyAreaMethod) {
 }
 
 .study-area-tab.active {
-  background: #edf3ff;
+  background: var(--primary-soft);
   color: var(--primary);
   font-weight: 700;
 }
@@ -203,8 +203,8 @@ function selectMode(mode: StudyAreaMethod) {
   min-height: 120px;
   padding: 12px;
   border: 1px solid var(--border);
-  border-radius: 10px;
-  background: #fbfcff;
+  border-radius: 5px;
+  background: var(--surface-subtle);
 }
 
 .study-area-input-content :deep(.section-title-row) {
@@ -230,8 +230,9 @@ function selectMode(mode: StudyAreaMethod) {
   align-items: end;
   gap: 10px;
   padding: 12px;
-  border-radius: 10px;
-  background: #f6f8fc;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--surface-subtle);
 }
 
 .study-area-summary > div {

@@ -33,6 +33,7 @@ const activeAnalysisTab = ref<'poi' | 'risk'>('poi')
 type ResultDrawerType = 'poi' | 'risk'
 const resultDrawerOpen = ref(false)
 const resultDrawerType = ref<ResultDrawerType | null>(null)
+const serviceCheckComplete = ref(false)
 let sourceMutationRevision = 0
 let bufferMutationRevision = 0
 let initialStepDerived = false
@@ -91,6 +92,14 @@ const mapSelectionDisabled = computed(
     activeWorkflowStep.value !== 1 ||
     activeStudyAreaMethod.value !== 'draw',
 )
+const showServiceError = computed(
+  () => serviceCheckComplete.value && !systemStore.loading && !systemStore.backendOnline,
+)
+
+async function loadSystemStatus() {
+  await systemStore.load()
+  serviceCheckComplete.value = true
+}
 
 async function confirmDestructiveMutation(message: string, title: string): Promise<boolean> {
   try {
@@ -298,7 +307,7 @@ watch(
 )
 
 onMounted(async () => {
-  void systemStore.load()
+  void loadSystemStatus()
   await analysisStore.restoreRiskAnalysis()
   deriveInitialWorkflowStep()
   riskNotificationsArmed = true
@@ -307,33 +316,18 @@ onMounted(async () => {
 
 <template>
   <div class="workspace-page">
-    <section class="workspace-header panel-card">
-      <div class="workspace-title">
-        <div>
-          <p class="eyebrow">ANALYSIS WORKSPACE</p>
-          <h1>环境社会风险分析工作台</h1>
-        </div>
-        <div class="workspace-status">
-          <span class="service-indicator">
-            <span class="status-dot" :class="{ online: systemStore.backendOnline }" />
-            {{
-              systemStore.loading ? '检查中' : systemStore.backendOnline ? '服务在线' : '服务未连接'
-            }}
-          </span>
-          <span class="crs-chip">EPSG:4326</span>
-          <el-button size="small" :loading="systemStore.loading" @click="systemStore.load">
-            检查服务
-          </el-button>
-        </div>
+    <section class="workspace-toolbar">
+      <WorkspaceWorkflowNavigator
+        :active-step="activeWorkflowStep"
+        :available-steps="availableWorkflowSteps"
+        :completed-steps="completedWorkflowSteps"
+        @select-step="selectWorkflowStep"
+      />
+      <div v-if="showServiceError" class="workspace-service-error" role="status">
+        <span>服务暂不可用</span>
+        <el-button size="small" text @click="loadSystemStatus">重试</el-button>
       </div>
     </section>
-
-    <WorkspaceWorkflowNavigator
-      :active-step="activeWorkflowStep"
-      :available-steps="availableWorkflowSteps"
-      :completed-steps="completedWorkflowSteps"
-      @select-step="selectWorkflowStep"
-    />
 
     <section class="workspace-main" :class="{ 'is-result-step': activeWorkflowStep === 4 }">
       <div class="workspace-map-region">
@@ -364,13 +358,6 @@ onMounted(async () => {
         v-show="activeWorkflowStep !== 4"
         class="result-panel panel-card phase2c-result-panel workspace-context-panel"
       >
-        <div class="panel-heading">
-          <div>
-            <p class="eyebrow">ANALYSIS CONTROL</p>
-            <h2>当前分析</h2>
-          </div>
-        </div>
-
         <section v-if="activeWorkflowStep === 1" class="control-section study-area-context">
           <StudyAreaPanel
             :disabled="analysisStore.analysisLocked"
@@ -474,15 +461,6 @@ onMounted(async () => {
         </section>
       </aside>
     </section>
-
-    <el-alert
-      v-if="systemStore.error"
-      class="service-error"
-      :title="`后端连接失败：${systemStore.error}`"
-      type="warning"
-      :closable="false"
-      show-icon
-    />
   </div>
 </template>
 
@@ -490,51 +468,29 @@ onMounted(async () => {
 .workspace-page {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 0;
   overflow: hidden;
 }
 
-.workspace-header {
+.workspace-toolbar {
   flex: none;
-  padding: 10px 14px;
-  box-shadow: 0 6px 20px rgba(43, 73, 121, 0.05);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  min-height: 36px;
+  border: 1px solid var(--border);
+  border-bottom: 0;
+  background: #fff;
 }
 
-.workspace-title,
-.workspace-status {
+.workspace-service-error {
   display: flex;
   align-items: center;
-}
-
-.workspace-title {
-  justify-content: space-between;
-  gap: 16px;
-}
-
-.workspace-title h1 {
-  margin: 3px 0 0;
-  font-size: 18px;
-  letter-spacing: -0.01em;
-}
-
-.workspace-status {
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  gap: 8px;
-}
-
-.service-indicator,
-.crs-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  min-height: 28px;
-  padding: 0 9px;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  background: #f8faff;
-  color: #60708d;
-  font-size: 11px;
+  gap: 4px;
+  padding: 0 8px;
+  color: #a33e36;
+  font-size: 12px;
+  font-weight: 600;
   white-space: nowrap;
 }
 
@@ -543,8 +499,10 @@ onMounted(async () => {
   min-height: 0;
   display: grid;
   grid-template-columns: minmax(0, 1fr) 380px;
-  gap: 14px;
+  gap: 0;
+  border: 1px solid var(--border);
   overflow: hidden;
+  background: #fff;
 }
 
 .workspace-main.is-result-step {
@@ -555,6 +513,9 @@ onMounted(async () => {
   width: 100%;
   height: 100%;
   min-height: 0;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
 }
 
 .workspace-map-region {
@@ -571,6 +532,11 @@ onMounted(async () => {
   overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior: contain;
+  padding: 12px;
+  border: 0;
+  border-left: 1px solid var(--border);
+  border-radius: 0;
+  box-shadow: none;
 }
 
 .phase2c-result-panel {
@@ -593,6 +559,12 @@ onMounted(async () => {
   margin-top: 18px;
   padding-top: 18px;
   border-top: 1px solid var(--border);
+}
+
+.workspace-context-panel > .control-section:first-child {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: 0;
 }
 
 .control-section :deep(.el-input-number) {
@@ -628,33 +600,33 @@ onMounted(async () => {
 }
 
 @media (max-width: 1200px) {
-  .workspace-page {
-    gap: 10px;
-  }
-
-  .workspace-header {
-    padding: 9px 12px;
-  }
-
   .workspace-main {
     grid-template-columns: minmax(0, 1fr) 340px;
-    gap: 12px;
   }
 }
 
 @media (max-width: 900px) {
-  .workspace-page {
-    gap: 8px;
+  .workspace-toolbar {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .workspace-service-error {
+    min-height: 36px;
+    border-top: 1px solid var(--border);
   }
 
   .workspace-main {
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: minmax(240px, 3fr) minmax(220px, 2fr);
-    gap: 10px;
   }
 
   .workspace-main.is-result-step {
     grid-template-rows: minmax(0, 1fr);
+  }
+
+  .workspace-context-panel {
+    border-left: 0;
+    border-top: 1px solid var(--border);
   }
 }
 </style>
