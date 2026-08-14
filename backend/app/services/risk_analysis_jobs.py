@@ -10,7 +10,11 @@ from affine import Affine
 from rasterio.crs import CRS
 
 from app.gis.geojson import GeoJsonValidationError, parse_geojson_geometry
-from app.gis.indicators import INDICATORS, IndicatorDefinition
+from app.gis.indicators import (
+    INDICATORS,
+    IndicatorDefinition,
+    risk_model_contract_payload,
+)
 from app.gis.risk_models import IndicatorWeight, RiskAnalysisValidationError
 from app.gis.risk_pipeline import RiskAnalysisPipeline, write_risk_geotiff
 from app.repositories.risk_analysis_job_store import RiskAnalysisJobStore
@@ -93,6 +97,7 @@ class RiskAnalysisJobService:
             "task_id": task_id,
             "status": "SUCCEEDED",
             "algorithm_version": _ALGORITHM_VERSION,
+            "model_contract": risk_model_contract_payload(),
             "geometry": {
                 "type": geometry.geom_type,
                 "bounds": [float(value) for value in geometry.bounds],

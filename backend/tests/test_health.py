@@ -218,3 +218,34 @@ def test_capabilities_exposes_framework_stage(client):
     assert payload["project"] == "ESR-Platform-Next"
     assert payload["stage"] == "framework"
     assert payload["coordinate_system"] == "EPSG:4326"
+
+
+def test_risk_indicator_metadata_exposes_complete_model_contract(client):
+    response = client.get("/api/v1/meta/risk-indicators")
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["schema_version"] == 1
+    assert payload["model_contract"] == {
+        "code": "nimby_facility_siting_environmental_social_risk_sensitivity",
+        "name": "邻避设施选址环境社会风险/敏感性",
+        "source_value_semantics": "higher_means_higher_risk_contribution",
+        "normalized_range": {"minimum": 0.0, "maximum": 1.0},
+        "aggregation": "weighted_sum",
+        "required_weight_total_percent": 100.0,
+    }
+    assert payload["categories"] == [
+        {"code": "environment", "name": "环境因素", "order": 0},
+        {"code": "population", "name": "人口因素", "order": 1},
+        {"code": "social", "name": "社会因素", "order": 2},
+    ]
+    assert len(payload["indicators"]) == 12
+    assert {item["risk_direction"] for item in payload["indicators"]} == {
+        "increasing"
+    }
+    assert all(item["risk_semantics"] for item in payload["indicators"])
+    assert {
+        item["code"]: item["legacy_mvp_default_weight_percent"]
+        for item in payload["indicators"]
+        if item["legacy_mvp_default_selected"]
+    } == {"PM25": 30.0, "AQI": 40.0, "NDVI": 30.0}

@@ -88,6 +88,47 @@ class RiskAnalysisArtifactOutput(ApiModel):
     manifest: str = Field(min_length=1)
 
 
+class RiskAnalysisNormalizedRange(ApiModel):
+    minimum: Literal[0.0] = 0.0
+    maximum: Literal[1.0] = 1.0
+
+
+class RiskModelContractOutput(ApiModel):
+    code: Literal["nimby_facility_siting_environmental_social_risk_sensitivity"]
+    name: str = Field(min_length=1)
+    source_value_semantics: Literal["higher_means_higher_risk_contribution"]
+    normalized_range: RiskAnalysisNormalizedRange
+    aggregation: Literal["weighted_sum"]
+    required_weight_total_percent: Literal[100.0] = 100.0
+
+
+class RiskIndicatorCategoryOutput(ApiModel):
+    code: Literal["environment", "population", "social"]
+    name: str = Field(min_length=1)
+    order: int = Field(ge=0)
+
+
+class RiskIndicatorCatalogItemOutput(ApiModel):
+    code: str = Field(min_length=1, max_length=64)
+    name: str = Field(min_length=1)
+    category: Literal["environment", "population", "social"]
+    source_tif: str = Field(min_length=1)
+    normalized_range: RiskAnalysisNormalizedRange
+    risk_direction: Literal["increasing"]
+    risk_semantics: str = Field(min_length=1)
+    legacy_mvp_default_selected: bool
+    legacy_mvp_default_weight_percent: FiniteFloat = Field(ge=0.0, le=100.0)
+
+
+class RiskIndicatorCatalogOutput(ApiModel):
+    schema_version: Literal[1] = 1
+    model_contract: RiskModelContractOutput
+    categories: list[RiskIndicatorCategoryOutput] = Field(min_length=3, max_length=3)
+    indicators: list[RiskIndicatorCatalogItemOutput] = Field(
+        min_length=12, max_length=12
+    )
+
+
 class RiskAnalysisSuccessResult(ApiModel):
     """成功任务的持久化结果契约；完整但无版本号的历史结果按 v1 兼容读取。"""
 
@@ -100,6 +141,7 @@ class RiskAnalysisSuccessResult(ApiModel):
     statistics: RasterStatisticsOutput
     indicators: list[RiskAnalysisIndicatorOutput] = Field(min_length=1, max_length=12)
     artifacts: RiskAnalysisArtifactOutput
+    model_contract: RiskModelContractOutput | None = None
 
 
 class RiskAnalysisSpatialValueScale(ApiModel):

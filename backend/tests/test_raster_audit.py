@@ -35,7 +35,15 @@ def _write_raster(
 
 def _catalog(*names: str) -> tuple[IndicatorDefinition, ...]:
     return tuple(
-        IndicatorDefinition(code=name, name=name, filename=f"{name}.tif") for name in names
+        IndicatorDefinition(
+            code=name,
+            name=name,
+            filename=f"{name}.tif",
+            category="environment",
+            risk_direction="increasing",
+            risk_semantics="测试指标值越高，风险贡献越高。",
+        )
+        for name in names
     )
 
 

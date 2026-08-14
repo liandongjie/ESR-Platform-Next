@@ -36,8 +36,22 @@ def _write_raster(path: Path, values: np.ndarray, *, nodata: float = -9999.0) ->
 
 def _catalog() -> tuple[IndicatorDefinition, ...]:
     return (
-        IndicatorDefinition(code="a", name="指标A", filename="a.tif"),
-        IndicatorDefinition(code="b", name="指标B", filename="b.tif"),
+        IndicatorDefinition(
+            code="a",
+            name="指标A",
+            filename="a.tif",
+            category="environment",
+            risk_direction="increasing",
+            risk_semantics="测试指标值越高，风险贡献越高。",
+        ),
+        IndicatorDefinition(
+            code="b",
+            name="指标B",
+            filename="b.tif",
+            category="environment",
+            risk_direction="increasing",
+            risk_semantics="测试指标值越高，风险贡献越高。",
+        ),
     )
 
 
@@ -71,6 +85,14 @@ def test_job_service_persists_task_scoped_raster_and_manifest(tmp_path: Path):
     assert payload["schema_version"] == 1
     assert payload["status"] == "SUCCEEDED"
     assert payload["algorithm_version"] == "weighted-overlay-v1"
+    assert payload["model_contract"] == {
+        "code": "nimby_facility_siting_environmental_social_risk_sensitivity",
+        "name": "邻避设施选址环境社会风险/敏感性",
+        "source_value_semantics": "higher_means_higher_risk_contribution",
+        "normalized_range": {"minimum": 0.0, "maximum": 1.0},
+        "aggregation": "weighted_sum",
+        "required_weight_total_percent": 100.0,
+    }
     assert payload["artifacts"]["raster"] == "risk-analysis/task-123/risk.tif"
     assert payload["statistics"]["mean"] == pytest.approx(0.5)
 
