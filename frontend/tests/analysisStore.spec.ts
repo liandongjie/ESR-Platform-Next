@@ -8,6 +8,7 @@ import {
   getRiskAnalysisResult,
   getRiskAnalysisSpatialResult,
   getRiskAnalysisSubmission,
+  getRiskIndicatorCatalog,
 } from '@/api/riskAnalysis'
 import { searchAmapPois, searchAmapPoisInGeometry } from '@/map/amapPoi'
 import { useAnalysisStore } from '@/stores/analysis'
@@ -19,6 +20,7 @@ import type {
   RiskAnalysisSpatialResult,
   RiskAnalysisSubmissionDetail,
 } from '@/types/riskAnalysis'
+import { makeRiskIndicatorCatalog } from './fixtures/riskIndicatorCatalog'
 
 vi.mock('@/api/analysisAreas', () => ({
   createAnalysisAreaBuffer: vi.fn(),
@@ -30,6 +32,7 @@ vi.mock('@/api/riskAnalysis', () => ({
   getRiskAnalysisResult: vi.fn(),
   getRiskAnalysisSpatialResult: vi.fn(),
   getRiskAnalysisSubmission: vi.fn(),
+  getRiskIndicatorCatalog: vi.fn(),
 }))
 
 vi.mock('@/map/amapPoi', () => ({
@@ -43,6 +46,7 @@ const mockedGetJob = vi.mocked(getRiskAnalysisJob)
 const mockedGetResult = vi.mocked(getRiskAnalysisResult)
 const mockedGetSpatialResult = vi.mocked(getRiskAnalysisSpatialResult)
 const mockedGetSubmission = vi.mocked(getRiskAnalysisSubmission)
+const mockedGetCatalog = vi.mocked(getRiskIndicatorCatalog)
 const mockedSearchPois = vi.mocked(searchAmapPois)
 const mockedSearchPoisInGeometry = vi.mocked(searchAmapPoisInGeometry)
 const workspaceTaskStorageKey = 'esr:risk-analysis:workspace-task-id'
@@ -213,6 +217,10 @@ function makeSubmission(): RiskAnalysisSubmissionDetail {
 }
 
 async function prepareBuffer(store: ReturnType<typeof useAnalysisStore>) {
+  if (!store.riskIndicatorCatalog) {
+    store.riskIndicatorCatalog = makeRiskIndicatorCatalog()
+    store.initializeLegacyRiskWeights()
+  }
   mockedCreateBuffer.mockResolvedValueOnce(makeBufferResponse())
   store.setSourcePoint([118.9, 32.1])
   await store.createBuffer()
@@ -283,6 +291,8 @@ describe('analysis store', () => {
     mockedGetSpatialResult.mockResolvedValue(makeSpatialResult())
     mockedGetSubmission.mockReset()
     mockedGetSubmission.mockResolvedValue(makeSubmission())
+    mockedGetCatalog.mockReset()
+    mockedGetCatalog.mockResolvedValue(makeRiskIndicatorCatalog())
     mockedSearchPois.mockReset()
     mockedSearchPoisInGeometry.mockReset()
     window.sessionStorage.clear()
@@ -969,9 +979,10 @@ describe('analysis store', () => {
   })
 
   it(
-    'uses the default 30/40/30 weights and invalidates old task results when weights change',
+    'applies catalog legacy defaults and invalidates old task results when weights change',
     async () => {
       const store = useAnalysisStore()
+      await store.loadRiskIndicatorCatalog()
       expect(store.weights).toEqual([
         { code: 'PM25', weight_percent: 30 },
         { code: 'AQI', weight_percent: 40 },
@@ -979,7 +990,11 @@ describe('analysis store', () => {
       ])
 
       store.result = makeRiskResult()
-      store.setWeight('PM25', 35)
+      store.setRiskWeights([
+        { code: 'PM25', weight_percent: 35 },
+        { code: 'AQI', weight_percent: 35 },
+        { code: 'NDVI', weight_percent: 30 },
+      ])
 
       expect(store.weights[0]?.weight_percent).toBe(35)
       expect(store.result).toBeNull()
@@ -989,11 +1004,17 @@ describe('analysis store', () => {
   it('persists only draft inputs and marks the buffer ready after an accepted response', async () => {
     mockedCreateBuffer.mockResolvedValueOnce(makeBufferResponse())
     const store = useAnalysisStore()
+    store.riskIndicatorCatalog = makeRiskIndicatorCatalog()
+    store.initializeLegacyRiskWeights()
 
     store.setSourcePoint([118.9, 32.1])
     store.setBufferDistance(4000)
     await store.createBuffer()
-    store.setWeight('PM25', 35)
+    store.setRiskWeights([
+      { code: 'PM25', weight_percent: 35 },
+      { code: 'AQI', weight_percent: 35 },
+      { code: 'NDVI', weight_percent: 30 },
+    ])
 
     const draft = JSON.parse(window.sessionStorage.getItem(workspaceDraftStorageKey) ?? '{}')
     expect(draft).toEqual({
@@ -1001,7 +1022,7 @@ describe('analysis store', () => {
       buffer_distance_m: 4000,
       weights: [
         { code: 'PM25', weight_percent: 35 },
-        { code: 'AQI', weight_percent: 40 },
+        { code: 'AQI', weight_percent: 35 },
         { code: 'NDVI', weight_percent: 30 },
       ],
       buffer_ready: true,
@@ -1363,7 +1384,11 @@ describe('analysis store', () => {
 
     store.setSourcePoint([118.91, 32.11])
     store.setBufferDistance(4000)
-    store.setWeight('PM25', 35)
+    store.setRiskWeights([
+      { code: 'PM25', weight_percent: 35 },
+      { code: 'AQI', weight_percent: 35 },
+      { code: 'NDVI', weight_percent: 30 },
+    ])
 
     expect(store.analysisLocked).toBe(true)
     expect(store.sourceGeometryWgs84?.coordinates).toEqual(originalPoint)
@@ -1714,5 +1739,159 @@ describe('analysis store', () => {
     expect(store.submissionContext).toBeNull()
     expect(store.submissionLoading).toBe(false)
     expect(store.submissionError).toBeNull()
+  })
+
+  it('atomically commits and submits all twelve catalog indicators', async () => {
+    const store = useAnalysisStore()
+    await prepareBuffer(store)
+    store.result = makeRiskResult()
+    const weights = makeRiskIndicatorCatalog().indicators.map((indicator, index) => ({
+      code: indicator.code,
+      weight_percent: index === 0 ? 100 : 0,
+    }))
+    mockedCreateJob.mockResolvedValueOnce({
+      job: {
+        task_id: 'task-12',
+        status: 'QUEUED',
+        submitted_at: '2026-08-07T12:00:00Z',
+        status_url: '/api/v1/risk-analysis/jobs/task-12',
+        result_url: '/api/v1/risk-analysis/jobs/task-12/result',
+      },
+      retryAfterMs: 2000,
+    })
+    mockedGetJob.mockImplementation(() => new Promise(() => undefined))
+
+    expect(store.setRiskWeights(weights)).toBe(true)
+    expect(store.weights).toEqual(weights)
+    expect(store.result).toBeNull()
+    await store.submitRiskAnalysis()
+
+    expect(mockedCreateJob).toHaveBeenCalledWith({
+      geometry: store.bufferResult?.buffer.geometry,
+      weights,
+    })
+  })
+
+  it('rejects unknown catalog codes without changing committed state or result', () => {
+    const store = useAnalysisStore()
+    store.riskIndicatorCatalog = makeRiskIndicatorCatalog()
+    store.initializeLegacyRiskWeights()
+    store.result = makeRiskResult()
+    const committed = store.weights.map((item) => ({ ...item }))
+    const result = store.result
+
+    expect(store.setRiskWeights([{ code: 'UNKNOWN', weight_percent: 100 }])).toBe(false)
+    expect(store.weights).toEqual(committed)
+    expect(store.result).toBe(result)
+  })
+
+  it('restores a structurally valid draft before catalog validation without clearing it', async () => {
+    const draft = {
+      ...makeDraft(false),
+      weights: [{ code: 'legacy-unknown', weight_percent: 100 }],
+    }
+    window.sessionStorage.setItem(workspaceDraftStorageKey, JSON.stringify(draft))
+    const store = useAnalysisStore()
+
+    await store.restoreRiskAnalysis()
+    expect(store.weights).toEqual(draft.weights)
+    expect(store.workspaceDraftRestored).toBe(true)
+    expect(window.sessionStorage.getItem(workspaceDraftStorageKey)).not.toBeNull()
+
+    store.riskIndicatorCatalog = makeRiskIndicatorCatalog()
+    expect(store.riskWeightsBelongToCatalog).toBe(false)
+    expect(store.setRiskWeights(draft.weights)).toBe(false)
+    expect(store.weights).toEqual(draft.weights)
+  })
+
+  it('recovers an existing result while catalog loading is still pending', async () => {
+    window.sessionStorage.setItem(workspaceTaskStorageKey, 'task-1')
+    const store = useAnalysisStore()
+    let rejectCatalog: ((reason?: unknown) => void) | undefined
+    mockedGetCatalog.mockImplementationOnce(
+      () =>
+        new Promise((_resolve, reject) => {
+          rejectCatalog = reject
+        }),
+    )
+    mockedGetJob.mockResolvedValueOnce({
+      task_id: 'task-1',
+      status: 'SUCCEEDED',
+      stage: 'COMPLETED',
+      progress: 100,
+      result_available: true,
+      submitted_at: '2026-08-07T12:00:00Z',
+    })
+    mockedGetResult.mockResolvedValueOnce(makeRiskResult())
+
+    const catalogLoading = store.loadRiskIndicatorCatalog()
+    await store.restoreRiskAnalysis()
+    expect(store.result?.task_id).toBe('task-1')
+    expect(store.riskIndicatorCatalogLoading).toBe(true)
+
+    rejectCatalog?.(new Error('catalog unavailable'))
+    await catalogLoading
+    expect(store.riskIndicatorCatalogError).toBeTruthy()
+    expect(store.result?.task_id).toBe('task-1')
+  })
+
+  it('applies legacy defaults when the first catalog retry succeeds in a new workspace', async () => {
+    const store = useAnalysisStore()
+    mockedGetCatalog.mockRejectedValueOnce(new Error('catalog unavailable'))
+
+    await store.loadRiskIndicatorCatalog()
+    expect(store.weights).toEqual([])
+    expect(store.riskIndicatorCatalogError).toBeTruthy()
+
+    mockedGetCatalog.mockResolvedValueOnce(makeRiskIndicatorCatalog())
+    await store.loadRiskIndicatorCatalog()
+    expect(store.weights).toEqual([
+      { code: 'PM25', weight_percent: 30 },
+      { code: 'AQI', weight_percent: 40 },
+      { code: 'NDVI', weight_percent: 30 },
+    ])
+  })
+
+  it('does not apply retry defaults over recovery state or existing weights', async () => {
+    const retainedWeights = [{ code: 'rkmd', weight_percent: 100 }]
+    const cases: Array<{
+      prepare: (store: ReturnType<typeof useAnalysisStore>) => void
+      expected: typeof retainedWeights
+    }> = [
+      {
+        prepare: (store) => {
+          store.workspaceDraftRestored = true
+          store.weights = retainedWeights.map((item) => ({ ...item }))
+        },
+        expected: retainedWeights,
+      },
+      {
+        prepare: (store) => {
+          store.job = { task_id: 'task-1' }
+        },
+        expected: [],
+      },
+      {
+        prepare: (store) => {
+          store.submissionContext = makeSubmission()
+        },
+        expected: [],
+      },
+      {
+        prepare: (store) => {
+          store.weights = retainedWeights.map((item) => ({ ...item }))
+        },
+        expected: retainedWeights,
+      },
+    ]
+
+    for (const testCase of cases) {
+      setActivePinia(createPinia())
+      const store = useAnalysisStore()
+      testCase.prepare(store)
+      mockedGetCatalog.mockResolvedValueOnce(makeRiskIndicatorCatalog())
+      await store.loadRiskIndicatorCatalog()
+      expect(store.weights).toEqual(testCase.expected)
+    }
   })
 })

@@ -9,6 +9,7 @@ import {
   getRiskAnalysisResult,
   getRiskAnalysisSpatialResult,
   getRiskAnalysisSubmission,
+  getRiskIndicatorCatalog,
 } from '@/api/riskAnalysis'
 import { searchAmapPois, searchAmapPoisInGeometry } from '@/map/amapPoi'
 import type {
@@ -23,6 +24,7 @@ import type {
   RiskAnalysisResult,
   RiskAnalysisSpatialResult,
   RiskAnalysisSubmissionDetail,
+  RiskIndicatorCatalog,
   RiskIndicatorWeightInput,
 } from '@/types/riskAnalysis'
 import type { PoiDto, PoiGeometrySearchTruncatedReason } from '@/types/poi'
@@ -32,7 +34,6 @@ const MAX_CONSECUTIVE_POLL_FAILURES = 3
 const DEFAULT_POLL_INTERVAL_MS = 2000
 const WORKSPACE_TASK_ID_STORAGE_KEY = 'esr:risk-analysis:workspace-task-id'
 const WORKSPACE_DRAFT_STORAGE_KEY = 'esr:risk-analysis:workspace-draft'
-const WORKSPACE_WEIGHT_CODES = ['PM25', 'AQI', 'NDVI'] as const
 const POI_EXPORT_PAGE_SIZE = 50
 const POI_EXPORT_LIMIT = 5000
 
@@ -80,6 +81,10 @@ interface AnalysisState {
   } | null
   poiExportRevision: number
   weights: RiskIndicatorWeightInput[]
+  riskIndicatorCatalog: RiskIndicatorCatalog | null
+  riskIndicatorCatalogLoading: boolean
+  riskIndicatorCatalogError: string | null
+  workspaceDraftRestored: boolean
   job: RiskAnalysisJobReference | null
   jobStatus: RiskAnalysisJobStatus | null
   result: RiskAnalysisResult | null
@@ -159,7 +164,8 @@ function readWorkspaceDraft(): WorkspaceDraft | null {
       distance <= 0 ||
       typeof draft.buffer_ready !== 'boolean' ||
       !Array.isArray(weights) ||
-      weights.length !== WORKSPACE_WEIGHT_CODES.length
+      weights.length < 1 ||
+      weights.length > 12
     ) {
       throw new Error()
     }
@@ -169,7 +175,7 @@ function readWorkspaceDraft(): WorkspaceDraft | null {
       const weight = item as Record<string, unknown>
       if (
         typeof weight.code !== 'string' ||
-        !WORKSPACE_WEIGHT_CODES.includes(weight.code as (typeof WORKSPACE_WEIGHT_CODES)[number]) ||
+        !weight.code ||
         typeof weight.weight_percent !== 'number' ||
         !Number.isFinite(weight.weight_percent) ||
         weight.weight_percent < 0 ||
@@ -179,7 +185,7 @@ function readWorkspaceDraft(): WorkspaceDraft | null {
       }
       return { code: weight.code, weight_percent: weight.weight_percent }
     })
-    if (new Set(parsedWeights.map((item) => item.code)).size !== WORKSPACE_WEIGHT_CODES.length) {
+    if (new Set(parsedWeights.map((item) => item.code)).size !== parsedWeights.length) {
       throw new Error()
     }
 
@@ -243,11 +249,11 @@ export const useAnalysisStore = defineStore('analysis', {
     poiExportError: null,
     poiExportProgress: null,
     poiExportRevision: 0,
-    weights: [
-      { code: 'PM25', weight_percent: 30 },
-      { code: 'AQI', weight_percent: 40 },
-      { code: 'NDVI', weight_percent: 30 },
-    ],
+    weights: [],
+    riskIndicatorCatalog: null,
+    riskIndicatorCatalogLoading: false,
+    riskIndicatorCatalogError: null,
+    workspaceDraftRestored: false,
     job: null,
     jobStatus: null,
     result: null,
@@ -278,8 +284,43 @@ export const useAnalysisStore = defineStore('analysis', {
       return status !== 'FAILED' && status !== 'CANCELED'
     },
     spatialLoading: (state): boolean => state.spatialLoadingTaskId !== null,
+    riskWeightsBelongToCatalog: (state): boolean => {
+      if (!state.riskIndicatorCatalog) return false
+      const codes = new Set(state.riskIndicatorCatalog.indicators.map((item) => item.code))
+      return state.weights.length > 0 && state.weights.every((item) => codes.has(item.code))
+    },
   },
   actions: {
+    async loadRiskIndicatorCatalog() {
+      this.riskIndicatorCatalogLoading = true
+      this.riskIndicatorCatalogError = null
+      try {
+        this.riskIndicatorCatalog = await getRiskIndicatorCatalog()
+        this.initializeLegacyRiskWeights()
+      } catch (error: unknown) {
+        this.riskIndicatorCatalog = null
+        this.riskIndicatorCatalogError = getApiErrorMessage(error, '风险指标目录加载失败')
+      } finally {
+        this.riskIndicatorCatalogLoading = false
+      }
+    },
+    initializeLegacyRiskWeights() {
+      if (
+        !this.riskIndicatorCatalog ||
+        this.job ||
+        this.submissionContext ||
+        this.workspaceDraftRestored ||
+        this.weights.length > 0
+      ) {
+        return
+      }
+      this.weights = this.riskIndicatorCatalog.indicators
+        .filter((item) => item.legacy_mvp_default_selected)
+        .map((item) => ({
+          code: item.code,
+          weight_percent: item.legacy_mvp_default_weight_percent,
+        }))
+    },
     invalidatePoiExportContext() {
       const wasLoading = this.poiExportLoading
       this.poiExportRevision += 1
@@ -584,18 +625,42 @@ export const useAnalysisStore = defineStore('analysis', {
         false,
       )
     },
-    setWeight(code: string, weightPercent: number) {
-      if (this.analysisLocked) return
-      const item = this.weights.find((weight) => weight.code === code)
-      if (!item || item.weight_percent === weightPercent) return
-      item.weight_percent = weightPercent
+    setRiskWeights(weights: RiskIndicatorWeightInput[]): boolean {
+      if (this.analysisLocked || !this.riskIndicatorCatalog) {
+        this.taskError = this.riskIndicatorCatalog
+          ? '当前风险分析任务尚未结束，请等待任务完成后再重新提交'
+          : '风险指标目录尚未就绪，请重试加载后再创建分析'
+        return false
+      }
+      const catalogCodes = new Set(
+        this.riskIndicatorCatalog.indicators.map((indicator) => indicator.code),
+      )
+      const nextWeights = weights.map((item) => ({ ...item }))
+      if (
+        nextWeights.length < 1 ||
+        nextWeights.length > 12 ||
+        new Set(nextWeights.map((item) => item.code)).size !== nextWeights.length ||
+        nextWeights.some(
+          (item) =>
+            !catalogCodes.has(item.code) ||
+            !Number.isFinite(item.weight_percent) ||
+            item.weight_percent < 0 ||
+            item.weight_percent > 100,
+        )
+      ) {
+        this.taskError = '当前指标配置与服务端目录不一致，请检查后重试'
+        return false
+      }
+
       this.resetRiskAnalysis()
+      this.weights = nextWeights
       saveWorkspaceDraft(
         this.sourceGeometryWgs84,
         this.bufferDistanceMeters,
         this.weights,
         !!this.bufferResult,
       )
+      return true
     },
     clearSelection() {
       if (this.analysisLocked) return
@@ -635,6 +700,7 @@ export const useAnalysisStore = defineStore('analysis', {
         this.sourceGeometryWgs84 = parseSourceGeometry(draft.source_geometry_wgs84)
         this.bufferDistanceMeters = draft.buffer_distance_m
         this.weights = draft.weights.map((item) => ({ ...item }))
+        this.workspaceDraftRestored = true
         if (draft.buffer_ready) await this.createBuffer()
         return
       }
@@ -804,6 +870,12 @@ export const useAnalysisStore = defineStore('analysis', {
       }
       if (!this.bufferResult) {
         this.taskError = '请先生成缓冲区'
+        return
+      }
+      if (!this.riskIndicatorCatalog || !this.riskWeightsBelongToCatalog) {
+        this.taskError = this.riskIndicatorCatalogError
+          ? '风险指标目录加载失败，请重试后再创建分析'
+          : '风险指标目录尚未就绪或当前配置已失效，请重试后再创建分析'
         return
       }
 

@@ -6,11 +6,13 @@ import {
   parseRiskAnalysisSpatialResult,
 } from '@/validation/riskAnalysisResult'
 import { parseRiskAnalysisSubmission } from '@/validation/riskAnalysisSubmission'
+import { parseRiskIndicatorCatalog } from '@/validation/riskIndicatorCatalog'
 import type {
   RiskAnalysisJobCreated,
   RiskAnalysisJobRequest,
   RiskAnalysisJobHistoryResponse,
   RiskAnalysisJobStatus,
+  RiskIndicatorCatalog,
   RiskAnalysisResult,
   RiskAnalysisSpatialResult,
   RiskAnalysisSubmissionDetail,
@@ -33,6 +35,11 @@ const ARTIFACT_FILENAME_SUFFIXES: Record<RiskAnalysisArtifactKind, string> = {
 export interface CreatedRiskAnalysisJob {
   job: RiskAnalysisJobCreated
   retryAfterMs: number
+}
+
+export async function getRiskIndicatorCatalog(): Promise<RiskIndicatorCatalog> {
+  const response = await http.get<unknown>('/meta/risk-indicators')
+  return parseRiskIndicatorCatalog(response.data)
 }
 
 function retryAfterMilliseconds(value: unknown): number {

@@ -5,6 +5,47 @@ export interface RiskIndicatorWeightInput {
   weight_percent: number
 }
 
+export type RiskIndicatorCategoryCode = 'environment' | 'population' | 'social'
+
+export interface RiskAnalysisNormalizedRange {
+  minimum: 0
+  maximum: 1
+}
+
+export interface RiskModelContract {
+  code: 'nimby_facility_siting_environmental_social_risk_sensitivity'
+  name: string
+  source_value_semantics: 'higher_means_higher_risk_contribution'
+  normalized_range: RiskAnalysisNormalizedRange
+  aggregation: 'weighted_sum'
+  required_weight_total_percent: 100
+}
+
+export interface RiskIndicatorCategory {
+  code: RiskIndicatorCategoryCode
+  name: string
+  order: number
+}
+
+export interface RiskIndicatorDefinition {
+  code: string
+  name: string
+  category: RiskIndicatorCategoryCode
+  source_tif: string
+  normalized_range: RiskAnalysisNormalizedRange
+  risk_direction: 'increasing'
+  risk_semantics: string
+  legacy_mvp_default_selected: boolean
+  legacy_mvp_default_weight_percent: number
+}
+
+export interface RiskIndicatorCatalog {
+  schema_version: 1
+  model_contract: RiskModelContract
+  categories: RiskIndicatorCategory[]
+  indicators: RiskIndicatorDefinition[]
+}
+
 export interface RiskAnalysisJobRequest {
   geometry: BufferGeometry
   weights: RiskIndicatorWeightInput[]
@@ -80,6 +121,7 @@ export interface RiskAnalysisResult {
   task_id: string
   status: 'SUCCEEDED'
   algorithm_version: string
+  model_contract?: RiskModelContract | null
   geometry: {
     type: string
     bounds: number[]

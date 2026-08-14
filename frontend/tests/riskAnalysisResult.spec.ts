@@ -4,6 +4,7 @@ import {
   parseRiskAnalysisResult,
   parseRiskAnalysisSpatialResult,
 } from '@/validation/riskAnalysisResult'
+import { makeRiskIndicatorCatalog } from './fixtures/riskIndicatorCatalog'
 
 function validResult() {
   return {
@@ -95,6 +96,13 @@ function validSpatialResult() {
 describe('risk analysis result runtime validation', () => {
   it('accepts a complete v1 result', () => {
     expect(parseRiskAnalysisResult(validResult()).task_id).toBe('task-1')
+  })
+
+  it('accepts new model snapshots while preserving results without the optional field', () => {
+    const current = { ...validResult(), model_contract: makeRiskIndicatorCatalog().model_contract }
+
+    expect(parseRiskAnalysisResult(current).model_contract?.aggregation).toBe('weighted_sum')
+    expect(parseRiskAnalysisResult(validResult()).model_contract).toBeUndefined()
   })
 
   it('rejects the incomplete success manifest that previously crashed the task drawer', () => {
