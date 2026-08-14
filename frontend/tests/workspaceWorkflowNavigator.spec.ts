@@ -15,6 +15,8 @@ describe('WorkspaceWorkflowNavigator', () => {
     const steps = wrapper.findAll('li')
 
     expect(wrapper.findAll('button')).toHaveLength(4)
+    expect(wrapper.findAll('.step-status')).toHaveLength(4)
+    expect(wrapper.find('.step-marker').exists()).toBe(false)
     expect(wrapper.findAll('.step-label').map((item) => item.text())).toEqual([
       '研究区',
       '缓冲区',

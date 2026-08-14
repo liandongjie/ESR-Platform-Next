@@ -14,7 +14,9 @@ import StudyAreaPanel from '@/components/workspace/StudyAreaPanel.vue'
 import StudyAreaSearchInput from '@/components/workspace/StudyAreaSearchInput.vue'
 import RiskResultPanel from '@/components/risk-analysis/RiskResultPanel.vue'
 import WorkspaceResultDrawer from '@/components/workspace/WorkspaceResultDrawer.vue'
+import { getCapabilities, getLiveHealth } from '@/api/system'
 import { useAnalysisStore } from '@/stores/analysis'
+import { useSystemStore } from '@/stores/system'
 import type { AnalysisAreaBufferResponse } from '@/types/analysisArea'
 import type { StudyPointCandidate } from '@/types/poi'
 import type { RiskJobStatus } from '@/types/riskAnalysis'
@@ -101,6 +103,20 @@ beforeEach(() => {
   vi.spyOn(ElMessageBox, 'confirm').mockReset().mockResolvedValue({} as never)
   vi.spyOn(ElMessage, 'success').mockReset().mockReturnValue({ close: vi.fn() } as never)
   vi.spyOn(ElMessage, 'error').mockReset().mockReturnValue({ close: vi.fn() } as never)
+  vi.mocked(getLiveHealth).mockReset().mockResolvedValue({
+    status: 'ok',
+    service: 'esr-platform-api',
+    environment: 'test',
+  })
+  vi.mocked(getCapabilities).mockReset().mockResolvedValue({
+    project: 'ESR Platform',
+    stage: 'test',
+    coordinate_system: 'EPSG:4326',
+    result_ttl_hours: 24,
+    limits: { max_buffer_meters: 10_000, max_analysis_area_km2: 5_000 },
+    implemented: [],
+    planned: [],
+  })
 })
 
 function coordinateInputs(wrapper: ReturnType<typeof mountWorkspace>['wrapper']) {
@@ -194,6 +210,42 @@ function setRiskJobStatus(
 function activeWorkflowLabel(wrapper: ReturnType<typeof mountWorkspace>['wrapper']) {
   return wrapper.get('.workspace-workflow li[data-state="active"] .step-label').text()
 }
+
+describe('WorkspaceView service status', () => {
+  it('keeps successful service checks out of the workspace chrome', async () => {
+    const { wrapper } = mountWorkspace((store) => {
+      vi.spyOn(store, 'restoreRiskAnalysis').mockResolvedValue()
+    })
+
+    await flushPromises()
+
+    expect(getLiveHealth).toHaveBeenCalledOnce()
+    expect(wrapper.find('.workspace-service-error').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('服务在线')
+    expect(wrapper.text()).not.toContain('检查服务')
+  })
+
+  it('shows a compact retry action after a failed service check', async () => {
+    vi.mocked(getLiveHealth).mockRejectedValueOnce(new Error('offline'))
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const systemStore = useSystemStore()
+    const load = vi.spyOn(systemStore, 'load')
+    const { wrapper } = mountWorkspace((store) => {
+      vi.spyOn(store, 'restoreRiskAnalysis').mockResolvedValue()
+    }, pinia)
+
+    await flushPromises()
+
+    expect(load).toHaveBeenCalledOnce()
+    expect(wrapper.get('.workspace-service-error').text()).toContain('服务暂不可用')
+
+    await wrapper.get('.workspace-service-error button').trigger('click')
+    await flushPromises()
+
+    expect(load).toHaveBeenCalledTimes(2)
+  })
+})
 
 describe('WorkspaceView coordinate input', () => {
   beforeEach(() => {

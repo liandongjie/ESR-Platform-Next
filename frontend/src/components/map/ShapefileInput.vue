@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import type { UploadFile, UploadInstance } from 'element-plus'
 import { onBeforeUnmount, ref, watch } from 'vue'
 
 import { importShapefile } from '@/api/analysisAreas'
@@ -10,6 +11,7 @@ const emit = defineEmits<{ confirm: [geometry: SourceGeometry] }>()
 
 const loading = ref(false)
 const error = ref<string | null>(null)
+const uploadRef = ref<UploadInstance>()
 let requestRevision = 0
 
 function invalidateRequest() {
@@ -17,11 +19,7 @@ function invalidateRequest() {
   loading.value = false
 }
 
-async function selectFile(event: Event) {
-  const input = event.currentTarget as HTMLInputElement
-  const file = input.files?.[0]
-  // 立即清空 input，允许失败后重新选择同一个 ZIP；File 只保留到本次请求结束。
-  input.value = ''
+async function selectFile(file: File | undefined) {
   if (props.disabled || loading.value || !file) return
   if (!file.name.toLowerCase().endsWith('.zip')) {
     error.value = '请选择 ZIP 格式的 Shapefile 文件'
@@ -43,8 +41,10 @@ async function selectFile(event: Event) {
   }
 }
 
-function handleFileChange(event: Event) {
-  void selectFile(event)
+function handleFileChange(uploadFile: UploadFile) {
+  // ElUpload 只负责选择文件；立即清空列表，允许失败后重新选择同一个 ZIP。
+  uploadRef.value?.clearFiles()
+  void selectFile(uploadFile.raw)
 }
 
 watch(
@@ -64,14 +64,23 @@ onBeforeUnmount(invalidateRequest)
       <small>单个 ZIP · CRS 必填</small>
     </div>
 
-    <input
-      class="shapefile-file-input"
-      type="file"
+    <el-upload
+      ref="uploadRef"
+      class="shapefile-upload"
       accept=".zip,application/zip"
-      aria-label="上传 Shapefile ZIP"
+      :auto-upload="false"
+      :show-file-list="false"
+      :limit="1"
       :disabled="disabled || loading"
-      @change="handleFileChange"
+      :on-change="handleFileChange"
     >
+      <el-button :loading="loading" :disabled="disabled || loading">
+        选择 ZIP 文件
+      </el-button>
+      <template #tip>
+        <small class="section-hint">仅选择一个包含完整 Shapefile 的 ZIP 文件</small>
+      </template>
+    </el-upload>
     <small v-if="loading" class="section-hint">正在校验并导入研究区…</small>
     <el-alert v-if="error" :title="error" type="error" :closable="false" show-icon />
   </div>
@@ -83,8 +92,12 @@ onBeforeUnmount(invalidateRequest)
   gap: 0.75rem;
 }
 
-.shapefile-file-input {
-  min-width: 0;
-  color: var(--el-text-color-regular);
+.shapefile-upload :deep(.el-upload),
+.shapefile-upload :deep(.el-button) {
+  width: 100%;
+}
+
+.shapefile-upload :deep(.el-upload__tip) {
+  margin-top: 6px;
 }
 </style>

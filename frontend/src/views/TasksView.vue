@@ -88,8 +88,7 @@ onBeforeUnmount(() => {
   <div class="tasks-page">
     <section class="page-heading">
       <div>
-        <p class="eyebrow">TASK HISTORY</p>
-        <h1>风险分析历史任务</h1>
+        <h1>历史任务</h1>
         <p>任务记录来自服务端持久化元数据，页面刷新后仍可重新发现正在运行和已完成的任务。</p>
       </div>
       <el-button
@@ -102,16 +101,16 @@ onBeforeUnmount(() => {
       </el-button>
     </section>
 
-    <section class="history-summary">
-      <div class="panel-card summary-card">
+    <section class="history-summary-bar" aria-label="任务概览">
+      <div>
         <span>任务总数</span>
         <strong>{{ taskHistoryStore.total }}</strong>
       </div>
-      <div class="panel-card summary-card">
+      <div>
         <span>当前加载</span>
         <strong>{{ taskHistoryStore.items.length }}</strong>
       </div>
-      <div class="panel-card summary-card">
+      <div>
         <span>状态刷新</span>
         <strong>{{ taskHistoryStore.polling ? '自动刷新中' : '按需刷新' }}</strong>
       </div>
@@ -125,7 +124,7 @@ onBeforeUnmount(() => {
       show-icon
     />
 
-    <section class="panel-card history-panel">
+    <section class="history-panel">
       <el-skeleton v-if="taskHistoryStore.loading" :rows="6" animated />
 
       <el-empty
@@ -154,7 +153,7 @@ onBeforeUnmount(() => {
           </template>
         </el-table-column>
 
-        <el-table-column prop="stage" label="Stage" min-width="130" />
+        <el-table-column prop="stage" label="阶段" min-width="130" />
 
         <el-table-column label="研究区" width="100">
           <template #default="{ row }">
@@ -168,7 +167,7 @@ onBeforeUnmount(() => {
           </template>
         </el-table-column>
 
-        <el-table-column label="Task ID" min-width="210">
+        <el-table-column label="任务 ID" min-width="210">
           <template #default="{ row }">
             <code class="task-id">{{ row.task_id }}</code>
           </template>
@@ -199,7 +198,7 @@ onBeforeUnmount(() => {
     <el-drawer v-model="drawerVisible" title="任务详情" size="420px">
       <template v-if="taskHistoryStore.selectedTask">
         <div class="detail-block">
-          <span>Task ID</span>
+          <span>任务 ID</span>
           <code>{{ taskHistoryStore.selectedTask.task_id }}</code>
         </div>
         <div class="detail-grid">
@@ -208,7 +207,7 @@ onBeforeUnmount(() => {
             <strong>{{ statusText(taskHistoryStore.selectedTask.status) }}</strong>
           </div>
           <div>
-            <span>Stage</span>
+            <span>阶段</span>
             <strong>{{ taskHistoryStore.selectedTask.stage }}</strong>
           </div>
           <div>
@@ -310,11 +309,10 @@ onBeforeUnmount(() => {
 .tasks-page {
   display: flex;
   flex-direction: column;
-  gap: 18px;
+  gap: 12px;
 }
 
 .page-heading,
-.history-summary,
 .detail-grid,
 .indicator-list > div {
   display: flex;
@@ -328,7 +326,12 @@ onBeforeUnmount(() => {
 }
 
 .page-heading h1 {
-  margin: 4px 0 8px;
+  margin: 0 0 6px;
+  font-size: 24px;
+}
+
+.page-heading {
+  margin-bottom: 0;
 }
 
 .page-heading p:last-child {
@@ -336,16 +339,25 @@ onBeforeUnmount(() => {
   color: var(--muted);
 }
 
-.history-summary {
-  justify-content: flex-start;
+.history-summary-bar {
+  display: flex;
+  min-height: 40px;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0;
+  border: 1px solid var(--border);
+  background: #fff;
 }
 
-.summary-card {
-  min-width: 160px;
-  padding: 14px 16px;
+.history-summary-bar > div {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 7px 14px;
+  border-right: 1px solid var(--border);
 }
 
-.summary-card span,
+.history-summary-bar span,
 .detail-block span,
 .detail-grid span,
 .indicator-list span {
@@ -354,14 +366,14 @@ onBeforeUnmount(() => {
   font-size: 12px;
 }
 
-.summary-card strong {
-  display: block;
-  margin-top: 4px;
-  font-size: 18px;
+.history-summary-bar strong {
+  font-size: 14px;
 }
 
 .history-panel {
-  padding: 18px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  background: #fff;
 }
 
 .task-id {
@@ -378,8 +390,9 @@ onBeforeUnmount(() => {
 .detail-block,
 .detail-grid > div {
   padding: 12px;
-  border-radius: 10px;
-  background: #f6f8fc;
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  background: var(--surface-subtle);
 }
 
 .detail-block code {
@@ -421,14 +434,13 @@ h3 {
 }
 
 @media (max-width: 900px) {
-  .page-heading,
-  .history-summary {
+  .page-heading {
     align-items: stretch;
     flex-direction: column;
   }
 
-  .summary-card {
-    min-width: 0;
+  .history-summary-bar > div {
+    flex: 1 1 160px;
   }
 }
 </style>

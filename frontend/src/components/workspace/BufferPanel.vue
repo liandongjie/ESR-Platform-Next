@@ -118,8 +118,9 @@ function generateBuffer() {
   display: grid;
   gap: 9px;
   padding: 11px;
-  border-radius: 9px;
-  background: #f6f8fc;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--surface-subtle);
 }
 
 .buffer-result-summary strong {
