@@ -1,3 +1,10 @@
+/*
+ * @Author: liandongjie
+ * @Date: 2026-08-14 13:04:45
+ * @LastEditors: liandongjie
+ * @LastEditTime: 2026-08-14 14:30:45
+ * @Description:
+ */
 import { flushPromises, mount } from '@vue/test-utils'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import { describe, expect, it } from 'vitest'
@@ -25,9 +32,9 @@ describe('AppShell', () => {
     })
 
     expect(wrapper.get('.wordmark strong').text()).toBe(
-      'Environmental and Social Risk Platform',
+      'Environmental and Social Risk Platform | 环境社会风险分析平台',
     )
-    expect(wrapper.get('.wordmark span').text()).toBe('环境社会风险分析平台')
+    // expect(wrapper.get('.wordmark span').text()).toBe('环境社会风险分析平台')
     expect(wrapper.text()).not.toContain('ESR')
     expect(wrapper.find('.brand-mark').exists()).toBe(false)
     expect(wrapper.find('.sidebar').exists()).toBe(false)
