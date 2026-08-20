@@ -8,7 +8,7 @@ from app.factory import create_app
 flask_app = create_app()
 celery_app.config_from_object(flask_app.config["CELERY"])
 celery_app.set_default()
-celery_app.autodiscover_tasks(["app.tasks"])
+celery_app.autodiscover_tasks(["app"])
 
 
 class FlaskTask(Task):

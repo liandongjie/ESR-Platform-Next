@@ -15,21 +15,25 @@ def capabilities():
     return jsonify(
         {
             "project": "ESR-Platform-Next",
-            "stage": "framework",
+            "stage": "multi_user_mvp",
             "coordinate_system": "EPSG:4326",
+            "registration_enabled": current_app.config["REGISTRATION_ENABLED"],
             "result_ttl_hours": current_app.config["RESULT_TTL_HOURS"],
             "limits": {
                 "max_buffer_meters": current_app.config["MAX_BUFFER_METERS"],
                 "max_analysis_area_km2": current_app.config["MAX_ANALYSIS_AREA_KM2"],
             },
-            "implemented": ["health_checks", "configuration_baseline"],
-            "planned": [
+            "implemented": [
                 "authentication",
                 "study_area",
                 "poi_analysis",
                 "raster_analysis",
                 "task_history",
-                "exports",
+                "artifact_downloads",
+            ],
+            "planned": [
+                "lightweight_risk_preview",
+                "task_lifecycle_governance",
             ],
         }
     )

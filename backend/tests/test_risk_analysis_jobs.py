@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -9,11 +10,13 @@ from rasterio.transform import from_origin
 from shapely.geometry import box, mapping
 
 from app.gis.indicators import IndicatorDefinition
+from app.gis.risk_preview import RISK_PREVIEW_PALETTE_VERSION
 from app.schemas.risk_analysis import RiskAnalysisJobRequest, RiskAnalysisSuccessResult
 from app.services.risk_analysis_jobs import (
     RiskAnalysisArtifactError,
     RiskAnalysisJobService,
     build_risk_analysis_spatial_result,
+    resolve_risk_analysis_artifact,
     validate_risk_analysis_raster,
     write_failure_manifest,
 )
@@ -259,12 +262,15 @@ def test_job_service_persists_task_scoped_raster_and_manifest(tmp_path: Path):
 
     task_dir = runtime_dir / "risk-analysis" / "task-123"
     raster_path = task_dir / "risk.tif"
+    preview_path = task_dir / "preview.png"
     manifest_path = task_dir / "result.json"
     assert raster_path.is_file()
+    assert preview_path.is_file()
     assert manifest_path.is_file()
     assert payload["schema_version"] == 1
     assert payload["status"] == "SUCCEEDED"
     assert payload["algorithm_version"] == "weighted-overlay-v1"
+    assert payload["palette_version"] == RISK_PREVIEW_PALETTE_VERSION
     assert payload["model_contract"] == {
         "code": "nimby_facility_siting_environmental_social_risk_sensitivity",
         "name": "邻避设施选址环境社会风险/敏感性",
@@ -274,6 +280,8 @@ def test_job_service_persists_task_scoped_raster_and_manifest(tmp_path: Path):
         "required_weight_total_percent": 100.0,
     }
     assert payload["artifacts"]["raster"] == "risk-analysis/task-123/risk.tif"
+    assert payload["artifacts"]["preview"] == "risk-analysis/task-123/preview.png"
+    assert payload["grid"]["bounds"] == pytest.approx([118.0, 31.98, 118.02, 32.0])
     assert payload["statistics"]["mean"] == pytest.approx(0.5)
 
     persisted = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -284,6 +292,101 @@ def test_job_service_persists_task_scoped_raster_and_manifest(tmp_path: Path):
             values.compressed(),
             np.array([0.65, 0.55, 0.45, 0.35], dtype="float32"),
             atol=1e-6,
+        )
+
+
+def test_job_service_new_manifest_requires_preview_contract(
+    tmp_path: Path, monkeypatch
+):
+    service = RiskAnalysisJobService(
+        tmp_path / "source", tmp_path / "runtime", indicators=_catalog()
+    )
+    statistics = SimpleNamespace(
+        valid_pixel_count=4,
+        minimum=0.0,
+        maximum=1.0,
+        mean=0.5,
+    )
+    result = SimpleNamespace(
+        array=np.array([[0.0, 0.25], [0.75, 1.0]], dtype=np.float32),
+        transform=Affine(0.01, 0.002, 118.0, 0.001, -0.01, 32.0),
+        crs=SimpleNamespace(to_string=lambda: "EPSG:4326"),
+        nodata=-9999.0,
+        stats=statistics,
+        indicators=(
+            SimpleNamespace(
+                code="a",
+                name="指标A",
+                weight_percent=100.0,
+                stats=statistics,
+            ),
+        ),
+    )
+    monkeypatch.setattr(service.pipeline, "run", lambda **kwargs: result)
+    monkeypatch.setattr(
+        "app.services.risk_analysis_jobs.write_risk_geotiff",
+        lambda _result, path: path.write_bytes(b"fake-tiff"),
+    )
+
+    payload = service.execute(task_id="preview-contract", request=_request())
+    validated = RiskAnalysisSuccessResult.model_validate(payload)
+
+    assert validated.palette_version == "risk-viridis-5-v1"
+    assert validated.artifacts.preview == (
+        "risk-analysis/preview-contract/preview.png"
+    )
+    assert validated.grid.bounds == pytest.approx(
+        (118.0, 31.98, 118.024, 32.002)
+    )
+
+
+def test_success_schema_keeps_old_manifest_without_preview_compatible():
+    manifest = _success_manifest(
+        task_id="old-task",
+        shape=(1, 1),
+        nodata=-9999.0,
+        statistics={
+            "valid_pixel_count": 1,
+            "minimum": 0.5,
+            "maximum": 0.5,
+            "mean": 0.5,
+        },
+    )
+
+    assert manifest.artifacts.preview is None
+    assert manifest.grid.bounds is None
+    assert manifest.palette_version is None
+
+
+def test_preview_contract_rejects_non_wgs84_in_schema_and_resolver(tmp_path: Path):
+    payload = _success_manifest(
+        task_id="preview-crs",
+        shape=(1, 1),
+        nodata=-9999.0,
+        statistics={
+            "valid_pixel_count": 1,
+            "minimum": 0.5,
+            "maximum": 0.5,
+            "mean": 0.5,
+        },
+    ).model_dump(mode="json")
+    payload["grid"]["bounds"] = [118.0, 31.0, 119.0, 32.0]
+    payload["artifacts"]["preview"] = "risk-analysis/preview-crs/preview.png"
+    payload["palette_version"] = "risk-viridis-5-v1"
+    payload["grid"]["crs"] = "EPSG:3857"
+
+    with pytest.raises(ValueError, match="EPSG:4326"):
+        RiskAnalysisSuccessResult.model_validate(payload)
+
+    payload["grid"]["crs"] = "EPSG:4326"
+    manifest = RiskAnalysisSuccessResult.model_validate(payload)
+    manifest.grid.crs = "EPSG:3857"
+    with pytest.raises(RiskAnalysisArtifactError, match="声明"):
+        resolve_risk_analysis_artifact(
+            runtime_dir=tmp_path,
+            task_id="preview-crs",
+            manifest=manifest,
+            artifact_kind="preview",
         )
 
 

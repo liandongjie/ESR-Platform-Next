@@ -5,8 +5,10 @@ import tempfile
 from contextlib import suppress
 from pathlib import Path
 
+from alembic.config import Config as AlembicConfig
+from alembic.migration import MigrationContext
+from alembic.script import ScriptDirectory
 from flask import Blueprint, current_app, jsonify
-from sqlalchemy import text
 
 from app.extensions import create_redis_client, db
 from app.gis.indicators import INDICATORS
@@ -29,11 +31,7 @@ def live():
 def ready():
     checks: dict[str, dict] = {}
 
-    try:
-        db.session.execute(text("SELECT 1"))
-        checks["database"] = {"status": "ok"}
-    except Exception:  # readiness converts temporary dependency failures to 503
-        checks["database"] = {"status": "unavailable", "reason": "connection_failed"}
+    checks["database"] = _check_database_revision()
 
     checks["redis"] = _check_redis_endpoints()
     checks["source_rasters"] = _check_source_rasters(
@@ -46,6 +44,38 @@ def ready():
     is_ready = all(check["status"] == "ok" for check in checks.values())
     status_code = 200 if is_ready else 503
     return jsonify({"status": "ready" if is_ready else "not_ready", "checks": checks}), status_code
+
+
+def _expected_alembic_heads() -> tuple[str, ...]:
+    migrate_config = current_app.extensions["migrate"]
+    directory = Path(migrate_config.directory)
+    if not directory.is_absolute():
+        directory = Path(current_app.root_path).parent / directory
+    alembic_config = AlembicConfig()
+    alembic_config.set_main_option("script_location", str(directory))
+    return tuple(ScriptDirectory.from_config(alembic_config).get_heads())
+
+
+def _current_database_heads() -> tuple[str, ...]:
+    with db.engine.connect() as connection:
+        return tuple(MigrationContext.configure(connection).get_current_heads())
+
+
+def _check_database_revision() -> dict[str, str]:
+    try:
+        expected_heads = _expected_alembic_heads()
+    except Exception:
+        return {"status": "unavailable", "reason": "migration_metadata_failed"}
+    if not expected_heads:
+        return {"status": "unavailable", "reason": "migration_metadata_failed"}
+
+    try:
+        current_heads = _current_database_heads()
+    except Exception:  # readiness must not expose database or driver exception details
+        return {"status": "unavailable", "reason": "connection_failed"}
+    if set(current_heads) != set(expected_heads):
+        return {"status": "unavailable", "reason": "migration_not_at_head"}
+    return {"status": "ok"}
 
 
 def _check_redis_endpoints() -> dict:

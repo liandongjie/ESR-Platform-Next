@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import Field, FiniteFloat, PositiveInt, field_validator
+from pydantic import Field, FiniteFloat, PositiveInt, field_validator, model_validator
 
 from app.gis.geojson import GeoJsonValidationError, parse_geojson_geometry
 from app.schemas.common import ApiModel
@@ -74,6 +74,22 @@ class RiskAnalysisGridSummary(ApiModel):
     crs: str = Field(min_length=1)
     shape: tuple[PositiveInt, PositiveInt]
     nodata: FiniteFloat
+    bounds: tuple[FiniteFloat, FiniteFloat, FiniteFloat, FiniteFloat] | None = None
+
+    @field_validator("bounds")
+    @classmethod
+    def validate_wgs84_bounds(
+        cls, value: tuple[float, float, float, float] | None
+    ) -> tuple[float, float, float, float] | None:
+        if value is None:
+            return None
+        minimum_x, minimum_y, maximum_x, maximum_y = value
+        if not (
+            -180 <= minimum_x < maximum_x <= 180
+            and -90 <= minimum_y < maximum_y <= 90
+        ):
+            raise ValueError("风险预览边界必须是有效 WGS84 bbox")
+        return value
 
 
 class RiskAnalysisIndicatorOutput(ApiModel):
@@ -86,6 +102,7 @@ class RiskAnalysisIndicatorOutput(ApiModel):
 class RiskAnalysisArtifactOutput(ApiModel):
     raster: str = Field(min_length=1)
     manifest: str = Field(min_length=1)
+    preview: str | None = Field(default=None, min_length=1)
 
 
 class RiskAnalysisNormalizedRange(ApiModel):
@@ -141,7 +158,19 @@ class RiskAnalysisSuccessResult(ApiModel):
     statistics: RasterStatisticsOutput
     indicators: list[RiskAnalysisIndicatorOutput] = Field(min_length=1, max_length=12)
     artifacts: RiskAnalysisArtifactOutput
+    palette_version: Literal["risk-viridis-5-v1"] | None = None
     model_contract: RiskModelContractOutput | None = None
+
+    @model_validator(mode="after")
+    def validate_preview_contract(self) -> RiskAnalysisSuccessResult:
+        has_preview = self.artifacts.preview is not None
+        if has_preview != (self.grid.bounds is not None):
+            raise ValueError("风险预览文件与栅格边界必须同时存在")
+        if has_preview and self.grid.crs != "EPSG:4326":
+            raise ValueError("风险预览边界必须使用 EPSG:4326")
+        if has_preview and self.palette_version != "risk-viridis-5-v1":
+            raise ValueError("风险预览色带版本无效")
+        return self
 
 
 class RiskAnalysisSpatialValueScale(ApiModel):

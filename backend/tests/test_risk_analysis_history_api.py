@@ -1,124 +1,56 @@
-from __future__ import annotations
+from datetime import UTC, datetime, timedelta
 
-from typing import Any
+import pytest
 
+from app.extensions import db
+from app.models import AnalysisArtifact, AnalysisJob
 from app.repositories.risk_analysis_job_store import RiskAnalysisJobStore
 
 
-class FakeAsyncResult:
-    def __init__(self, state: str, info: dict[str, Any] | None = None) -> None:
-        self.state = state
-        self.info = info
-
-
-def _write_submission(
-    store: RiskAnalysisJobStore,
-    *,
-    task_id: str,
-    submitted_at: str,
-) -> None:
-    store.write_json(
-        task_id=task_id,
-        filename="submission.json",
-        payload={
-            "task_id": task_id,
-            "status": "QUEUED",
-            "submitted_at": submitted_at,
-            "request": {
-                "geometry": {
-                    "type": "Polygon",
-                    "coordinates": [[[118.9, 32.1]]],
-                },
-                "weights": [
-                    {"code": "PM25", "weight_percent": 30},
-                    {"code": "AQI", "weight_percent": 40},
-                    {"code": "NDVI", "weight_percent": 30},
-                ],
-            },
-        },
-    )
-
-
-def _write_success_result(store: RiskAnalysisJobStore, *, task_id: str) -> None:
-    store.write_json(
-        task_id=task_id,
-        filename="result.json",
-        payload={
-            "schema_version": 1,
-            "task_id": task_id,
-            "status": "SUCCEEDED",
-            "algorithm_version": "weighted-overlay-v1",
-            "geometry": {
-                "type": "Polygon",
-                "bounds": [118.9, 32.1, 118.91, 32.11],
-            },
-            "grid": {
-                "crs": "EPSG:4326",
-                "shape": [2, 2],
-                "nodata": -9999.0,
-            },
-            "statistics": {
-                "valid_pixel_count": 4,
-                "minimum": 0.2,
-                "maximum": 0.5,
-                "mean": 0.35,
-            },
-            "indicators": [
-                {
-                    "code": "PM25",
-                    "name": "细颗粒物 (PM2.5)",
-                    "weight_percent": 100.0,
-                    "statistics": {
-                        "valid_pixel_count": 4,
-                        "minimum": 0.2,
-                        "maximum": 0.5,
-                        "mean": 0.35,
-                    },
-                }
+def _request_payload():
+    return {
+        "geometry": {
+            "type": "Polygon",
+            "coordinates": [
+                [
+                    [118.9, 32.1],
+                    [118.91, 32.1],
+                    [118.91, 32.11],
+                    [118.9, 32.11],
+                    [118.9, 32.1],
+                ]
             ],
-            "artifacts": {
-                "raster": f"risk-analysis/{task_id}/risk.tif",
-                "manifest": f"risk-analysis/{task_id}/result.json",
-            },
         },
-    )
+        "weights": [{"code": "PM25", "weight_percent": 100}],
+    }
 
 
-def test_job_store_lists_only_known_task_directories(app):
-    store = RiskAnalysisJobStore(app.config["RUNTIME_DATA_DIR"])
-    _write_submission(
-        store,
-        task_id="known-task",
-        submitted_at="2026-08-08T01:00:00+00:00",
-    )
-    unrelated = store.root_dir / "unrelated"
-    unrelated.mkdir(parents=True)
-    (unrelated / "note.txt").write_text("not a task", encoding="utf-8")
-    (store.root_dir / "loose-file.txt").write_text("ignore", encoding="utf-8")
+def _add_job(app, task_id: str, queued_at: datetime, owner_id: int = 1):
+    payload = _request_payload()
+    with app.app_context():
+        db.session.add(
+            AnalysisJob(
+                id=task_id,
+                owner_id=owner_id,
+                idempotency_key=f"{task_id}-key",
+                status="QUEUED",
+                stage="QUEUED",
+                progress=0,
+                request_payload=payload,
+                geometry=payload["geometry"],
+                queued_at=queued_at,
+            )
+        )
+        db.session.commit()
 
-    assert set(store.list_task_ids()) == {"known-task"}
 
-
-def test_history_endpoint_returns_newest_first_with_compact_request_summary(
-    client,
-    app,
-    monkeypatch,
-):
-    store = RiskAnalysisJobStore(app.config["RUNTIME_DATA_DIR"])
-    _write_submission(
-        store,
-        task_id="older-task",
-        submitted_at="2026-08-08T01:00:00+00:00",
-    )
-    _write_submission(
-        store,
-        task_id="newer-task",
-        submitted_at="2026-08-08T02:00:00+00:00",
-    )
-    _write_success_result(store, task_id="newer-task")
-    monkeypatch.setattr(
-        "app.api.v1.risk_analysis.celery_app.AsyncResult",
-        lambda _: FakeAsyncResult("PENDING"),
+def test_history_uses_database_and_ignores_old_file_jobs(client, app):
+    now = datetime.now(UTC)
+    _add_job(app, "older-task", now - timedelta(minutes=1))
+    _add_job(app, "newer-task", now)
+    _add_job(app, "another-users-task", now + timedelta(minutes=1), owner_id=2)
+    RiskAnalysisJobStore(app.config["RUNTIME_DATA_DIR"]).record_submission(
+        task_id="legacy-file-task", request_payload=_request_payload()
     )
 
     response = client.get("/api/v1/risk-analysis/jobs?limit=20")
@@ -126,99 +58,97 @@ def test_history_endpoint_returns_newest_first_with_compact_request_summary(
     assert response.status_code == 200
     payload = response.get_json()
     assert payload["total"] == 2
-    assert payload["offset"] == 0
     assert [item["task_id"] for item in payload["items"]] == [
         "newer-task",
         "older-task",
     ]
-    assert payload["items"][0]["status"] == "SUCCEEDED"
-    assert payload["items"][1]["status"] == "QUEUED"
-    assert payload["items"][0]["request_summary"]["geometry_type"] == "Polygon"
-    assert payload["items"][0]["request_summary"]["weights"][0]["code"] == "PM25"
-    assert "geometry" not in payload["items"][0]["request_summary"]
+    assert set(payload) == {"items", "limit", "offset", "total"}
+    first_item = payload["items"][0]
+    assert set(first_item) == {
+        "task_id",
+        "status",
+        "stage",
+        "progress",
+        "result_available",
+        "submitted_at",
+        "queued_at",
+        "started_at",
+        "completed_at",
+        "expires_at",
+        "parent_job_id",
+        "timing",
+        "request_summary",
+    }
+    assert first_item["request_summary"] == {
+        "geometry_type": "Polygon",
+        "weights": [{"code": "PM25", "weight_percent": 100}],
+    }
+    assert "geometry" not in first_item["request_summary"]
 
 
-def test_history_endpoint_respects_limit(client, app, monkeypatch):
-    store = RiskAnalysisJobStore(app.config["RUNTIME_DATA_DIR"])
-    for index in range(3):
-        _write_submission(
-            store,
-            task_id=f"task-{index}",
-            submitted_at=f"2026-08-08T0{index + 1}:00:00+00:00",
-        )
-    monkeypatch.setattr(
-        "app.api.v1.risk_analysis.celery_app.AsyncResult",
-        lambda _: FakeAsyncResult("PENDING"),
-    )
-
-    response = client.get("/api/v1/risk-analysis/jobs?limit=2")
-
-    assert response.status_code == 200
-    payload = response.get_json()
-    assert payload["total"] == 3
-    assert len(payload["items"]) == 2
-
-
-def test_history_endpoint_rejects_invalid_limit(client):
-    response = client.get("/api/v1/risk-analysis/jobs?limit=0")
-
-    assert response.status_code == 422
-    assert response.get_json()["code"] == "INVALID_REQUEST"
-
-
-def test_history_endpoint_supports_offset(client, app, monkeypatch):
-    store = RiskAnalysisJobStore(app.config["RUNTIME_DATA_DIR"])
+def test_history_respects_limit_and_offset(client, app):
+    now = datetime.now(UTC)
     for index in range(4):
-        _write_submission(
-            store,
-            task_id=f"paged-task-{index}",
-            submitted_at=f"2026-08-08T0{index + 1}:00:00+00:00",
-        )
-    monkeypatch.setattr(
-        "app.api.v1.risk_analysis.celery_app.AsyncResult",
-        lambda _: FakeAsyncResult("PENDING"),
-    )
+        _add_job(app, f"task-{index}", now + timedelta(minutes=index))
 
-    response = client.get("/api/v1/risk-analysis/jobs?limit=2&offset=2")
+    response = client.get("/api/v1/risk-analysis/jobs?limit=2&offset=1")
 
-    assert response.status_code == 200
     payload = response.get_json()
+    assert response.status_code == 200
     assert payload["total"] == 4
-    assert payload["limit"] == 2
-    assert payload["offset"] == 2
-    assert [item["task_id"] for item in payload["items"]] == [
-        "paged-task-1",
-        "paged-task-0",
-    ]
+    assert [item["task_id"] for item in payload["items"]] == ["task-2", "task-1"]
 
 
-def test_history_endpoint_returns_empty_page_when_offset_exceeds_total(
-    client,
-    app,
-    monkeypatch,
-):
-    store = RiskAnalysisJobStore(app.config["RUNTIME_DATA_DIR"])
-    _write_submission(
-        store,
-        task_id="only-task",
-        submitted_at="2026-08-08T01:00:00+00:00",
-    )
-    monkeypatch.setattr(
-        "app.api.v1.risk_analysis.celery_app.AsyncResult",
-        lambda _: FakeAsyncResult("PENDING"),
+def test_history_uses_database_status_over_stale_file_result(client, app):
+    _add_job(app, "queued-task", datetime.now(UTC))
+    RiskAnalysisJobStore(app.config["RUNTIME_DATA_DIR"]).write_json(
+        task_id="queued-task",
+        filename="result.json",
+        payload={"task_id": "queued-task", "status": "SUCCEEDED"},
     )
 
-    response = client.get("/api/v1/risk-analysis/jobs?limit=20&offset=40")
+    response = client.get("/api/v1/risk-analysis/jobs")
 
     assert response.status_code == 200
-    payload = response.get_json()
-    assert payload["total"] == 1
-    assert payload["offset"] == 40
-    assert payload["items"] == []
+    item = response.get_json()["items"][0]
+    assert item["status"] == "QUEUED"
+    assert item["result_available"] is False
 
 
-def test_history_endpoint_rejects_invalid_offset(client):
-    response = client.get("/api/v1/risk-analysis/jobs?offset=-1")
+def test_history_uses_artifact_metadata_without_reading_manifest(
+    client, app, monkeypatch
+):
+    _add_job(app, "metadata-only-task", datetime.now(UTC))
+    with app.app_context():
+        job = db.session.get(AnalysisJob, "metadata-only-task")
+        job.status = "SUCCEEDED"
+        job.stage = "COMPLETED"
+        db.session.add(
+            AnalysisArtifact(
+                job_id=job.id,
+                kind="manifest",
+                relative_path=f"risk-analysis/{job.id}/result.json",
+                size_bytes=100,
+            )
+        )
+        db.session.commit()
+    monkeypatch.setattr(
+        RiskAnalysisJobStore,
+        "read_result",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("history must not read result.json")
+        ),
+    )
+
+    response = client.get("/api/v1/risk-analysis/jobs")
+
+    assert response.status_code == 200
+    assert response.get_json()["items"][0]["result_available"] is True
+
+
+@pytest.mark.parametrize("query", ["limit=0", "limit=101", "offset=-1"])
+def test_history_rejects_invalid_pagination(client, query):
+    response = client.get(f"/api/v1/risk-analysis/jobs?{query}")
 
     assert response.status_code == 422
     assert response.get_json()["code"] == "INVALID_REQUEST"

@@ -7,13 +7,10 @@ import pytest
 import rasterio
 from rasterio.transform import from_origin
 
+from app.extensions import db
+from app.gis.risk_preview import encode_risk_preview_png
+from app.models import AnalysisJob
 from app.repositories.risk_analysis_job_store import RiskAnalysisJobStore
-
-
-class FakeAsyncResult:
-    def __init__(self, state: str, info: dict[str, Any] | None = None) -> None:
-        self.state = state
-        self.info = info
 
 
 def _valid_payload() -> dict[str, Any]:
@@ -80,14 +77,43 @@ def _valid_success_manifest(task_id: str) -> dict[str, Any]:
     }
 
 
+def _post_job(client, payload, key="test-key"):
+    return client.post(
+        "/api/v1/risk-analysis/jobs",
+        json=payload,
+        headers={"Idempotency-Key": key},
+    )
+
+
 def _create_job(client, monkeypatch) -> str:
     monkeypatch.setattr(
         "app.api.v1.risk_analysis.celery_app.send_task",
         lambda *args, **kwargs: object(),
     )
-    response = client.post("/api/v1/risk-analysis/jobs", json=_valid_payload())
+    response = _post_job(client, _valid_payload())
     assert response.status_code == 202
-    return response.get_json()["task_id"]
+    task_id = response.get_json()["task_id"]
+    return task_id
+
+
+def _set_job_status(
+    app,
+    task_id: str,
+    status: str,
+    stage: str,
+    progress: int,
+    *,
+    error_code: str | None = None,
+    error_message: str | None = None,
+) -> None:
+    with app.app_context():
+        job = db.session.get(AnalysisJob, task_id)
+        job.status = status
+        job.stage = stage
+        job.progress = progress
+        job.error_code = error_code
+        job.error_message = error_message
+        db.session.commit()
 
 
 def _write_success_spatial_artifacts(app, task_id: str) -> None:
@@ -115,6 +141,23 @@ def _write_success_spatial_artifacts(app, task_id: str) -> None:
         nodata=-9999.0,
     ) as dataset:
         dataset.write(values, 1)
+    _set_job_status(app, task_id, "SUCCEEDED", "COMPLETED", 100)
+
+
+def _write_success_preview_artifacts(app, task_id: str) -> bytes:
+    store = RiskAnalysisJobStore(app.config["RUNTIME_DATA_DIR"])
+    manifest = _valid_success_manifest(task_id)
+    manifest["palette_version"] = "risk-viridis-5-v1"
+    manifest["grid"]["bounds"] = [118.0, 31.96, 118.04, 32.0]
+    manifest["artifacts"]["preview"] = f"risk-analysis/{task_id}/preview.png"
+    preview = encode_risk_preview_png(
+        np.linspace(0.0, 1.0, 16, dtype=np.float32).reshape(4, 4)
+    )
+    task_dir = store.task_directory(task_id, create=True)
+    (task_dir / "preview.png").write_bytes(preview)
+    store.write_json(task_id=task_id, filename="result.json", payload=manifest)
+    _set_job_status(app, task_id, "SUCCEEDED", "COMPLETED", 100)
+    return preview
 
 
 def test_create_job_returns_202_and_persists_submission(client, app, monkeypatch):
@@ -129,7 +172,7 @@ def test_create_job_returns_202_and_persists_submission(client, app, monkeypatch
         fake_send_task,
     )
 
-    response = client.post("/api/v1/risk-analysis/jobs", json=_valid_payload())
+    response = _post_job(client, _valid_payload())
 
     assert response.status_code == 202
     payload = response.get_json()
@@ -139,11 +182,13 @@ def test_create_job_returns_202_and_persists_submission(client, app, monkeypatch
     assert sent["task_id"] == payload["task_id"]
     assert sent["kwargs"]["payload"]["weights"][0]["code"] == "PM25"
 
-    store = RiskAnalysisJobStore(app.config["RUNTIME_DATA_DIR"])
-    submission = store.read_submission(payload["task_id"])
-    assert submission is not None
-    assert submission["status"] == "QUEUED"
-    assert submission["request"] == _valid_payload()
+    with app.app_context():
+        job = db.session.get(AnalysisJob, payload["task_id"])
+        assert job.status == "QUEUED"
+        assert job.owner_id == 1
+        assert job.request_payload == _valid_payload()
+        assert job.dispatch_status == "DISPATCHED"
+        assert job.dispatched_at is not None
 
 
 def test_submission_endpoint_returns_persisted_request(client, monkeypatch):
@@ -181,44 +226,15 @@ def test_submission_endpoint_returns_404_when_known_task_has_no_submission(clien
     response = client.get(f"/api/v1/risk-analysis/jobs/{task_id}/submission")
 
     assert response.status_code == 404
-    assert response.get_json()["code"] == "SUBMISSION_NOT_FOUND"
-
-
-def test_submission_endpoint_rejects_invalid_envelope(client, app, monkeypatch):
-    task_id = _create_job(client, monkeypatch)
-    store = RiskAnalysisJobStore(app.config["RUNTIME_DATA_DIR"])
-    submission = store.read_submission(task_id)
-    assert submission is not None
-    submission["status"] = "RUNNING"
-    store.write_json(task_id=task_id, filename="submission.json", payload=submission)
-
-    response = client.get(f"/api/v1/risk-analysis/jobs/{task_id}/submission")
-
-    assert response.status_code == 409
-    assert response.get_json()["code"] == "INVALID_SUBMISSION_MANIFEST"
-
-
-def test_submission_endpoint_rejects_task_id_mismatch(client, app, monkeypatch):
-    task_id = _create_job(client, monkeypatch)
-    store = RiskAnalysisJobStore(app.config["RUNTIME_DATA_DIR"])
-    submission = store.read_submission(task_id)
-    assert submission is not None
-    submission["task_id"] = "different-task"
-    store.write_json(task_id=task_id, filename="submission.json", payload=submission)
-
-    response = client.get(f"/api/v1/risk-analysis/jobs/{task_id}/submission")
-
-    assert response.status_code == 409
-    assert response.get_json()["code"] == "INVALID_SUBMISSION_MANIFEST"
+    assert response.get_json()["code"] == "JOB_NOT_FOUND"
 
 
 def test_submission_endpoint_rejects_invalid_request(client, app, monkeypatch):
     task_id = _create_job(client, monkeypatch)
-    store = RiskAnalysisJobStore(app.config["RUNTIME_DATA_DIR"])
-    submission = store.read_submission(task_id)
-    assert submission is not None
-    submission["request"]["weights"] = []
-    store.write_json(task_id=task_id, filename="submission.json", payload=submission)
+    with app.app_context():
+        job = db.session.get(AnalysisJob, task_id)
+        job.request_payload = {**job.request_payload, "weights": []}
+        db.session.commit()
 
     response = client.get(f"/api/v1/risk-analysis/jobs/{task_id}/submission")
 
@@ -240,7 +256,7 @@ def test_create_job_rejects_structurally_invalid_request_without_enqueue(client,
 
     payload = _valid_payload()
     payload["weights"] = []
-    response = client.post("/api/v1/risk-analysis/jobs", json=payload)
+    response = _post_job(client, payload)
 
     assert response.status_code == 422
     assert response.get_json()["code"] == "INVALID_REQUEST"
@@ -265,7 +281,7 @@ def test_create_job_rejects_malformed_geojson_without_enqueue(client, monkeypatc
         "type": "Polygon",
         "coordinates": [118.885, 32.085, 118.915, 32.085],
     }
-    response = client.post("/api/v1/risk-analysis/jobs", json=payload)
+    response = _post_job(client, payload)
 
     assert response.status_code == 422
     body = response.get_json()
@@ -274,12 +290,41 @@ def test_create_job_rejects_malformed_geojson_without_enqueue(client, monkeypatc
     assert called is False
 
 
-def test_status_maps_celery_progress_to_stable_business_state(client, monkeypatch):
-    task_id = _create_job(client, monkeypatch)
+def test_create_job_rejects_area_over_configured_limit(client, monkeypatch):
+    called = False
+
+    def fake_send_task(*args, **kwargs):
+        nonlocal called
+        called = True
+
     monkeypatch.setattr(
-        "app.api.v1.risk_analysis.celery_app.AsyncResult",
-        lambda _: FakeAsyncResult("PROGRESS", {"stage": "ANALYZING", "progress": 35}),
+        "app.api.v1.risk_analysis.celery_app.send_task",
+        fake_send_task,
     )
+    payload = _valid_payload()
+    payload["geometry"] = {
+        "type": "Polygon",
+        "coordinates": [
+            [
+                [118.8, 32.0],
+                [118.9, 32.0],
+                [118.9, 32.1],
+                [118.8, 32.1],
+                [118.8, 32.0],
+            ]
+        ],
+    }
+
+    response = _post_job(client, payload)
+
+    assert response.status_code == 422
+    assert response.get_json()["code"] == "ANALYSIS_AREA_TOO_LARGE"
+    assert called is False
+
+
+def test_status_reads_persisted_business_state(client, app, monkeypatch):
+    task_id = _create_job(client, monkeypatch)
+    _set_job_status(app, task_id, "RUNNING", "ANALYZING", 35)
 
     response = client.get(f"/api/v1/risk-analysis/jobs/{task_id}")
 
@@ -299,10 +344,6 @@ def test_unknown_task_id_returns_404_instead_of_celery_pending(client):
 
 def test_result_endpoint_returns_202_before_final_manifest(client, monkeypatch):
     task_id = _create_job(client, monkeypatch)
-    monkeypatch.setattr(
-        "app.api.v1.risk_analysis.celery_app.AsyncResult",
-        lambda _: FakeAsyncResult("PENDING"),
-    )
 
     response = client.get(f"/api/v1/risk-analysis/jobs/{task_id}/result")
 
@@ -320,6 +361,7 @@ def test_result_endpoint_returns_success_manifest(client, app, monkeypatch):
         filename="result.json",
         payload=_valid_success_manifest(task_id),
     )
+    _set_job_status(app, task_id, "SUCCEEDED", "COMPLETED", 100)
 
     response = client.get(f"/api/v1/risk-analysis/jobs/{task_id}/result")
 
@@ -342,16 +384,34 @@ def test_result_endpoint_rejects_incomplete_success_manifest(client, app, monkey
             "statistics": {"valid_pixel_count": 9, "mean": 0.37},
         },
     )
+    _set_job_status(app, task_id, "SUCCEEDED", "COMPLETED", 100)
 
     result_response = client.get(f"/api/v1/risk-analysis/jobs/{task_id}/result")
     status_response = client.get(f"/api/v1/risk-analysis/jobs/{task_id}")
 
     assert result_response.status_code == 409
     assert result_response.get_json()["code"] == "INVALID_RESULT_MANIFEST"
-    assert status_response.status_code == 200
-    assert status_response.get_json()["status"] == "FAILED"
+    assert status_response.status_code == 409
+    assert status_response.get_json()["status"] == "SUCCEEDED"
     assert status_response.get_json()["result_available"] is False
     assert status_response.get_json()["error"]["code"] == "INVALID_RESULT_MANIFEST"
+
+
+def test_result_endpoint_rejects_manifest_for_another_task(client, app, monkeypatch):
+    task_id = _create_job(client, monkeypatch)
+    manifest = _valid_success_manifest(task_id)
+    manifest["task_id"] = "another-task"
+    RiskAnalysisJobStore(app.config["RUNTIME_DATA_DIR"]).write_json(
+        task_id=task_id,
+        filename="result.json",
+        payload=manifest,
+    )
+    _set_job_status(app, task_id, "SUCCEEDED", "COMPLETED", 100)
+
+    response = client.get(f"/api/v1/risk-analysis/jobs/{task_id}/result")
+
+    assert response.status_code == 409
+    assert response.get_json()["code"] == "INVALID_RESULT_MANIFEST"
 
 
 def test_result_endpoint_returns_409_for_failed_job(client, app, monkeypatch):
@@ -365,6 +425,15 @@ def test_result_endpoint_returns_409_for_failed_job(client, app, monkeypatch):
             "status": "FAILED",
             "error": {"code": "ANALYSIS_ERROR", "message": "权重错误"},
         },
+    )
+    _set_job_status(
+        app,
+        task_id,
+        "FAILED",
+        "FAILED",
+        100,
+        error_code="ANALYSIS_ERROR",
+        error_message="权重错误",
     )
 
     response = client.get(f"/api/v1/risk-analysis/jobs/{task_id}/result")
@@ -395,12 +464,11 @@ def test_spatial_result_endpoint_returns_custom_contract_with_geojson_cells(
     assert payload["feature_collection"]["features"][0]["properties"]["value"] == 0.0
 
 
-def test_spatial_result_endpoint_returns_202_while_job_is_running(client, monkeypatch):
+def test_spatial_result_endpoint_returns_202_while_job_is_running(
+    client, app, monkeypatch
+):
     task_id = _create_job(client, monkeypatch)
-    monkeypatch.setattr(
-        "app.api.v1.risk_analysis.celery_app.AsyncResult",
-        lambda _: FakeAsyncResult("PROGRESS", {"stage": "ANALYZING", "progress": 35}),
-    )
+    _set_job_status(app, task_id, "RUNNING", "ANALYZING", 35)
 
     response = client.get(f"/api/v1/risk-analysis/jobs/{task_id}/result/spatial")
 
@@ -410,12 +478,11 @@ def test_spatial_result_endpoint_returns_202_while_job_is_running(client, monkey
     assert response.headers["Retry-After"] == "2"
 
 
-def test_spatial_result_endpoint_does_not_treat_canceled_as_not_ready(client, monkeypatch):
+def test_spatial_result_endpoint_does_not_treat_canceled_as_not_ready(
+    client, app, monkeypatch
+):
     task_id = _create_job(client, monkeypatch)
-    monkeypatch.setattr(
-        "app.api.v1.risk_analysis.celery_app.AsyncResult",
-        lambda _: FakeAsyncResult("REVOKED"),
-    )
+    _set_job_status(app, task_id, "CANCELED", "CANCELED", 100)
 
     response = client.get(f"/api/v1/risk-analysis/jobs/{task_id}/result/spatial")
 
@@ -434,6 +501,15 @@ def test_spatial_result_endpoint_returns_failed_manifest_as_409(client, app, mon
             "error": {"code": "ANALYSIS_ERROR", "message": "分析失败"},
         },
     )
+    _set_job_status(
+        app,
+        task_id,
+        "FAILED",
+        "FAILED",
+        100,
+        error_code="ANALYSIS_ERROR",
+        error_message="分析失败",
+    )
 
     response = client.get(f"/api/v1/risk-analysis/jobs/{task_id}/result/spatial")
 
@@ -448,6 +524,7 @@ def test_spatial_result_endpoint_returns_409_for_missing_raster(client, app, mon
         filename="result.json",
         payload=_valid_success_manifest(task_id),
     )
+    _set_job_status(app, task_id, "SUCCEEDED", "COMPLETED", 100)
 
     response = client.get(f"/api/v1/risk-analysis/jobs/{task_id}/result/spatial")
 
@@ -479,7 +556,10 @@ def test_spatial_result_endpoint_returns_409_for_artifact_declaration_mismatch(
 def test_spatial_result_endpoint_returns_409_for_corrupt_manifest(client, app, monkeypatch):
     task_id = _create_job(client, monkeypatch)
     store = RiskAnalysisJobStore(app.config["RUNTIME_DATA_DIR"])
-    (store.task_directory(task_id) / "result.json").write_text("not json", encoding="utf-8")
+    (store.task_directory(task_id, create=True) / "result.json").write_text(
+        "not json", encoding="utf-8"
+    )
+    _set_job_status(app, task_id, "SUCCEEDED", "COMPLETED", 100)
 
     response = client.get(f"/api/v1/risk-analysis/jobs/{task_id}/result/spatial")
 
@@ -540,6 +620,7 @@ def test_manifest_download_does_not_require_raster(client, app, monkeypatch):
         filename="result.json",
         payload=_valid_success_manifest(task_id),
     )
+    _set_job_status(app, task_id, "SUCCEEDED", "COMPLETED", 100)
     persisted_bytes = (store.task_directory(task_id) / "result.json").read_bytes()
 
     response = client.get(
@@ -556,6 +637,37 @@ def test_manifest_download_does_not_require_raster(client, app, monkeypatch):
     assert raster_response.get_json()["code"] == "INVALID_RESULT_ARTIFACT"
 
 
+def test_preview_download_returns_validated_inline_png(client, app, monkeypatch):
+    task_id = _create_job(client, monkeypatch)
+    preview = _write_success_preview_artifacts(app, task_id)
+
+    response = client.get(
+        f"/api/v1/risk-analysis/jobs/{task_id}/result/artifacts/preview"
+    )
+
+    assert response.status_code == 200
+    assert response.data == preview
+    assert response.content_type == "image/png"
+    assert response.headers["Cache-Control"] == "no-store"
+    assert response.headers["Content-Disposition"].startswith("inline;")
+
+
+def test_preview_download_rejects_corrupt_png(client, app, monkeypatch):
+    task_id = _create_job(client, monkeypatch)
+    _write_success_preview_artifacts(app, task_id)
+    task_dir = RiskAnalysisJobStore(
+        app.config["RUNTIME_DATA_DIR"]
+    ).task_directory(task_id)
+    (task_dir / "preview.png").write_bytes(b"not a png")
+
+    response = client.get(
+        f"/api/v1/risk-analysis/jobs/{task_id}/result/artifacts/preview"
+    )
+
+    assert response.status_code == 409
+    assert response.get_json()["code"] == "INVALID_RESULT_ARTIFACT"
+
+
 def test_raster_download_rejects_corrupt_geotiff(client, app, monkeypatch):
     task_id = _create_job(client, monkeypatch)
     store = RiskAnalysisJobStore(app.config["RUNTIME_DATA_DIR"])
@@ -564,6 +676,7 @@ def test_raster_download_rejects_corrupt_geotiff(client, app, monkeypatch):
         filename="result.json",
         payload=_valid_success_manifest(task_id),
     )
+    _set_job_status(app, task_id, "SUCCEEDED", "COMPLETED", 100)
     (store.task_directory(task_id) / "risk.tif").write_bytes(b"not a geotiff")
 
     response = client.get(
@@ -586,7 +699,7 @@ def test_result_artifact_download_rejects_invalid_success_manifest(
     task_id = _create_job(client, monkeypatch)
     store = RiskAnalysisJobStore(app.config["RUNTIME_DATA_DIR"])
     if manifest_case == "invalid-json":
-        (store.task_directory(task_id) / "result.json").write_text(
+        (store.task_directory(task_id, create=True) / "result.json").write_text(
             "not json",
             encoding="utf-8",
         )
@@ -594,6 +707,7 @@ def test_result_artifact_download_rejects_invalid_success_manifest(
         manifest = _valid_success_manifest(task_id)
         manifest.pop("artifacts")
         store.write_json(task_id=task_id, filename="result.json", payload=manifest)
+    _set_job_status(app, task_id, "SUCCEEDED", "COMPLETED", 100)
 
     response = client.get(
         f"/api/v1/risk-analysis/jobs/{task_id}/result/artifacts/{artifact_kind}"
@@ -633,14 +747,12 @@ def test_result_artifact_download_rejects_declaration_mismatch(
 @pytest.mark.parametrize("artifact_kind", ["manifest", "raster"])
 def test_result_artifact_download_returns_202_while_running(
     client,
+    app,
     monkeypatch,
     artifact_kind,
 ):
     task_id = _create_job(client, monkeypatch)
-    monkeypatch.setattr(
-        "app.api.v1.risk_analysis.celery_app.AsyncResult",
-        lambda _: FakeAsyncResult("PROGRESS", {"stage": "ANALYZING", "progress": 35}),
-    )
+    _set_job_status(app, task_id, "RUNNING", "ANALYZING", 35)
 
     response = client.get(
         f"/api/v1/risk-analysis/jobs/{task_id}/result/artifacts/{artifact_kind}"
@@ -655,14 +767,12 @@ def test_result_artifact_download_returns_202_while_running(
 @pytest.mark.parametrize("artifact_kind", ["manifest", "raster"])
 def test_result_artifact_download_returns_canceled_as_409(
     client,
+    app,
     monkeypatch,
     artifact_kind,
 ):
     task_id = _create_job(client, monkeypatch)
-    monkeypatch.setattr(
-        "app.api.v1.risk_analysis.celery_app.AsyncResult",
-        lambda _: FakeAsyncResult("REVOKED"),
-    )
+    _set_job_status(app, task_id, "CANCELED", "CANCELED", 100)
 
     response = client.get(
         f"/api/v1/risk-analysis/jobs/{task_id}/result/artifacts/{artifact_kind}"
@@ -688,6 +798,15 @@ def test_result_artifact_download_returns_failed_manifest_as_409(
             "status": "FAILED",
             "error": {"code": "ANALYSIS_ERROR", "message": "分析失败"},
         },
+    )
+    _set_job_status(
+        app,
+        task_id,
+        "FAILED",
+        "FAILED",
+        100,
+        error_code="ANALYSIS_ERROR",
+        error_message="分析失败",
     )
 
     response = client.get(
@@ -732,21 +851,19 @@ def test_result_artifact_download_rejects_invalid_or_traversal_paths(
 @pytest.mark.parametrize("artifact_kind", ["manifest", "raster"])
 def test_succeeded_job_without_manifest_returns_artifact_conflict(
     client,
+    app,
     monkeypatch,
     artifact_kind,
 ):
     task_id = _create_job(client, monkeypatch)
-    monkeypatch.setattr(
-        "app.api.v1.risk_analysis.celery_app.AsyncResult",
-        lambda _: FakeAsyncResult("SUCCESS"),
-    )
+    _set_job_status(app, task_id, "SUCCEEDED", "COMPLETED", 100)
 
     response = client.get(
         f"/api/v1/risk-analysis/jobs/{task_id}/result/artifacts/{artifact_kind}"
     )
 
     assert response.status_code == 409
-    assert response.get_json()["code"] == "INVALID_RESULT_ARTIFACT"
+    assert response.get_json()["code"] == "INVALID_RESULT_MANIFEST"
 
 
 def test_queue_failure_returns_503_and_persists_failure(client, app, monkeypatch):
@@ -758,7 +875,7 @@ def test_queue_failure_returns_503_and_persists_failure(client, app, monkeypatch
         fail_send_task,
     )
 
-    response = client.post("/api/v1/risk-analysis/jobs", json=_valid_payload())
+    response = _post_job(client, _valid_payload())
 
     assert response.status_code == 503
     payload = response.get_json()
@@ -769,3 +886,155 @@ def test_queue_failure_returns_503_and_persists_failure(client, app, monkeypatch
     assert result is not None
     assert result["status"] == "FAILED"
     assert result["error"]["code"] == "QUEUE_UNAVAILABLE"
+
+    with app.app_context():
+        job = db.session.get(AnalysisJob, payload["task_id"])
+        assert job.status == "FAILED"
+        assert job.dispatch_status == "FAILED"
+
+
+def test_queue_failure_persists_database_state_when_manifest_write_fails(
+    client, app, monkeypatch
+):
+    monkeypatch.setattr(
+        "app.api.v1.risk_analysis.celery_app.send_task",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("redis unavailable")),
+    )
+    monkeypatch.setattr(
+        "app.api.v1.risk_analysis.write_failure_manifest",
+        lambda **kwargs: (_ for _ in ()).throw(OSError("disk unavailable")),
+    )
+
+    response = _post_job(client, _valid_payload())
+
+    assert response.status_code == 503
+    with app.app_context():
+        job = db.session.get(AnalysisJob, response.get_json()["task_id"])
+        assert job.status == "FAILED"
+        assert job.error_code == "QUEUE_UNAVAILABLE"
+        assert job.dispatch_status == "FAILED"
+
+
+def test_late_enqueue_failure_does_not_publish_failure_manifest(
+    client, monkeypatch
+):
+    manifest_calls = []
+    monkeypatch.setattr(
+        "app.api.v1.risk_analysis.celery_app.send_task",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("late broker error")),
+    )
+    monkeypatch.setattr(
+        "app.api.v1.risk_analysis.mark_job_failed",
+        lambda *args, **kwargs: False,
+    )
+    monkeypatch.setattr(
+        "app.api.v1.risk_analysis.write_failure_manifest",
+        lambda **kwargs: manifest_calls.append(kwargs),
+    )
+
+    response = _post_job(client, _valid_payload())
+
+    assert response.status_code == 503
+    assert manifest_calls == []
+
+
+def test_sent_job_stays_pending_when_dispatch_marker_commit_fails(
+    client, app, monkeypatch
+):
+    monkeypatch.setattr(
+        "app.api.v1.risk_analysis.celery_app.send_task",
+        lambda *args, **kwargs: object(),
+    )
+    monkeypatch.setattr(
+        "app.api.v1.risk_analysis.mark_job_dispatched",
+        lambda task_id: (_ for _ in ()).throw(RuntimeError("database commit failed")),
+    )
+
+    response = _post_job(client, _valid_payload())
+
+    assert response.status_code == 202
+    with app.app_context():
+        job = db.session.get(AnalysisJob, response.get_json()["task_id"])
+        assert job.status == "QUEUED"
+        assert job.dispatch_status == "PENDING"
+
+
+@pytest.mark.parametrize(
+    ("url_suffix", "expected_status"),
+    [
+        ("", 200),
+        ("/result", 409),
+        ("/result/artifacts/manifest", 409),
+        ("/result/spatial", 409),
+    ],
+)
+def test_failed_database_state_wins_over_stale_success_manifest(
+    client, app, monkeypatch, url_suffix, expected_status
+):
+    task_id = _create_job(client, monkeypatch)
+    RiskAnalysisJobStore(app.config["RUNTIME_DATA_DIR"]).write_json(
+        task_id=task_id,
+        filename="result.json",
+        payload=_valid_success_manifest(task_id),
+    )
+    _set_job_status(
+        app,
+        task_id,
+        "FAILED",
+        "FAILED",
+        100,
+        error_code="ANALYSIS_ERROR",
+        error_message="分析失败",
+    )
+
+    response = client.get(f"/api/v1/risk-analysis/jobs/{task_id}{url_suffix}")
+
+    assert response.status_code == expected_status
+    assert response.get_json()["status"] == "FAILED"
+    assert response.get_json()["error"]["code"] == "ANALYSIS_ERROR"
+
+
+@pytest.mark.parametrize(
+    "url_suffix",
+    ["/result", "/result/artifacts/manifest", "/result/spatial"],
+)
+def test_queued_database_state_ignores_stale_success_manifest(
+    client, app, monkeypatch, url_suffix
+):
+    task_id = _create_job(client, monkeypatch)
+    RiskAnalysisJobStore(app.config["RUNTIME_DATA_DIR"]).write_json(
+        task_id=task_id,
+        filename="result.json",
+        payload=_valid_success_manifest(task_id),
+    )
+
+    response = client.get(f"/api/v1/risk-analysis/jobs/{task_id}{url_suffix}")
+
+    assert response.status_code == 202
+    assert response.get_json()["status"] == "QUEUED"
+
+
+@pytest.mark.parametrize(
+    ("url_suffix", "expected_status"),
+    [
+        ("", 200),
+        ("/result", 409),
+        ("/result/artifacts/manifest", 409),
+        ("/result/spatial", 409),
+    ],
+)
+def test_canceled_database_state_wins_over_stale_success_manifest(
+    client, app, monkeypatch, url_suffix, expected_status
+):
+    task_id = _create_job(client, monkeypatch)
+    RiskAnalysisJobStore(app.config["RUNTIME_DATA_DIR"]).write_json(
+        task_id=task_id,
+        filename="result.json",
+        payload=_valid_success_manifest(task_id),
+    )
+    _set_job_status(app, task_id, "CANCELED", "CANCELED", 100)
+
+    response = client.get(f"/api/v1/risk-analysis/jobs/{task_id}{url_suffix}")
+
+    assert response.status_code == expected_status
+    assert response.get_json()["status"] == "CANCELED"

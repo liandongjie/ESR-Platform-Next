@@ -8,8 +8,9 @@ from flask import Flask, jsonify
 from werkzeug.exceptions import RequestEntityTooLarge
 
 from app.api.v1 import api_v1
+from app.cli import register_cli
 from app.config import CONFIG_BY_NAME, validate_production_config
-from app.extensions import celery, cors, db, jwt, migrate
+from app.extensions import celery, cors, create_redis_client, db, jwt, migrate
 
 
 def create_app(config_name: str | None = None) -> Flask:
@@ -27,6 +28,7 @@ def create_app(config_name: str | None = None) -> Flask:
     _ensure_runtime_directories(app)
     _init_extensions(app)
     _register_blueprints(app)
+    register_cli(app)
     _register_error_handlers(app)
 
     return app
@@ -47,12 +49,23 @@ def _ensure_runtime_directories(app: Flask) -> None:
 
 
 def _init_extensions(app: Flask) -> None:
+    from app import models as _models  # noqa: F401 - load metadata before migrations
+
     db.init_app(app)
     migrate.init_app(app, db)
     jwt.init_app(app)
+    app.extensions["redis_auth"] = create_redis_client(app.config["REDIS_URL"])
+
+    @jwt.token_in_blocklist_loader
+    def is_token_revoked(_header, payload):
+        if payload.get("type") != "refresh":
+            return False
+        return bool(app.extensions["redis_auth"].exists(f"jwt:revoked:{payload['jti']}"))
+
     cors.init_app(
         app,
         resources={r"/api/*": {"origins": app.config.get("CORS_ORIGINS", "*")}},
+        supports_credentials=True,
     )
     # Web 进程也要投递和查询 Celery 任务，因此必须复用与 Worker 相同的 broker/result 配置。
     # 如果只在 celery_app.py 中配置，普通 Flask Web 进程会保留 Celery 的默认连接配置。

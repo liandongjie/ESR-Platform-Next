@@ -17,6 +17,12 @@ from app.gis.indicators import (
 )
 from app.gis.risk_models import IndicatorWeight, RiskAnalysisValidationError
 from app.gis.risk_pipeline import RiskAnalysisPipeline, write_risk_geotiff
+from app.gis.risk_preview import (
+    RISK_PREVIEW_PALETTE_VERSION,
+    raster_bounds,
+    validate_preview_png,
+    write_risk_preview_png,
+)
 from app.repositories.risk_analysis_job_store import RiskAnalysisJobStore
 from app.schemas.risk_analysis import (
     RiskAnalysisJobRequest,
@@ -83,6 +89,7 @@ class RiskAnalysisJobService:
         task_dir = self.store.task_directory(task_id, create=True)
         raster_path = task_dir / "risk.tif"
         temporary_raster = task_dir / ".risk.tif.tmp"
+        preview_path = task_dir / "preview.png"
         manifest_path = task_dir / "result.json"
 
         # 先完整写入临时 GeoTIFF，再原子替换最终文件，避免 Worker 中断后留下残缺结果。
@@ -91,12 +98,16 @@ class RiskAnalysisJobService:
             temporary_raster.replace(raster_path)
         finally:
             temporary_raster.unlink(missing_ok=True)
+        write_risk_preview_png(result.array, preview_path)
+
+        height, width = result.array.shape
 
         payload: dict[str, Any] = {
             "schema_version": 1,
             "task_id": task_id,
             "status": "SUCCEEDED",
             "algorithm_version": _ALGORITHM_VERSION,
+            "palette_version": RISK_PREVIEW_PALETTE_VERSION,
             "model_contract": risk_model_contract_payload(),
             "geometry": {
                 "type": geometry.geom_type,
@@ -106,6 +117,9 @@ class RiskAnalysisJobService:
                 "crs": result.crs.to_string(),
                 "shape": [int(result.array.shape[0]), int(result.array.shape[1])],
                 "nodata": float(result.nodata),
+                "bounds": list(
+                    raster_bounds(result.transform, width=width, height=height)
+                ),
             },
             "statistics": {
                 "valid_pixel_count": result.stats.valid_pixel_count,
@@ -131,6 +145,7 @@ class RiskAnalysisJobService:
             "artifacts": {
                 "raster": self.store.relative_path(raster_path),
                 "manifest": self.store.relative_path(manifest_path),
+                "preview": self.store.relative_path(preview_path),
             },
         }
         self.store.write_json(task_id=task_id, filename="result.json", payload=payload)
@@ -226,6 +241,27 @@ def resolve_risk_analysis_artifact(
             task_id=task_id,
             manifest=manifest,
         )
+        return path
+    if artifact_kind == "preview":
+        path = task_dir / "preview.png"
+        try:
+            expected_artifact = store.relative_path(path)
+        except ValueError as exc:
+            raise RiskAnalysisArtifactError("风险预览文件不在当前任务目录") from exc
+        if (
+            manifest.task_id != task_id
+            or manifest.artifacts.preview != expected_artifact
+            or manifest.grid.bounds is None
+            or manifest.grid.crs != "EPSG:4326"
+            or manifest.palette_version != RISK_PREVIEW_PALETTE_VERSION
+        ):
+            raise RiskAnalysisArtifactError("风险预览声明与当前任务不一致")
+        if not path.is_file() or path.stat().st_size == 0:
+            raise RiskAnalysisArtifactError("风险预览文件不存在")
+        try:
+            validate_preview_png(path.read_bytes(), shape=tuple(manifest.grid.shape))
+        except (OSError, ValueError) as exc:
+            raise RiskAnalysisArtifactError(str(exc)) from exc
         return path
     if artifact_kind != "manifest":
         raise ValueError("不支持的风险分析 artifact")

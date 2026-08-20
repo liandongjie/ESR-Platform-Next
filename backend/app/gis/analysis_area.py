@@ -159,6 +159,16 @@ def local_utm_crs(geometry: BaseGeometry) -> CRS:
     return CRS.from_epsg(epsg)
 
 
+def metric_area_m2(geometry: BaseGeometry) -> float:
+    """Calculate polygon area in a local metric CRS instead of square degrees."""
+
+    validate_wgs84_source_geometry(geometry)
+    if geometry.geom_type not in {"Polygon", "MultiPolygon"}:
+        raise AnalysisAreaValidationError("研究区 geometry 必须是 Polygon 或 MultiPolygon")
+    transformer = Transformer.from_crs(_WGS84, local_utm_crs(geometry), always_xy=True)
+    return float(shapely_transform(transformer.transform, geometry).area)
+
+
 def validate_wgs84_source_geometry(geometry: BaseGeometry) -> None:
     """校验当前 SourceGeometry 公共约定：有效 geometry 且坐标为 WGS84。"""
 
