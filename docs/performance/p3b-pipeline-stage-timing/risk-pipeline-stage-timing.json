@@ -1,0 +1,5833 @@
+{
+  "schema_version": 1,
+  "benchmark": "risk-analysis-pipeline-stage-timing",
+  "production_candidate_sha": "8f85c420dcc07edbcbf03674478b973c108e6746",
+  "instrumented_subject_sha": "637337b29dbe604f3dd9877521dc6d69acad0047",
+  "source_provenance": {
+    "subject_baseline_sha": "637337b29dbe604f3dd9877521dc6d69acad0047",
+    "repository_head_sha": "637337b29dbe604f3dd9877521dc6d69acad0047",
+    "source_tree_verification_method": "host_git_diff_and_untracked_allowlist_v1",
+    "source_tree_verified": true,
+    "baseline_is_head_ancestor": true,
+    "allowed_benchmark_paths": [
+      "backend/app/gis/risk_benchmark.py",
+      "backend/tests/test_risk_benchmark.py",
+      "scripts/benchmark-risk-analysis.ps1",
+      "docs/performance/"
+    ],
+    "detected_allowed_diff_paths": [],
+    "tracked_differences": [],
+    "untracked_paths": []
+  },
+  "instrumentation_lineage": {
+    "production_candidate_sha": "8f85c420dcc07edbcbf03674478b973c108e6746",
+    "instrumented_subject_sha": "637337b29dbe604f3dd9877521dc6d69acad0047",
+    "production_candidate_is_instrumented_subject_ancestor": true,
+    "diagnostic_source_tree_verified": true,
+    "allowed_pipeline_diagnostic_paths": [
+      "backend/app/gis/risk_pipeline.py",
+      "backend/tests/test_risk_pipeline.py",
+      "backend/app/gis/risk_benchmark.py",
+      "backend/tests/test_risk_benchmark.py",
+      "scripts/benchmark-risk-analysis.ps1",
+      "docs/performance/"
+    ],
+    "diagnostic_differences": [
+      {
+        "status": "M",
+        "path": "backend/app/gis/risk_benchmark.py"
+      },
+      {
+        "status": "M",
+        "path": "backend/app/gis/risk_pipeline.py"
+      },
+      {
+        "status": "M",
+        "path": "backend/tests/test_risk_benchmark.py"
+      },
+      {
+        "status": "M",
+        "path": "backend/tests/test_risk_pipeline.py"
+      },
+      {
+        "status": "A",
+        "path": "docs/performance/p3b-pipeline-profile/risk-pipeline-12.prof"
+      },
+      {
+        "status": "A",
+        "path": "docs/performance/p3b-pipeline-profile/risk-pipeline-3.prof"
+      },
+      {
+        "status": "A",
+        "path": "docs/performance/p3b-pipeline-profile/risk-pipeline-6.prof"
+      },
+      {
+        "status": "A",
+        "path": "docs/performance/p3b-pipeline-profile/risk-pipeline-profile.json"
+      },
+      {
+        "status": "A",
+        "path": "docs/performance/p3b-pipeline-profile/risk-pipeline-profile.md"
+      },
+      {
+        "status": "A",
+        "path": "docs/performance/p3b-validation/risk-analysis-baseline.csv"
+      },
+      {
+        "status": "A",
+        "path": "docs/performance/p3b-validation/risk-analysis-baseline.json"
+      },
+      {
+        "status": "A",
+        "path": "docs/performance/p3b-validation/risk-analysis-baseline.md"
+      },
+      {
+        "status": "M",
+        "path": "scripts/benchmark-risk-analysis.ps1"
+      }
+    ]
+  },
+  "benchmark_elapsed_seconds": 19.134385741,
+  "configuration": {
+    "warmups_per_scenario": 1,
+    "measured_runs_per_scenario": 5,
+    "stage_timing_size": 1024,
+    "indicator_groups": {
+      "3": [
+        "PM25",
+        "AQI",
+        "NDVI"
+      ],
+      "6": [
+        "PM25",
+        "AQI",
+        "NDVI",
+        "rkmd",
+        "gyfb",
+        "fmyl"
+      ],
+      "12": [
+        "PM25",
+        "AQI",
+        "NDVI",
+        "hwmd",
+        "rkmd",
+        "xxmd",
+        "jmdmd",
+        "xspb",
+        "xsqs",
+        "gyfb",
+        "fmyl",
+        "fmts"
+      ]
+    },
+    "stages": [
+      "input_validation",
+      "source_open",
+      "grid_validation",
+      "window_geometry_setup",
+      "raster_read",
+      "mask_preparation",
+      "value_validation_and_stats",
+      "weighted_accumulation",
+      "result_finalization"
+    ]
+  },
+  "timing_semantics": {
+    "target": "RiskAnalysisPipeline.run() only",
+    "clock": "time.perf_counter_ns",
+    "events_are_non_overlapping": true,
+    "raw_event_unit": "nanoseconds",
+    "comparable_to_uninstrumented_latency_baseline": false,
+    "unattributed_definition": "pipeline_elapsed_ns - sum(stage elapsed_ns)"
+  },
+  "environment": {
+    "python": "3.12.13 (main, Aug  5 2026, 01:11:46) [GCC 12.2.0]",
+    "implementation": "CPython",
+    "os": "Linux-5.15.167.4-microsoft-standard-WSL2-x86_64-with-glibc2.36",
+    "machine": "x86_64",
+    "cpu_model": "12th Gen Intel(R) Core(TM) i7-12800HX",
+    "logical_cpu_count": 24,
+    "versions": {
+      "flask": "3.1.3",
+      "numpy": "2.5.1",
+      "pydantic": "2.13.4",
+      "rasterio": "1.5.0",
+      "shapely": "2.1.2"
+    }
+  },
+  "raster_dataset": {
+    "directory": "/data/source",
+    "files": [
+      {
+        "code": "PM25",
+        "filename": "PM25.tif",
+        "sha256": "7669e49ff39f7ce09f1b2d0e37a46b96181337b6edfef28a2668d4f320de8211",
+        "size_bytes": 17352556,
+        "mtime_ns": 1652801062000000000,
+        "crs": "EPSG:4326",
+        "shape": [
+          5956,
+          9000
+        ],
+        "resolution": [
+          0.01,
+          0.01
+        ],
+        "transform": [
+          0.01,
+          0.0,
+          60.000006428013194,
+          0.0,
+          -0.01,
+          60.52939338171446
+        ],
+        "bounds": [
+          60.000006428013194,
+          0.9693933817144611,
+          150.0000064280132,
+          60.52939338171446
+        ],
+        "nodata": -3.4028234663852886e+38,
+        "dtype": "float32",
+        "block_shapes": [
+          [
+            128,
+            128
+          ]
+        ],
+        "compression": "Compression.lzw"
+      },
+      {
+        "code": "AQI",
+        "filename": "AQI.tif",
+        "sha256": "7fee6868f7a2f948d59e5bff9eedf1764eab732b6da6de521ff6bc13bd3da62d",
+        "size_bytes": 17234085,
+        "mtime_ns": 1652803646000000000,
+        "crs": "EPSG:4326",
+        "shape": [
+          5956,
+          9000
+        ],
+        "resolution": [
+          0.01,
+          0.01
+        ],
+        "transform": [
+          0.01,
+          0.0,
+          60.000006428013194,
+          0.0,
+          -0.01,
+          60.52939338171446
+        ],
+        "bounds": [
+          60.000006428013194,
+          0.9693933817144611,
+          150.0000064280132,
+          60.52939338171446
+        ],
+        "nodata": -3.4028234663852886e+38,
+        "dtype": "float32",
+        "block_shapes": [
+          [
+            128,
+            128
+          ]
+        ],
+        "compression": "Compression.lzw"
+      },
+      {
+        "code": "NDVI",
+        "filename": "NDVI.tif",
+        "sha256": "dbe35fd707a111cdf0968af4c1fcf462cd5fb20092eb6ca47b96dcead748157c",
+        "size_bytes": 218801213,
+        "mtime_ns": 1652853474000000000,
+        "crs": "EPSG:4326",
+        "shape": [
+          5956,
+          9000
+        ],
+        "resolution": [
+          0.01,
+          0.01
+        ],
+        "transform": [
+          0.01,
+          0.0,
+          60.000006428013194,
+          0.0,
+          -0.01,
+          60.52939338171446
+        ],
+        "bounds": [
+          60.000006428013194,
+          0.9693933817144611,
+          150.0000064280132,
+          60.52939338171446
+        ],
+        "nodata": -3.4028234663852886e+38,
+        "dtype": "float32",
+        "block_shapes": [
+          [
+            64,
+            128
+          ]
+        ],
+        "compression": "None"
+      },
+      {
+        "code": "hwmd",
+        "filename": "hwmd.tif",
+        "sha256": "019c583331c3da4abc6043eb1e60c16a99e648f262fb531a967bed4e1adf41e7",
+        "size_bytes": 4547003,
+        "mtime_ns": 1652803176000000000,
+        "crs": "EPSG:4326",
+        "shape": [
+          5956,
+          9000
+        ],
+        "resolution": [
+          0.01,
+          0.01
+        ],
+        "transform": [
+          0.01,
+          0.0,
+          60.000006428013194,
+          0.0,
+          -0.01,
+          60.52939338171446
+        ],
+        "bounds": [
+          60.000006428013194,
+          0.9693933817144611,
+          150.0000064280132,
+          60.52939338171446
+        ],
+        "nodata": -3.4028234663852886e+38,
+        "dtype": "float32",
+        "block_shapes": [
+          [
+            128,
+            128
+          ]
+        ],
+        "compression": "Compression.lzw"
+      },
+      {
+        "code": "rkmd",
+        "filename": "rkmd.tif",
+        "sha256": "17eeef6a413c095f95137dcb0645ab8ae816816ef286ded9773d2dcfe9553abb",
+        "size_bytes": 37044792,
+        "mtime_ns": 1652801710000000000,
+        "crs": "EPSG:4326",
+        "shape": [
+          5956,
+          9000
+        ],
+        "resolution": [
+          0.01,
+          0.01
+        ],
+        "transform": [
+          0.01,
+          0.0,
+          60.000006428013194,
+          0.0,
+          -0.01,
+          60.52939338171446
+        ],
+        "bounds": [
+          60.000006428013194,
+          0.9693933817144611,
+          150.0000064280132,
+          60.52939338171446
+        ],
+        "nodata": -3.4028234663852886e+38,
+        "dtype": "float32",
+        "block_shapes": [
+          [
+            128,
+            128
+          ]
+        ],
+        "compression": "Compression.lzw"
+      },
+      {
+        "code": "xxmd",
+        "filename": "xxmd.tif",
+        "sha256": "c399a3856111ebf1408bcb8b07e2b28e7adf216d4f57d496e68b210c50cc07c9",
+        "size_bytes": 3852526,
+        "mtime_ns": 1652803108000000000,
+        "crs": "EPSG:4326",
+        "shape": [
+          5956,
+          9000
+        ],
+        "resolution": [
+          0.01,
+          0.01
+        ],
+        "transform": [
+          0.01,
+          0.0,
+          60.000006428013194,
+          0.0,
+          -0.01,
+          60.52939338171446
+        ],
+        "bounds": [
+          60.000006428013194,
+          0.9693933817144611,
+          150.0000064280132,
+          60.52939338171446
+        ],
+        "nodata": -3.4028234663852886e+38,
+        "dtype": "float32",
+        "block_shapes": [
+          [
+            128,
+            128
+          ]
+        ],
+        "compression": "Compression.lzw"
+      },
+      {
+        "code": "jmdmd",
+        "filename": "jmdmd.tif",
+        "sha256": "c831decf544a6d7378c7f8e4db6003947bc0440787b11d8a3c55fc65c2d95178",
+        "size_bytes": 3423442,
+        "mtime_ns": 1652802830000000000,
+        "crs": "EPSG:4326",
+        "shape": [
+          5956,
+          9000
+        ],
+        "resolution": [
+          0.01,
+          0.01
+        ],
+        "transform": [
+          0.01,
+          0.0,
+          60.000006428013194,
+          0.0,
+          -0.01,
+          60.52939338171446
+        ],
+        "bounds": [
+          60.000006428013194,
+          0.9693933817144611,
+          150.0000064280132,
+          60.52939338171446
+        ],
+        "nodata": -3.4028234663852886e+38,
+        "dtype": "float32",
+        "block_shapes": [
+          [
+            128,
+            128
+          ]
+        ],
+        "compression": "Compression.lzw"
+      },
+      {
+        "code": "xspb",
+        "filename": "xspb.tif",
+        "sha256": "d20b4f12076f91297b417380aed09551eb4b2959e4d71d052dc6471059938eb6",
+        "size_bytes": 3187569,
+        "mtime_ns": 1652802950000000000,
+        "crs": "EPSG:4326",
+        "shape": [
+          5956,
+          9000
+        ],
+        "resolution": [
+          0.01,
+          0.01
+        ],
+        "transform": [
+          0.01,
+          0.0,
+          60.000006428013194,
+          0.0,
+          -0.01,
+          60.52939338171446
+        ],
+        "bounds": [
+          60.000006428013194,
+          0.9693933817144611,
+          150.0000064280132,
+          60.52939338171446
+        ],
+        "nodata": -3.4028234663852886e+38,
+        "dtype": "float32",
+        "block_shapes": [
+          [
+            128,
+            128
+          ]
+        ],
+        "compression": "Compression.lzw"
+      },
+      {
+        "code": "xsqs",
+        "filename": "xsqs.tif",
+        "sha256": "ee043fe25f133ae47cb0fe9ac10b1dee4e75a76ed9ede7abc9c8e6d4720f4852",
+        "size_bytes": 3187431,
+        "mtime_ns": 1652803016000000000,
+        "crs": "EPSG:4326",
+        "shape": [
+          5956,
+          9000
+        ],
+        "resolution": [
+          0.01,
+          0.01
+        ],
+        "transform": [
+          0.01,
+          0.0,
+          60.000006428013194,
+          0.0,
+          -0.01,
+          60.52939338171446
+        ],
+        "bounds": [
+          60.000006428013194,
+          0.9693933817144611,
+          150.0000064280132,
+          60.52939338171446
+        ],
+        "nodata": -3.4028234663852886e+38,
+        "dtype": "float32",
+        "block_shapes": [
+          [
+            128,
+            128
+          ]
+        ],
+        "compression": "Compression.lzw"
+      },
+      {
+        "code": "gyfb",
+        "filename": "gyfb.tif",
+        "sha256": "e27414a356e8e33efd6ad0fc90c08ec6c510f9684d1b025056300c3cd7f35ddd",
+        "size_bytes": 218747821,
+        "mtime_ns": 1652853382000000000,
+        "crs": "EPSG:4326",
+        "shape": [
+          5956,
+          9000
+        ],
+        "resolution": [
+          0.01,
+          0.01
+        ],
+        "transform": [
+          0.01,
+          0.0,
+          60.000006428013194,
+          0.0,
+          -0.01,
+          60.52939338171446
+        ],
+        "bounds": [
+          60.000006428013194,
+          0.9693933817144611,
+          150.0000064280132,
+          60.52939338171446
+        ],
+        "nodata": -3.4028234663852886e+38,
+        "dtype": "float32",
+        "block_shapes": [
+          [
+            128,
+            128
+          ]
+        ],
+        "compression": "None"
+      },
+      {
+        "code": "fmyl",
+        "filename": "fmyl.tif",
+        "sha256": "5541c2667b99166604e0cefa472f24c04616153963a1ad2f595d9a751e54c779",
+        "size_bytes": 3187382,
+        "mtime_ns": 1652800658000000000,
+        "crs": "EPSG:4326",
+        "shape": [
+          5956,
+          9000
+        ],
+        "resolution": [
+          0.01,
+          0.01
+        ],
+        "transform": [
+          0.01,
+          0.0,
+          60.000006428013194,
+          0.0,
+          -0.01,
+          60.52939338171446
+        ],
+        "bounds": [
+          60.000006428013194,
+          0.9693933817144611,
+          150.0000064280132,
+          60.52939338171446
+        ],
+        "nodata": -3.4028234663852886e+38,
+        "dtype": "float32",
+        "block_shapes": [
+          [
+            128,
+            128
+          ]
+        ],
+        "compression": "Compression.lzw"
+      },
+      {
+        "code": "fmts",
+        "filename": "fmts.tif",
+        "sha256": "c53148c6195d76216f41b85cafb55fc7a2a93e80770941f468608ecb30cf5bf8",
+        "size_bytes": 3187779,
+        "mtime_ns": 1652803290000000000,
+        "crs": "EPSG:4326",
+        "shape": [
+          5956,
+          9000
+        ],
+        "resolution": [
+          0.01,
+          0.01
+        ],
+        "transform": [
+          0.01,
+          0.0,
+          60.000006428013194,
+          0.0,
+          -0.01,
+          60.52939338171446
+        ],
+        "bounds": [
+          60.000006428013194,
+          0.9693933817144611,
+          150.0000064280132,
+          60.52939338171446
+        ],
+        "nodata": -3.4028234663852886e+38,
+        "dtype": "float32",
+        "block_shapes": [
+          [
+            128,
+            128
+          ]
+        ],
+        "compression": "Compression.lzw"
+      }
+    ]
+  },
+  "pipeline_stage_timing": {
+    "scenarios": [
+      {
+        "aoi": "large",
+        "indicator_count": 3,
+        "indicator_codes": [
+          "PM25",
+          "AQI",
+          "NDVI"
+        ],
+        "weights": [
+          {
+            "code": "PM25",
+            "weight_percent": 33.333333333333336
+          },
+          {
+            "code": "AQI",
+            "weight_percent": 33.333333333333336
+          },
+          {
+            "code": "NDVI",
+            "weight_percent": 33.33333333333333
+          }
+        ],
+        "rows": 1024,
+        "cols": 1024,
+        "window_cells": 1048576,
+        "valid_cells": 736372,
+        "output_statistics": {
+          "minimum": 0.10992840801676117,
+          "maximum": 0.696611225605011,
+          "mean": 0.4848121955853688
+        },
+        "requested_center": [
+          118.9,
+          32.1
+        ],
+        "grid_aligned_center": [
+          118.9000064280132,
+          32.099393381714464
+        ],
+        "bounds": [
+          113.78000642801321,
+          26.97939338171447,
+          124.02000642801318,
+          37.21939338171446
+        ],
+        "target_rows": 1024,
+        "target_cols": 1024,
+        "target_window_cells": 1048576
+      },
+      {
+        "aoi": "large",
+        "indicator_count": 6,
+        "indicator_codes": [
+          "PM25",
+          "AQI",
+          "NDVI",
+          "rkmd",
+          "gyfb",
+          "fmyl"
+        ],
+        "weights": [
+          {
+            "code": "PM25",
+            "weight_percent": 16.666666666666668
+          },
+          {
+            "code": "AQI",
+            "weight_percent": 16.666666666666668
+          },
+          {
+            "code": "NDVI",
+            "weight_percent": 16.666666666666668
+          },
+          {
+            "code": "rkmd",
+            "weight_percent": 16.666666666666668
+          },
+          {
+            "code": "gyfb",
+            "weight_percent": 16.666666666666668
+          },
+          {
+            "code": "fmyl",
+            "weight_percent": 16.666666666666657
+          }
+        ],
+        "rows": 1024,
+        "cols": 1024,
+        "window_cells": 1048576,
+        "valid_cells": 724106,
+        "output_statistics": {
+          "minimum": 0.16494468379217625,
+          "maximum": 0.5763034583239157,
+          "mean": 0.3930046017334881
+        },
+        "requested_center": [
+          118.9,
+          32.1
+        ],
+        "grid_aligned_center": [
+          118.9000064280132,
+          32.099393381714464
+        ],
+        "bounds": [
+          113.78000642801321,
+          26.97939338171447,
+          124.02000642801318,
+          37.21939338171446
+        ],
+        "target_rows": 1024,
+        "target_cols": 1024,
+        "target_window_cells": 1048576
+      },
+      {
+        "aoi": "large",
+        "indicator_count": 12,
+        "indicator_codes": [
+          "PM25",
+          "AQI",
+          "NDVI",
+          "hwmd",
+          "rkmd",
+          "xxmd",
+          "jmdmd",
+          "xspb",
+          "xsqs",
+          "gyfb",
+          "fmyl",
+          "fmts"
+        ],
+        "weights": [
+          {
+            "code": "PM25",
+            "weight_percent": 8.333333333333334
+          },
+          {
+            "code": "AQI",
+            "weight_percent": 8.333333333333334
+          },
+          {
+            "code": "NDVI",
+            "weight_percent": 8.333333333333334
+          },
+          {
+            "code": "hwmd",
+            "weight_percent": 8.333333333333334
+          },
+          {
+            "code": "rkmd",
+            "weight_percent": 8.333333333333334
+          },
+          {
+            "code": "xxmd",
+            "weight_percent": 8.333333333333334
+          },
+          {
+            "code": "jmdmd",
+            "weight_percent": 8.333333333333334
+          },
+          {
+            "code": "xspb",
+            "weight_percent": 8.333333333333334
+          },
+          {
+            "code": "xsqs",
+            "weight_percent": 8.333333333333334
+          },
+          {
+            "code": "gyfb",
+            "weight_percent": 8.333333333333334
+          },
+          {
+            "code": "fmyl",
+            "weight_percent": 8.333333333333334
+          },
+          {
+            "code": "fmts",
+            "weight_percent": 8.333333333333329
+          }
+        ],
+        "rows": 1024,
+        "cols": 1024,
+        "window_cells": 1048576,
+        "valid_cells": 723902,
+        "output_statistics": {
+          "minimum": 0.163761241734998,
+          "maximum": 0.3998586946011832,
+          "mean": 0.2964859349289192
+        },
+        "requested_center": [
+          118.9,
+          32.1
+        ],
+        "grid_aligned_center": [
+          118.9000064280132,
+          32.099393381714464
+        ],
+        "bounds": [
+          113.78000642801321,
+          26.97939338171447,
+          124.02000642801318,
+          37.21939338171446
+        ],
+        "target_rows": 1024,
+        "target_cols": 1024,
+        "target_window_cells": 1048576
+      }
+    ],
+    "raw_samples": [
+      {
+        "family": "pipeline_stage_timing",
+        "aoi": "large",
+        "indicator_count": 3,
+        "indicator_codes": [
+          "PM25",
+          "AQI",
+          "NDVI"
+        ],
+        "sample_index": 0,
+        "rows": 1024,
+        "cols": 1024,
+        "window_cells": 1048576,
+        "valid_cells": 736372,
+        "output_statistics": {
+          "minimum": 0.10992840801676117,
+          "maximum": 0.696611225605011,
+          "mean": 0.4848121955853688
+        },
+        "pipeline_elapsed_ns": 447879987,
+        "attributed_ns": 443268430,
+        "unattributed_ns": 4611557,
+        "stage_events": [
+          {
+            "stage": "input_validation",
+            "indicator_code": null,
+            "elapsed_ns": 2113312
+          },
+          {
+            "stage": "source_open",
+            "indicator_code": "PM25",
+            "elapsed_ns": 15833125
+          },
+          {
+            "stage": "source_open",
+            "indicator_code": "AQI",
+            "elapsed_ns": 12816605
+          },
+          {
+            "stage": "source_open",
+            "indicator_code": "NDVI",
+            "elapsed_ns": 12566789
+          },
+          {
+            "stage": "grid_validation",
+            "indicator_code": null,
+            "elapsed_ns": 128215
+          },
+          {
+            "stage": "window_geometry_setup",
+            "indicator_code": null,
+            "elapsed_ns": 5834106
+          },
+          {
+            "stage": "raster_read",
+            "indicator_code": "PM25",
+            "elapsed_ns": 58480727
+          },
+          {
+            "stage": "mask_preparation",
+            "indicator_code": "PM25",
+            "elapsed_ns": 5350527
+          },
+          {
+            "stage": "value_validation_and_stats",
+            "indicator_code": "PM25",
+            "elapsed_ns": 4519579
+          },
+          {
+            "stage": "weighted_accumulation",
+            "indicator_code": "PM25",
+            "elapsed_ns": 8427050
+          },
+          {
+            "stage": "raster_read",
+            "indicator_code": "AQI",
+            "elapsed_ns": 84607202
+          },
+          {
+            "stage": "mask_preparation",
+            "indicator_code": "AQI",
+            "elapsed_ns": 6482549
+          },
+          {
+            "stage": "value_validation_and_stats",
+            "indicator_code": "AQI",
+            "elapsed_ns": 2298571
+          },
+          {
+            "stage": "weighted_accumulation",
+            "indicator_code": "AQI",
+            "elapsed_ns": 3226700
+          },
+          {
+            "stage": "raster_read",
+            "indicator_code": "NDVI",
+            "elapsed_ns": 204172419
+          },
+          {
+            "stage": "mask_preparation",
+            "indicator_code": "NDVI",
+            "elapsed_ns": 3353012
+          },
+          {
+            "stage": "value_validation_and_stats",
+            "indicator_code": "NDVI",
+            "elapsed_ns": 3102269
+          },
+          {
+            "stage": "weighted_accumulation",
+            "indicator_code": "NDVI",
+            "elapsed_ns": 5986887
+          },
+          {
+            "stage": "result_finalization",
+            "indicator_code": null,
+            "elapsed_ns": 3968786
+          }
+        ]
+      },
+      {
+        "family": "pipeline_stage_timing",
+        "aoi": "large",
+        "indicator_count": 3,
+        "indicator_codes": [
+          "PM25",
+          "AQI",
+          "NDVI"
+        ],
+        "sample_index": 1,
+        "rows": 1024,
+        "cols": 1024,
+        "window_cells": 1048576,
+        "valid_cells": 736372,
+        "output_statistics": {
+          "minimum": 0.10992840801676117,
+          "maximum": 0.696611225605011,
+          "mean": 0.4848121955853688
+        },
+        "pipeline_elapsed_ns": 586681475,
+        "attributed_ns": 583709438,
+        "unattributed_ns": 2972037,
+        "stage_events": [
+          {
+            "stage": "input_validation",
+            "indicator_code": null,
+            "elapsed_ns": 582949
+          },
+          {
+            "stage": "source_open",
+            "indicator_code": "PM25",
+            "elapsed_ns": 9229919
+          },
+          {
+            "stage": "source_open",
+            "indicator_code": "AQI",
+            "elapsed_ns": 15186178
+          },
+          {
+            "stage": "source_open",
+            "indicator_code": "NDVI",
+            "elapsed_ns": 12619116
+          },
+          {
+            "stage": "grid_validation",
+            "indicator_code": null,
+            "elapsed_ns": 292300
+          },
+          {
+            "stage": "window_geometry_setup",
+            "indicator_code": null,
+            "elapsed_ns": 5663282
+          },
+          {
+            "stage": "raster_read",
+            "indicator_code": "PM25",
+            "elapsed_ns": 103185542
+          },
+          {
+            "stage": "mask_preparation",
+            "indicator_code": "PM25",
+            "elapsed_ns": 2970752
+          },
+          {
+            "stage": "value_validation_and_stats",
+            "indicator_code": "PM25",
+            "elapsed_ns": 2997116
+          },
+          {
+            "stage": "weighted_accumulation",
+            "indicator_code": "PM25",
+            "elapsed_ns": 5157954
+          },
+          {
+            "stage": "raster_read",
+            "indicator_code": "AQI",
+            "elapsed_ns": 180222553
+          },
+          {
+            "stage": "mask_preparation",
+            "indicator_code": "AQI",
+            "elapsed_ns": 3818924
+          },
+          {
+            "stage": "value_validation_and_stats",
+            "indicator_code": "AQI",
+            "elapsed_ns": 2503803
+          },
+          {
+            "stage": "weighted_accumulation",
+            "indicator_code": "AQI",
+            "elapsed_ns": 4954335
+          },
+          {
+            "stage": "raster_read",
+            "indicator_code": "NDVI",
+            "elapsed_ns": 221649561
+          },
+          {
+            "stage": "mask_preparation",
+            "indicator_code": "NDVI",
+            "elapsed_ns": 2482165
+          },
+          {
+            "stage": "value_validation_and_stats",
+            "indicator_code": "NDVI",
+            "elapsed_ns": 1993385
+          },
+          {
+            "stage": "weighted_accumulation",
+            "indicator_code": "NDVI",
+            "elapsed_ns": 5118066
+          },
+          {
+            "stage": "result_finalization",
+            "indicator_code": null,
+            "elapsed_ns": 3081538
+          }
+        ]
+      },
+      {
+        "family": "pipeline_stage_timing",
+        "aoi": "large",
+        "indicator_count": 3,
+        "indicator_codes": [
+          "PM25",
+          "AQI",
+          "NDVI"
+        ],
+        "sample_index": 2,
+        "rows": 1024,
+        "cols": 1024,
+        "window_cells": 1048576,
+        "valid_cells": 736372,
+        "output_statistics": {
+          "minimum": 0.10992840801676117,
+          "maximum": 0.696611225605011,
+          "mean": 0.4848121955853688
+        },
+        "pipeline_elapsed_ns": 609517368,
+        "attributed_ns": 605865384,
+        "unattributed_ns": 3651984,
+        "stage_events": [
+          {
+            "stage": "input_validation",
+            "indicator_code": null,
+            "elapsed_ns": 939319
+          },
+          {
+            "stage": "source_open",
+            "indicator_code": "PM25",
+            "elapsed_ns": 11107396
+          },
+          {
+            "stage": "source_open",
+            "indicator_code": "AQI",
+            "elapsed_ns": 16959447
+          },
+          {
+            "stage": "source_open",
+            "indicator_code": "NDVI",
+            "elapsed_ns": 24158298
+          },
+          {
+            "stage": "grid_validation",
+            "indicator_code": null,
+            "elapsed_ns": 206089
+          },
+          {
+            "stage": "window_geometry_setup",
+            "indicator_code": null,
+            "elapsed_ns": 6090711
+          },
+          {
+            "stage": "raster_read",
+            "indicator_code": "PM25",
+            "elapsed_ns": 93276835
+          },
+          {
+            "stage": "mask_preparation",
+            "indicator_code": "PM25",
+            "elapsed_ns": 3160295
+          },
+          {
+            "stage": "value_validation_and_stats",
+            "indicator_code": "PM25",
+            "elapsed_ns": 2627027
+          },
+          {
+            "stage": "weighted_accumulation",
+            "indicator_code": "PM25",
+            "elapsed_ns": 9180464
+          },
+          {
+            "stage": "raster_read",
+            "indicator_code": "AQI",
+            "elapsed_ns": 223065364
+          },
+          {
+            "stage": "mask_preparation",
+            "indicator_code": "AQI",
+            "elapsed_ns": 2799858
+          },
+          {
+            "stage": "value_validation_and_stats",
+            "indicator_code": "AQI",
+            "elapsed_ns": 2113769
+          },
+          {
+            "stage": "weighted_accumulation",
+            "indicator_code": "AQI",
+            "elapsed_ns": 4534039
+          },
+          {
+            "stage": "raster_read",
+            "indicator_code": "NDVI",
+            "elapsed_ns": 189407370
+          },
+          {
+            "stage": "mask_preparation",
+            "indicator_code": "NDVI",
+            "elapsed_ns": 3661647
+          },
+          {
+            "stage": "value_validation_and_stats",
+            "indicator_code": "NDVI",
+            "elapsed_ns": 3106535
+          },
+          {
+            "stage": "weighted_accumulation",
+            "indicator_code": "NDVI",
+            "elapsed_ns": 5458371
+          },
+          {
+            "stage": "result_finalization",
+            "indicator_code": null,
+            "elapsed_ns": 4012550
+          }
+        ]
+      },
+      {
+        "family": "pipeline_stage_timing",
+        "aoi": "large",
+        "indicator_count": 3,
+        "indicator_codes": [
+          "PM25",
+          "AQI",
+          "NDVI"
+        ],
+        "sample_index": 3,
+        "rows": 1024,
+        "cols": 1024,
+        "window_cells": 1048576,
+        "valid_cells": 736372,
+        "output_statistics": {
+          "minimum": 0.10992840801676117,
+          "maximum": 0.696611225605011,
+          "mean": 0.4848121955853688
+        },
+        "pipeline_elapsed_ns": 263730283,
+        "attributed_ns": 260834317,
+        "unattributed_ns": 2895966,
+        "stage_events": [
+          {
+            "stage": "input_validation",
+            "indicator_code": null,
+            "elapsed_ns": 715131
+          },
+          {
+            "stage": "source_open",
+            "indicator_code": "PM25",
+            "elapsed_ns": 12637092
+          },
+          {
+            "stage": "source_open",
+            "indicator_code": "AQI",
+            "elapsed_ns": 21425318
+          },
+          {
+            "stage": "source_open",
+            "indicator_code": "NDVI",
+            "elapsed_ns": 8362349
+          },
+          {
+            "stage": "grid_validation",
+            "indicator_code": null,
+            "elapsed_ns": 127284
+          },
+          {
+            "stage": "window_geometry_setup",
+            "indicator_code": null,
+            "elapsed_ns": 5131817
+          },
+          {
+            "stage": "raster_read",
+            "indicator_code": "PM25",
+            "elapsed_ns": 81514350
+          },
+          {
+            "stage": "mask_preparation",
+            "indicator_code": "PM25",
+            "elapsed_ns": 2762854
+          },
+          {
+            "stage": "value_validation_and_stats",
+            "indicator_code": "PM25",
+            "elapsed_ns": 2067832
+          },
+          {
+            "stage": "weighted_accumulation",
+            "indicator_code": "PM25",
+            "elapsed_ns": 5219636
+          },
+          {
+            "stage": "raster_read",
+            "indicator_code": "AQI",
+            "elapsed_ns": 38261537
+          },
+          {
+            "stage": "mask_preparation",
+            "indicator_code": "AQI",
+            "elapsed_ns": 2767425
+          },
+          {
+            "stage": "value_validation_and_stats",
+            "indicator_code": "AQI",
+            "elapsed_ns": 2097429
+          },
+          {
+            "stage": "weighted_accumulation",
+            "indicator_code": "AQI",
+            "elapsed_ns": 3141230
+          },
+          {
+            "stage": "raster_read",
+            "indicator_code": "NDVI",
+            "elapsed_ns": 64190336
+          },
+          {
+            "stage": "mask_preparation",
+            "indicator_code": "NDVI",
+            "elapsed_ns": 3129632
+          },
+          {
+            "stage": "value_validation_and_stats",
+            "indicator_code": "NDVI",
+            "elapsed_ns": 1763271
+          },
+          {
+            "stage": "weighted_accumulation",
+            "indicator_code": "NDVI",
+            "elapsed_ns": 2997221
+          },
+          {
+            "stage": "result_finalization",
+            "indicator_code": null,
+            "elapsed_ns": 2522573
+          }
+        ]
+      },
+      {
+        "family": "pipeline_stage_timing",
+        "aoi": "large",
+        "indicator_count": 3,
+        "indicator_codes": [
+          "PM25",
+          "AQI",
+          "NDVI"
+        ],
+        "sample_index": 4,
+        "rows": 1024,
+        "cols": 1024,
+        "window_cells": 1048576,
+        "valid_cells": 736372,
+        "output_statistics": {
+          "minimum": 0.10992840801676117,
+          "maximum": 0.696611225605011,
+          "mean": 0.4848121955853688
+        },
+        "pipeline_elapsed_ns": 717667343,
+        "attributed_ns": 713431490,
+        "unattributed_ns": 4235853,
+        "stage_events": [
+          {
+            "stage": "input_validation",
+            "indicator_code": null,
+            "elapsed_ns": 419037
+          },
+          {
+            "stage": "source_open",
+            "indicator_code": "PM25",
+            "elapsed_ns": 22306470
+          },
+          {
+            "stage": "source_open",
+            "indicator_code": "AQI",
+            "elapsed_ns": 35000888
+          },
+          {
+            "stage": "source_open",
+            "indicator_code": "NDVI",
+            "elapsed_ns": 23287156
+          },
+          {
+            "stage": "grid_validation",
+            "indicator_code": null,
+            "elapsed_ns": 486442
+          },
+          {
+            "stage": "window_geometry_setup",
+            "indicator_code": null,
+            "elapsed_ns": 9879429
+          },
+          {
+            "stage": "raster_read",
+            "indicator_code": "PM25",
+            "elapsed_ns": 127696868
+          },
+          {
+            "stage": "mask_preparation",
+            "indicator_code": "PM25",
+            "elapsed_ns": 5478021
+          },
+          {
+            "stage": "value_validation_and_stats",
+            "indicator_code": "PM25",
+            "elapsed_ns": 3876120
+          },
+          {
+            "stage": "weighted_accumulation",
+            "indicator_code": "PM25",
+            "elapsed_ns": 5591128
+          },
+          {
+            "stage": "raster_read",
+            "indicator_code": "AQI",
+            "elapsed_ns": 129511601
+          },
+          {
+            "stage": "mask_preparation",
+            "indicator_code": "AQI",
+            "elapsed_ns": 3058011
+          },
+          {
+            "stage": "value_validation_and_stats",
+            "indicator_code": "AQI",
+            "elapsed_ns": 2465655
+          },
+          {
+            "stage": "weighted_accumulation",
+            "indicator_code": "AQI",
+            "elapsed_ns": 3335772
+          },
+          {
+            "stage": "raster_read",
+            "indicator_code": "NDVI",
+            "elapsed_ns": 325290895
+          },
+          {
+            "stage": "mask_preparation",
+            "indicator_code": "NDVI",
+            "elapsed_ns": 3897553
+          },
+          {
+            "stage": "value_validation_and_stats",
+            "indicator_code": "NDVI",
+            "elapsed_ns": 2511283
+          },
+          {
+            "stage": "weighted_accumulation",
+            "indicator_code": "NDVI",
+            "elapsed_ns": 5089833
+          },
+          {
+            "stage": "result_finalization",
+            "indicator_code": null,
+            "elapsed_ns": 4249328
+          }
+        ]
+      },
+      {
+        "family": "pipeline_stage_timing",
+        "aoi": "large",
+        "indicator_count": 6,
+        "indicator_codes": [
+          "PM25",
+          "AQI",
+          "NDVI",
+          "rkmd",
+          "gyfb",
+          "fmyl"
+        ],
+        "sample_index": 0,
+        "rows": 1024,
+        "cols": 1024,
+        "window_cells": 1048576,
+        "valid_cells": 724106,
+        "output_statistics": {
+          "minimum": 0.16494468379217625,
+          "maximum": 0.5763034583239157,
+          "mean": 0.3930046017334881
+        },
+        "pipeline_elapsed_ns": 507890178,
+        "attributed_ns": 501489577,
+        "unattributed_ns": 6400601,
+        "stage_events": [
+          {
+            "stage": "input_validation",
+            "indicator_code": null,
+            "elapsed_ns": 524479
+          },
+          {
+            "stage": "source_open",
+            "indicator_code": "PM25",
+            "elapsed_ns": 6548587
+          },
+          {
+            "stage": "source_open",
+            "indicator_code": "AQI",
+            "elapsed_ns": 8533505
+          },
+          {
+            "stage": "source_open",
+            "indicator_code": "NDVI",
+            "elapsed_ns": 10077876
+          },
+          {
+            "stage": "source_open",
+            "indicator_code": "rkmd",
+            "elapsed_ns": 9696149
+          },
+          {
+            "stage": "source_open",
+            "indicator_code": "gyfb",
+            "elapsed_ns": 4715356
+          },
+          {
+            "stage": "source_open",
+            "indicator_code": "fmyl",
+            "elapsed_ns": 4272205
+          },
+          {
+            "stage": "grid_validation",
+            "indicator_code": null,
+            "elapsed_ns": 194475
+          },
+          {
+            "stage": "window_geometry_setup",
+            "indicator_code": null,
+            "elapsed_ns": 5013183
+          },
+          {
+            "stage": "raster_read",
+            "indicator_code": "PM25",
+            "elapsed_ns": 46929575
+          },
+          {
+            "stage": "mask_preparation",
+            "indicator_code": "PM25",
+            "elapsed_ns": 4340770
+          },
+          {
+            "stage": "value_validation_and_stats",
+            "indicator_code": "PM25",
+            "elapsed_ns": 3459918
+          },
+          {
+            "stage": "weighted_accumulation",
+            "indicator_code": "PM25",
+            "elapsed_ns": 5136192
+          },
+          {
+            "stage": "raster_read",
+            "indicator_code": "AQI",
+            "elapsed_ns": 54987280
+          },
+          {
+            "stage": "mask_preparation",
+            "indicator_code": "AQI",
+            "elapsed_ns": 3776506
+          },
+          {
+            "stage": "value_validation_and_stats",
+            "indicator_code": "AQI",
+            "elapsed_ns": 2708397
+          },
+          {
+            "stage": "weighted_accumulation",
+            "indicator_code": "AQI",
+            "elapsed_ns": 4778395
+          },
+          {
+            "stage": "raster_read",
+            "indicator_code": "NDVI",
+            "elapsed_ns": 77432336
+          },
+          {
+            "stage": "mask_preparation",
+            "indicator_code": "NDVI",
+            "elapsed_ns": 2197376
+          },
+          {
+            "stage": "value_validation_and_stats",
+            "indicator_code": "NDVI",
+            "elapsed_ns": 1870454
+          },
+          {
+            "stage": "weighted_accumulation",
+            "indicator_code": "NDVI",
+            "elapsed_ns": 3648266
+          },
+          {
+            "stage": "raster_read",
+            "indicator_code": "rkmd",
+            "elapsed_ns": 68638934
+          },
+          {
+            "stage": "mask_preparation",
+            "indicator_code": "rkmd",
+            "elapsed_ns": 3278996
+          },
+          {
+            "stage": "value_validation_and_stats",
+            "indicator_code": "rkmd",
+            "elapsed_ns": 1916996
+          },
+          {
+            "stage": "weighted_accumulation",
+            "indicator_code": "rkmd",
+            "elapsed_ns": 3368673
+          },
+          {
+            "stage": "raster_read",
+            "indicator_code": "gyfb",
+            "elapsed_ns": 114093950
+          },
+          {
+            "stage": "mask_preparation",
+            "indicator_code": "gyfb",
+            "elapsed_ns": 3613407
+          },
+          {
+            "stage": "value_validation_and_stats",
+            "indicator_code": "gyfb",
+            "elapsed_ns": 1666768
+          },
+          {
+            "stage": "weighted_accumulation",
+            "indicator_code": "gyfb",
+            "elapsed_ns": 4286155
+          },
+          {
+            "stage": "raster_read",
+            "indicator_code": "fmyl",
+            "elapsed_ns": 28560557
+          },
+          {
+            "stage": "mask_preparation",
+            "indicator_code": "fmyl",
+            "elapsed_ns": 2844748
+          },
+          {
+            "stage": "value_validation_and_stats",
+            "indicator_code": "fmyl",
+            "elapsed_ns": 2111968
+          },
+          {
+            "stage": "weighted_accumulation",
+            "indicator_code": "fmyl",
+            "elapsed_ns": 3194702
+          },
+          {
+            "stage": "result_finalization",
+            "indicator_code": null,
+            "elapsed_ns": 3072443
+          }
+        ]
+      },
+      {
+        "family": "pipeline_stage_timing",
+        "aoi": "large",
+        "indicator_count": 6,
+        "indicator_codes": [
+          "PM25",
+          "AQI",
+          "NDVI",
+          "rkmd",
+          "gyfb",
+          "fmyl"
+        ],
+        "sample_index": 1,
+        "rows": 1024,
+        "cols": 1024,
+        "window_cells": 1048576,
+        "valid_cells": 724106,
+        "output_statistics": {
+          "minimum": 0.16494468379217625,
+          "maximum": 0.5763034583239157,
+          "mean": 0.3930046017334881
+        },
+        "pipeline_elapsed_ns": 1562532922,
+        "attributed_ns": 1558825350,
+        "unattributed_ns": 3707572,
+        "stage_events": [
+          {
+            "stage": "input_validation",
+            "indicator_code": null,
+            "elapsed_ns": 1141282
+          },
+          {
+            "stage": "source_open",
+            "indicator_code": "PM25",
+            "elapsed_ns": 11108306
+          },
+          {
+            "stage": "source_open",
+            "indicator_code": "AQI",
+            "elapsed_ns": 17750258
+          },
+          {
+            "stage": "source_open",
+            "indicator_code": "NDVI",
+            "elapsed_ns": 22095674
+          },
+          {
+            "stage": "source_open",
+            "indicator_code": "rkmd",
+            "elapsed_ns": 18440707
+          },
+          {
+            "stage": "source_open",
+            "indicator_code": "gyfb",
+            "elapsed_ns": 11499945
+          },
+          {
+            "stage": "source_open",
+            "indicator_code": "fmyl",
+            "elapsed_ns": 15129097
+          },
+          {
+            "stage": "grid_validation",
+            "indicator_code": null,
+            "elapsed_ns": 193255
+          },
+          {
+            "stage": "window_geometry_setup",
+            "indicator_code": null,
+            "elapsed_ns": 7212042
+          },
+          {
+            "stage": "raster_read",
+            "indicator_code": "PM25",
+            "elapsed_ns": 218885642
+          },
+          {
+            "stage": "mask_preparation",
+            "indicator_code": "PM25",
+            "elapsed_ns": 3536279
+          },
+          {
+            "stage": "value_validation_and_stats",
+            "indicator_code": "PM25",
+            "elapsed_ns": 2291469
+          },
+          {
+            "stage": "weighted_accumulation",
+            "indicator_code": "PM25",
+            "elapsed_ns": 4760441
+          },
+          {
+            "stage": "raster_read",
+            "indicator_code": "AQI",
+            "elapsed_ns": 171627356
+          },
+          {
+            "stage": "mask_preparation",
+            "indicator_code": "AQI",
+            "elapsed_ns": 4746237
+          },
+          {
+            "stage": "value_validation_and_stats",
+            "indicator_code": "AQI",
+            "elapsed_ns": 3094710
+          },
+          {
+            "stage": "weighted_accumulation",
+            "indicator_code": "AQI",
+            "elapsed_ns": 6359108
+          },
+          {
+            "stage": "raster_read",
+            "indicator_code": "NDVI",
+            "elapsed_ns": 378845957
+          },
+          {
+            "stage": "mask_preparation",
+            "indicator_code": "NDVI",
+            "elapsed_ns": 4349941
+          },
+          {
+            "stage": "value_validation_and_stats",
+            "indicator_code": "NDVI",
+            "elapsed_ns": 2516167
+          },
+          {
+            "stage": "weighted_accumulation",
+            "indicator_code": "NDVI",
+            "elapsed_ns": 3336226
+          },
+          {
+            "stage": "raster_read",
+            "indicator_code": "rkmd",
+            "elapsed_ns": 378958472
+          },
+          {
+            "stage": "mask_preparation",
+            "indicator_code": "rkmd",
+            "elapsed_ns": 3321188
+          },
+          {
+            "stage": "value_validation_and_stats",
+            "indicator_code": "rkmd",
+            "elapsed_ns": 2269780
+          },
+          {
+            "stage": "weighted_accumulation",
+            "indicator_code": "rkmd",
+            "elapsed_ns": 3292879
+          },
+          {
+            "stage": "raster_read",
+            "indicator_code": "gyfb",
+            "elapsed_ns": 193339808
+          },
+          {
+            "stage": "mask_preparation",
+            "indicator_code": "gyfb",
+            "elapsed_ns": 3707474
+          },
+          {
+            "stage": "value_validation_and_stats",
+            "indicator_code": "gyfb",
+            "elapsed_ns": 2839542
+          },
+          {
+            "stage": "weighted_accumulation",
+            "indicator_code": "gyfb",
+            "elapsed_ns": 6411477
+          },
+          {
+            "stage": "raster_read",
+            "indicator_code": "fmyl",
+            "elapsed_ns": 42251064
+          },
+          {
+            "stage": "mask_preparation",
+            "indicator_code": "fmyl",
+            "elapsed_ns": 2991752
+          },
+          {
+            "stage": "value_validation_and_stats",
+            "indicator_code": "fmyl",
+            "elapsed_ns": 2567072
+          },
+          {
+            "stage": "weighted_accumulation",
+            "indicator_code": "fmyl",
+            "elapsed_ns": 4458081
+          },
+          {
+            "stage": "result_finalization",
+            "indicator_code": null,
+            "elapsed_ns": 3496662
+          }
+        ]
+      },
+      {
+        "family": "pipeline_stage_timing",
+        "aoi": "large",
+        "indicator_count": 6,
+        "indicator_codes": [
+          "PM25",
+          "AQI",
+          "NDVI",
+          "rkmd",
+          "gyfb",
+          "fmyl"
+        ],
+        "sample_index": 2,
+        "rows": 1024,
+        "cols": 1024,
+        "window_cells": 1048576,
+        "valid_cells": 724106,
+        "output_statistics": {
+          "minimum": 0.16494468379217625,
+          "maximum": 0.5763034583239157,
+          "mean": 0.3930046017334881
+        },
+        "pipeline_elapsed_ns": 787582529,
+        "attributed_ns": 778839209,
+        "unattributed_ns": 8743320,
+        "stage_events": [
+          {
+            "stage": "input_validation",
+            "indicator_code": null,
+            "elapsed_ns": 470045
+          },
+          {
+            "stage": "source_open",
+            "indicator_code": "PM25",
+            "elapsed_ns": 4739519
+          },
+          {
+            "stage": "source_open",
+            "indicator_code": "AQI",
+            "elapsed_ns": 6303181
+          },
+          {
+            "stage": "source_open",
+            "indicator_code": "NDVI",
+            "elapsed_ns": 8219330
+          },
+          {
+            "stage": "source_open",
+            "indicator_code": "rkmd",
+            "elapsed_ns": 10936638
+          },
+          {
+            "stage": "source_open",
+            "indicator_code": "gyfb",
+            "elapsed_ns": 6847625
+          },
+          {
+            "stage": "source_open",
+            "indicator_code": "fmyl",
+            "elapsed_ns": 7890347
+          },
+          {
+            "stage": "grid_validation",
+            "indicator_code": null,
+            "elapsed_ns": 193875
+          },
+          {
+            "stage": "window_geometry_setup",
+            "indicator_code": null,
+            "elapsed_ns": 5518158
+          },
+          {
+            "stage": "raster_read",
+            "indicator_code": "PM25",
+            "elapsed_ns": 49254098
+          },
+          {
+            "stage": "mask_preparation",
+            "indicator_code": "PM25",
+            "elapsed_ns": 3129013
+          },
+          {
+            "stage": "value_validation_and_stats",
+            "indicator_code": "PM25",
+            "elapsed_ns": 2021460
+          },
+          {
+            "stage": "weighted_accumulation",
+            "indicator_code": "PM25",
+            "elapsed_ns": 4498076
+          },
+          {
+            "stage": "raster_read",
+            "indicator_code": "AQI",
+            "elapsed_ns": 251765932
+          },
+          {
+            "stage": "mask_preparation",
+            "indicator_code": "AQI",
+            "elapsed_ns": 5373628
+          },
+          {
+            "stage": "value_validation_and_stats",
+            "indicator_code": "AQI",
+            "elapsed_ns": 3804720
+          },
+          {
+            "stage": "weighted_accumulation",
+            "indicator_code": "AQI",
+            "elapsed_ns": 5500755
+          },
+          {
+            "stage": "raster_read",
+            "indicator_code": "NDVI",
+            "elapsed_ns": 76120564
+          },
+          {
+            "stage": "mask_preparation",
+            "indicator_code": "NDVI",
+            "elapsed_ns": 3057259
+          },
+          {
+            "stage": "value_validation_and_stats",
+            "indicator_code": "NDVI",
+            "elapsed_ns": 2350777
+          },
+          {
+            "stage": "weighted_accumulation",
+            "indicator_code": "NDVI",
+            "elapsed_ns": 4084437
+          },
+          {
+            "stage": "raster_read",
+            "indicator_code": "rkmd",
+            "elapsed_ns": 119699479
+          },
+          {
+            "stage": "mask_preparation",
+            "indicator_code": "rkmd",
+            "elapsed_ns": 2705832
+          },
+          {
+            "stage": "value_validation_and_stats",
+            "indicator_code": "rkmd",
+            "elapsed_ns": 1929455
+          },
+          {
+            "stage": "weighted_accumulation",
+            "indicator_code": "rkmd",
+            "elapsed_ns": 4833403
+          },
+          {
+            "stage": "raster_read",
+            "indicator_code": "gyfb",
+            "elapsed_ns": 121672044
+          },
+          {
+            "stage": "mask_preparation",
+            "indicator_code": "gyfb",
+            "elapsed_ns": 3867926
+          },
+          {
+            "stage": "value_validation_and_stats",
+            "indicator_code": "gyfb",
+            "elapsed_ns": 2450919
+          },
+          {
+            "stage": "weighted_accumulation",
+            "indicator_code": "gyfb",
+            "elapsed_ns": 5426776
+          },
+          {
+            "stage": "raster_read",
+            "indicator_code": "fmyl",
+            "elapsed_ns": 39466050
+          },
+          {
+            "stage": "mask_preparation",
+            "indicator_code": "fmyl",
+            "elapsed_ns": 3038476
+          },
+          {
+            "stage": "value_validation_and_stats",
+            "indicator_code": "fmyl",
+            "elapsed_ns": 2102014
+          },
+          {
+            "stage": "weighted_accumulation",
+            "indicator_code": "fmyl",
+            "elapsed_ns": 5719640
+          },
+          {
+            "stage": "result_finalization",
+            "indicator_code": null,
+            "elapsed_ns": 3847758
+          }
+        ]
+      },
+      {
+        "family": "pipeline_stage_timing",
+        "aoi": "large",
+        "indicator_count": 6,
+        "indicator_codes": [
+          "PM25",
+          "AQI",
+          "NDVI",
+          "rkmd",
+          "gyfb",
+          "fmyl"
+        ],
+        "sample_index": 3,
+        "rows": 1024,
+        "cols": 1024,
+        "window_cells": 1048576,
+        "valid_cells": 724106,
+        "output_statistics": {
+          "minimum": 0.16494468379217625,
+          "maximum": 0.5763034583239157,
+          "mean": 0.3930046017334881
+        },
+        "pipeline_elapsed_ns": 1408319112,
+        "attributed_ns": 1400929599,
+        "unattributed_ns": 7389513,
+        "stage_events": [
+          {
+            "stage": "input_validation",
+            "indicator_code": null,
+            "elapsed_ns": 749488
+          },
+          {
+            "stage": "source_open",
+            "indicator_code": "PM25",
+            "elapsed_ns": 16733224
+          },
+          {
+            "stage": "source_open",
+            "indicator_code": "AQI",
+            "elapsed_ns": 22945733
+          },
+          {
+            "stage": "source_open",
+            "indicator_code": "NDVI",
+            "elapsed_ns": 32334879
+          },
+          {
+            "stage": "source_open",
+            "indicator_code": "rkmd",
+            "elapsed_ns": 23401922
+          },
+          {
+            "stage": "source_open",
+            "indicator_code": "gyfb",
+            "elapsed_ns": 12835382
+          },
+          {
+            "stage": "source_open",
+            "indicator_code": "fmyl",
+            "elapsed_ns": 13621254
+          },
+          {
+            "stage": "grid_validation",
+            "indicator_code": null,
+            "elapsed_ns": 234669
+          },
+          {
+            "stage": "window_geometry_setup",
+            "indicator_code": null,
+            "elapsed_ns": 7289044
+          },
+          {
+            "stage": "raster_read",
+            "indicator_code": "PM25",
+            "elapsed_ns": 159239289
+          },
+          {
+            "stage": "mask_preparation",
+            "indicator_code": "PM25",
+            "elapsed_ns": 3764484
+          },
+          {
+            "stage": "value_validation_and_stats",
+            "indicator_code": "PM25",
+            "elapsed_ns": 3029449
+          },
+          {
+            "stage": "weighted_accumulation",
+            "indicator_code": "PM25",
+            "elapsed_ns": 5330211
+          },
+          {
+            "stage": "raster_read",
+            "indicator_code": "AQI",
+            "elapsed_ns": 115540340
+          },
+          {
+            "stage": "mask_preparation",
+            "indicator_code": "AQI",
+            "elapsed_ns": 4543787
+          },
+          {
+            "stage": "value_validation_and_stats",
+            "indicator_code": "AQI",
+            "elapsed_ns": 3043528
+          },
+          {
+            "stage": "weighted_accumulation",
+            "indicator_code": "AQI",
+            "elapsed_ns": 3635515
+          },
+          {
+            "stage": "raster_read",
+            "indicator_code": "NDVI",
+            "elapsed_ns": 204810190
+          },
+          {
+            "stage": "mask_preparation",
+            "indicator_code": "NDVI",
+            "elapsed_ns": 3473006
+          },
+          {
+            "stage": "value_validation_and_stats",
+            "indicator_code": "NDVI",
+            "elapsed_ns": 2198416
+          },
+          {
+            "stage": "weighted_accumulation",
+            "indicator_code": "NDVI",
+            "elapsed_ns": 3159076
+          },
+          {
+            "stage": "raster_read",
+            "indicator_code": "rkmd",
+            "elapsed_ns": 438867988
+          },
+          {
+            "stage": "mask_preparation",
+            "indicator_code": "rkmd",
+            "elapsed_ns": 4156687
+          },
+          {
+            "stage": "value_validation_and_stats",
+            "indicator_code": "rkmd",
+            "elapsed_ns": 2298441
+          },
+          {
+            "stage": "weighted_accumulation",
+            "indicator_code": "rkmd",
+            "elapsed_ns": 3249923
+          },
+          {
+            "stage": "raster_read",
+            "indicator_code": "gyfb",
+            "elapsed_ns": 223728904
+          },
+          {
+            "stage": "mask_preparation",
+            "indicator_code": "gyfb",
+            "elapsed_ns": 3742049
+          },
+          {
+            "stage": "value_validation_and_stats",
+            "indicator_code": "gyfb",
+            "elapsed_ns": 2094321
+          },
+          {
+            "stage": "weighted_accumulation",
+            "indicator_code": "gyfb",
+            "elapsed_ns": 7869590
+          },
+          {
+            "stage": "raster_read",
+            "indicator_code": "fmyl",
+            "elapsed_ns": 55107121
+          },
+          {
+            "stage": "mask_preparation",
+            "indicator_code": "fmyl",
+            "elapsed_ns": 4014917
+          },
+          {
+            "stage": "value_validation_and_stats",
+            "indicator_code": "fmyl",
+            "elapsed_ns": 3380089
+          },
+          {
+            "stage": "weighted_accumulation",
+            "indicator_code": "fmyl",
+            "elapsed_ns": 6681763
+          },
+          {
+            "stage": "result_finalization",
+            "indicator_code": null,
+            "elapsed_ns": 3824920
+          }
+        ]
+      },
+      {
+        "family": "pipeline_stage_timing",
+        "aoi": "large",
+        "indicator_count": 6,
+        "indicator_codes": [
+          "PM25",
+          "AQI",
+          "NDVI",
+          "rkmd",
+          "gyfb",
+          "fmyl"
+        ],
+        "sample_index": 4,
+        "rows": 1024,
+        "cols": 1024,
+        "window_cells": 1048576,
+        "valid_cells": 724106,
+        "output_statistics": {
+          "minimum": 0.16494468379217625,
+          "maximum": 0.5763034583239157,
+          "mean": 0.3930046017334881
+        },
+        "pipeline_elapsed_ns": 918332701,
+        "attributed_ns": 913432363,
+        "unattributed_ns": 4900338,
+        "stage_events": [
+          {
+            "stage": "input_validation",
+            "indicator_code": null,
+            "elapsed_ns": 743084
+          },
+          {
+            "stage": "source_open",
+            "indicator_code": "PM25",
+            "elapsed_ns": 6908773
+          },
+          {
+            "stage": "source_open",
+            "indicator_code": "AQI",
+            "elapsed_ns": 19229957
+          },
+          {
+            "stage": "source_open",
+            "indicator_code": "NDVI",
+            "elapsed_ns": 14078844
+          },
+          {
+            "stage": "source_open",
+            "indicator_code": "rkmd",
+            "elapsed_ns": 19271343
+          },
+          {
+            "stage": "source_open",
+            "indicator_code": "gyfb",
+            "elapsed_ns": 14985584
+          },
+          {
+            "stage": "source_open",
+            "indicator_code": "fmyl",
+            "elapsed_ns": 18199785
+          },
+          {
+            "stage": "grid_validation",
+            "indicator_code": null,
+            "elapsed_ns": 304225
+          },
+          {
+            "stage": "window_geometry_setup",
+            "indicator_code": null,
+            "elapsed_ns": 8250007
+          },
+          {
+            "stage": "raster_read",
+            "indicator_code": "PM25",
+            "elapsed_ns": 151642483
+          },
+          {
+            "stage": "mask_preparation",
+            "indicator_code": "PM25",
+            "elapsed_ns": 4272915
+          },
+          {
+            "stage": "value_validation_and_stats",
+            "indicator_code": "PM25",
+            "elapsed_ns": 3157975
+          },
+          {
+            "stage": "weighted_accumulation",
+            "indicator_code": "PM25",
+            "elapsed_ns": 4730058
+          },
+          {
+            "stage": "raster_read",
+            "indicator_code": "AQI",
+            "elapsed_ns": 113151559
+          },
+          {
+            "stage": "mask_preparation",
+            "indicator_code": "AQI",
+            "elapsed_ns": 3939326
+          },
+          {
+            "stage": "value_validation_and_stats",
+            "indicator_code": "AQI",
+            "elapsed_ns": 2061229
+          },
+          {
+            "stage": "weighted_accumulation",
+            "indicator_code": "AQI",
+            "elapsed_ns": 3979119
+          },
+          {
+            "stage": "raster_read",
+            "indicator_code": "NDVI",
+            "elapsed_ns": 171639581
+          },
+          {
+            "stage": "mask_preparation",
+            "indicator_code": "NDVI",
+            "elapsed_ns": 4885516
+          },
+          {
+            "stage": "value_validation_and_stats",
+            "indicator_code": "NDVI",
+            "elapsed_ns": 3150893
+          },
+          {
+            "stage": "weighted_accumulation",
+            "indicator_code": "NDVI",
+            "elapsed_ns": 4089645
+          },
+          {
+            "stage": "raster_read",
+            "indicator_code": "rkmd",
+            "elapsed_ns": 144416053
+          },
+          {
+            "stage": "mask_preparation",
+            "indicator_code": "rkmd",
+            "elapsed_ns": 4614123
+          },
+          {
+            "stage": "value_validation_and_stats",
+            "indicator_code": "rkmd",
+            "elapsed_ns": 4114185
+          },
+          {
+            "stage": "weighted_accumulation",
+            "indicator_code": "rkmd",
+            "elapsed_ns": 4649125
+          },
+          {
+            "stage": "raster_read",
+            "indicator_code": "gyfb",
+            "elapsed_ns": 131862788
+          },
+          {
+            "stage": "mask_preparation",
+            "indicator_code": "gyfb",
+            "elapsed_ns": 3012645
+          },
+          {
+            "stage": "value_validation_and_stats",
+            "indicator_code": "gyfb",
+            "elapsed_ns": 2605988
+          },
+          {
+            "stage": "weighted_accumulation",
+            "indicator_code": "gyfb",
+            "elapsed_ns": 5888220
+          },
+          {
+            "stage": "raster_read",
+            "indicator_code": "fmyl",
+            "elapsed_ns": 26400962
+          },
+          {
+            "stage": "mask_preparation",
+            "indicator_code": "fmyl",
+            "elapsed_ns": 3495638
+          },
+          {
+            "stage": "value_validation_and_stats",
+            "indicator_code": "fmyl",
+            "elapsed_ns": 1729006
+          },
+          {
+            "stage": "weighted_accumulation",
+            "indicator_code": "fmyl",
+            "elapsed_ns": 4531960
+          },
+          {
+            "stage": "result_finalization",
+            "indicator_code": null,
+            "elapsed_ns": 3439769
+          }
+        ]
+      },
+      {
+        "family": "pipeline_stage_timing",
+        "aoi": "large",
+        "indicator_count": 12,
+        "indicator_codes": [
+          "PM25",
+          "AQI",
+          "NDVI",
+          "hwmd",
+          "rkmd",
+          "xxmd",
+          "jmdmd",
+          "xspb",
+          "xsqs",
+          "gyfb",
+          "fmyl",
+          "fmts"
+        ],
+        "sample_index": 0,
+        "rows": 1024,
+        "cols": 1024,
+        "window_cells": 1048576,
+        "valid_cells": 723902,
+        "output_statistics": {
+          "minimum": 0.163761241734998,
+          "maximum": 0.3998586946011832,
+          "mean": 0.2964859349289192
+        },
+        "pipeline_elapsed_ns": 1395772999,
+        "attributed_ns": 1388795588,
+        "unattributed_ns": 6977411,
+        "stage_events": [
+          {
+            "stage": "input_validation",
+            "indicator_code": null,
+            "elapsed_ns": 449443
+          },
+          {
+            "stage": "source_open",
+            "indicator_code": "PM25",
+            "elapsed_ns": 7617520
+          },
+          {
+            "stage": "source_open",
+            "indicator_code": "AQI",
+            "elapsed_ns": 14478806
+          },
+          {
+            "stage": "source_open",
+            "indicator_code": "NDVI",
+            "elapsed_ns": 17020100
+          },
+          {
+            "stage": "source_open",
+            "indicator_code": "hwmd",
+            "elapsed_ns": 11173009
+          },
+          {
+            "stage": "source_open",
+            "indicator_code": "rkmd",
+            "elapsed_ns": 16058921
+          },
+          {
+            "stage": "source_open",
+            "indicator_code": "xxmd",
+            "elapsed_ns": 9383965
+          },
+          {
+            "stage": "source_open",
+            "indicator_code": "jmdmd",
+            "elapsed_ns": 8949730
+          },
+          {
+            "stage": "source_open",
+            "indicator_code": "xspb",
+            "elapsed_ns": 6639899
+          },
+          {
+            "stage": "source_open",
+            "indicator_code": "xsqs",
+            "elapsed_ns": 6905749
+          },
+          {
+            "stage": "source_open",
+            "indicator_code": "gyfb",
+            "elapsed_ns": 7955788
+          },
+          {
+            "stage": "source_open",
+            "indicator_code": "fmyl",
+            "elapsed_ns": 11358645
+          },
+          {
+            "stage": "source_open",
+            "indicator_code": "fmts",
+            "elapsed_ns": 11214413
+          },
+          {
+            "stage": "grid_validation",
+            "indicator_code": null,
+            "elapsed_ns": 755001
+          },
+          {
+            "stage": "window_geometry_setup",
+            "indicator_code": null,
+            "elapsed_ns": 9499681
+          },
+          {
+            "stage": "raster_read",
+            "indicator_code": "PM25",
+            "elapsed_ns": 222139629
+          },
+          {
+            "stage": "mask_preparation",
+            "indicator_code": "PM25",
+            "elapsed_ns": 3912411
+          },
+          {
+            "stage": "value_validation_and_stats",
+            "indicator_code": "PM25",
+            "elapsed_ns": 2622795
+          },
+          {
+            "stage": "weighted_accumulation",
+            "indicator_code": "PM25",
+            "elapsed_ns": 3816605
+          },
+          {
+            "stage": "raster_read",
+            "indicator_code": "AQI",
+            "elapsed_ns": 56302873
+          },
+          {
+            "stage": "mask_preparation",
+            "indicator_code": "AQI",
+            "elapsed_ns": 3190142
+          },
+          {
+            "stage": "value_validation_and_stats",
+            "indicator_code": "AQI",
+            "elapsed_ns": 2599826
+          },
+          {
+            "stage": "weighted_accumulation",
+            "indicator_code": "AQI",
+            "elapsed_ns": 3985910
+          },
+          {
+            "stage": "raster_read",
+            "indicator_code": "NDVI",
+            "elapsed_ns": 50769596
+          },
+          {
+            "stage": "mask_preparation",
+            "indicator_code": "NDVI",
+            "elapsed_ns": 3616310
+          },
+          {
+            "stage": "value_validation_and_stats",
+            "indicator_code": "NDVI",
+            "elapsed_ns": 2411741
+          },
+          {
+            "stage": "weighted_accumulation",
+            "indicator_code": "NDVI",
+            "elapsed_ns": 3187081
+          },
+          {
+            "stage": "raster_read",
+            "indicator_code": "hwmd",
+            "elapsed_ns": 129214445
+          },
+          {
+            "stage": "mask_preparation",
+            "indicator_code": "hwmd",
+            "elapsed_ns": 2624887
+          },
+          {
+            "stage": "value_validation_and_stats",
+            "indicator_code": "hwmd",
+            "elapsed_ns": 2619858
+          },
+          {
+            "stage": "weighted_accumulation",
+            "indicator_code": "hwmd",
+            "elapsed_ns": 3690983
+          },
+          {
+            "stage": "raster_read",
+            "indicator_code": "rkmd",
+            "elapsed_ns": 221764655
+          },
+          {
+            "stage": "mask_preparation",
+            "indicator_code": "rkmd",
+            "elapsed_ns": 2777893
+          },
+          {
+            "stage": "value_validation_and_stats",
+            "indicator_code": "rkmd",
+            "elapsed_ns": 2739247
+          },
+          {
+            "stage": "weighted_accumulation",
+            "indicator_code": "rkmd",
+            "elapsed_ns": 3069067
+          },
+          {
+            "stage": "raster_read",
+            "indicator_code": "xxmd",
+            "elapsed_ns": 130051384
+          },
+          {
+            "stage": "mask_preparation",
+            "indicator_code": "xxmd",
+            "elapsed_ns": 3561850
+          },
+          {
+            "stage": "value_validation_and_stats",
+            "indicator_code": "xxmd",
+            "elapsed_ns": 3018141
+          },
+          {
+            "stage": "weighted_accumulation",
+            "indicator_code": "xxmd",
+            "elapsed_ns": 4146035
+          },
+          {
+            "stage": "raster_read",
+            "indicator_code": "jmdmd",
+            "elapsed_ns": 40494822
+          },
+          {
+            "stage": "mask_preparation",
+            "indicator_code": "jmdmd",
+            "elapsed_ns": 3829564
+          },
+          {
+            "stage": "value_validation_and_stats",
+            "indicator_code": "jmdmd",
+            "elapsed_ns": 3292517
+          },
+          {
+            "stage": "weighted_accumulation",
+            "indicator_code": "jmdmd",
+            "elapsed_ns": 5352454
+          },
+          {
+            "stage": "raster_read",
+            "indicator_code": "xspb",
+            "elapsed_ns": 42172079
+          },
+          {
+            "stage": "mask_preparation",
+            "indicator_code": "xspb",
+            "elapsed_ns": 3146397
+          },
+          {
+            "stage": "value_validation_and_stats",
+            "indicator_code": "xspb",
+            "elapsed_ns": 2633042
+          },
+          {
+            "stage": "weighted_accumulation",
+            "indicator_code": "xspb",
+            "elapsed_ns": 4013838
+          },
+          {
+            "stage": "raster_read",
+            "indicator_code": "xsqs",
+            "elapsed_ns": 53966435
+          },
+          {
+            "stage": "mask_preparation",
+            "indicator_code": "xsqs",
+            "elapsed_ns": 4666922
+          },
+          {
+            "stage": "value_validation_and_stats",
+            "indicator_code": "xsqs",
+            "elapsed_ns": 5278988
+          },
+          {
+            "stage": "weighted_accumulation",
+            "indicator_code": "xsqs",
+            "elapsed_ns": 5422398
+          },
+          {
+            "stage": "raster_read",
+            "indicator_code": "gyfb",
+            "elapsed_ns": 105677497
+          },
+          {
+            "stage": "mask_preparation",
+            "indicator_code": "gyfb",
+            "elapsed_ns": 4981793
+          },
+          {
+            "stage": "value_validation_and_stats",
+            "indicator_code": "gyfb",
+            "elapsed_ns": 2744209
+          },
+          {
+            "stage": "weighted_accumulation",
+            "indicator_code": "gyfb",
+            "elapsed_ns": 4535625
+          },
+          {
+            "stage": "raster_read",
+            "indicator_code": "fmyl",
+            "elapsed_ns": 30604208
+          },
+          {
+            "stage": "mask_preparation",
+            "indicator_code": "fmyl",
+            "elapsed_ns": 6616709
+          },
+          {
+            "stage": "value_validation_and_stats",
+            "indicator_code": "fmyl",
+            "elapsed_ns": 5586656
+          },
+          {
+            "stage": "weighted_accumulation",
+            "indicator_code": "fmyl",
+            "elapsed_ns": 6981080
+          },
+          {
+            "stage": "raster_read",
+            "indicator_code": "fmts",
+            "elapsed_ns": 26082515
+          },
+          {
+            "stage": "mask_preparation",
+            "indicator_code": "fmts",
+            "elapsed_ns": 3169538
+          },
+          {
+            "stage": "value_validation_and_stats",
+            "indicator_code": "fmts",
+            "elapsed_ns": 1812191
+          },
+          {
+            "stage": "weighted_accumulation",
+            "indicator_code": "fmts",
+            "elapsed_ns": 4823128
+          },
+          {
+            "stage": "result_finalization",
+            "indicator_code": null,
+            "elapsed_ns": 3616949
+          }
+        ]
+      },
+      {
+        "family": "pipeline_stage_timing",
+        "aoi": "large",
+        "indicator_count": 12,
+        "indicator_codes": [
+          "PM25",
+          "AQI",
+          "NDVI",
+          "hwmd",
+          "rkmd",
+          "xxmd",
+          "jmdmd",
+          "xspb",
+          "xsqs",
+          "gyfb",
+          "fmyl",
+          "fmts"
+        ],
+        "sample_index": 1,
+        "rows": 1024,
+        "cols": 1024,
+        "window_cells": 1048576,
+        "valid_cells": 723902,
+        "output_statistics": {
+          "minimum": 0.163761241734998,
+          "maximum": 0.3998586946011832,
+          "mean": 0.2964859349289192
+        },
+        "pipeline_elapsed_ns": 1521499158,
+        "attributed_ns": 1498443124,
+        "unattributed_ns": 23056034,
+        "stage_events": [
+          {
+            "stage": "input_validation",
+            "indicator_code": null,
+            "elapsed_ns": 470797
+          },
+          {
+            "stage": "source_open",
+            "indicator_code": "PM25",
+            "elapsed_ns": 4801404
+          },
+          {
+            "stage": "source_open",
+            "indicator_code": "AQI",
+            "elapsed_ns": 6103909
+          },
+          {
+            "stage": "source_open",
+            "indicator_code": "NDVI",
+            "elapsed_ns": 14489509
+          },
+          {
+            "stage": "source_open",
+            "indicator_code": "hwmd",
+            "elapsed_ns": 9080516
+          },
+          {
+            "stage": "source_open",
+            "indicator_code": "rkmd",
+            "elapsed_ns": 18403893
+          },
+          {
+            "stage": "source_open",
+            "indicator_code": "xxmd",
+            "elapsed_ns": 15000515
+          },
+          {
+            "stage": "source_open",
+            "indicator_code": "jmdmd",
+            "elapsed_ns": 24561104
+          },
+          {
+            "stage": "source_open",
+            "indicator_code": "xspb",
+            "elapsed_ns": 14031571
+          },
+          {
+            "stage": "source_open",
+            "indicator_code": "xsqs",
+            "elapsed_ns": 19697452
+          },
+          {
+            "stage": "source_open",
+            "indicator_code": "gyfb",
+            "elapsed_ns": 17452042
+          },
+          {
+            "stage": "source_open",
+            "indicator_code": "fmyl",
+            "elapsed_ns": 19702006
+          },
+          {
+            "stage": "source_open",
+            "indicator_code": "fmts",
+            "elapsed_ns": 27266627
+          },
+          {
+            "stage": "grid_validation",
+            "indicator_code": null,
+            "elapsed_ns": 352066
+          },
+          {
+            "stage": "window_geometry_setup",
+            "indicator_code": null,
+            "elapsed_ns": 5799021
+          },
+          {
+            "stage": "raster_read",
+            "indicator_code": "PM25",
+            "elapsed_ns": 145629015
+          },
+          {
+            "stage": "mask_preparation",
+            "indicator_code": "PM25",
+            "elapsed_ns": 2961994
+          },
+          {
+            "stage": "value_validation_and_stats",
+            "indicator_code": "PM25",
+            "elapsed_ns": 2639965
+          },
+          {
+            "stage": "weighted_accumulation",
+            "indicator_code": "PM25",
+            "elapsed_ns": 3312421
+          },
+          {
+            "stage": "raster_read",
+            "indicator_code": "AQI",
+            "elapsed_ns": 187839208
+          },
+          {
+            "stage": "mask_preparation",
+            "indicator_code": "AQI",
+            "elapsed_ns": 2327163
+          },
+          {
+            "stage": "value_validation_and_stats",
+            "indicator_code": "AQI",
+            "elapsed_ns": 1817932
+          },
+          {
+            "stage": "weighted_accumulation",
+            "indicator_code": "AQI",
+            "elapsed_ns": 2713930
+          },
+          {
+            "stage": "raster_read",
+            "indicator_code": "NDVI",
+            "elapsed_ns": 278175838
+          },
+          {
+            "stage": "mask_preparation",
+            "indicator_code": "NDVI",
+            "elapsed_ns": 2921247
+          },
+          {
+            "stage": "value_validation_and_stats",
+            "indicator_code": "NDVI",
+            "elapsed_ns": 2323906
+          },
+          {
+            "stage": "weighted_accumulation",
+            "indicator_code": "NDVI",
+            "elapsed_ns": 3582437
+          },
+          {
+            "stage": "raster_read",
+            "indicator_code": "hwmd",
+            "elapsed_ns": 74584642
+          },
+          {
+            "stage": "mask_preparation",
+            "indicator_code": "hwmd",
+            "elapsed_ns": 4088827
+          },
+          {
+            "stage": "value_validation_and_stats",
+            "indicator_code": "hwmd",
+            "elapsed_ns": 3882118
+          },
+          {
+            "stage": "weighted_accumulation",
+            "indicator_code": "hwmd",
+            "elapsed_ns": 4421621
+          },
+          {
+            "stage": "raster_read",
+            "indicator_code": "rkmd",
+            "elapsed_ns": 90039558
+          },
+          {
+            "stage": "mask_preparation",
+            "indicator_code": "rkmd",
+            "elapsed_ns": 5439661
+          },
+          {
+            "stage": "value_validation_and_stats",
+            "indicator_code": "rkmd",
+            "elapsed_ns": 3145298
+          },
+          {
+            "stage": "weighted_accumulation",
+            "indicator_code": "rkmd",
+            "elapsed_ns": 3885060
+          },
+          {
+            "stage": "raster_read",
+            "indicator_code": "xxmd",
+            "elapsed_ns": 67357242
+          },
+          {
+            "stage": "mask_preparation",
+            "indicator_code": "xxmd",
+            "elapsed_ns": 2601489
+          },
+          {
+            "stage": "value_validation_and_stats",
+            "indicator_code": "xxmd",
+            "elapsed_ns": 1927078
+          },
+          {
+            "stage": "weighted_accumulation",
+            "indicator_code": "xxmd",
+            "elapsed_ns": 2802467
+          },
+          {
+            "stage": "raster_read",
+            "indicator_code": "jmdmd",
+            "elapsed_ns": 49963216
+          },
+          {
+            "stage": "mask_preparation",
+            "indicator_code": "jmdmd",
+            "elapsed_ns": 4404178
+          },
+          {
+            "stage": "value_validation_and_stats",
+            "indicator_code": "jmdmd",
+            "elapsed_ns": 2751262
+          },
+          {
+            "stage": "weighted_accumulation",
+            "indicator_code": "jmdmd",
+            "elapsed_ns": 4755882
+          },
+          {
+            "stage": "raster_read",
+            "indicator_code": "xspb",
+            "elapsed_ns": 35697233
+          },
+          {
+            "stage": "mask_preparation",
+            "indicator_code": "xspb",
+            "elapsed_ns": 5374506
+          },
+          {
+            "stage": "value_validation_and_stats",
+            "indicator_code": "xspb",
+            "elapsed_ns": 4833082
+          },
+          {
+            "stage": "weighted_accumulation",
+            "indicator_code": "xspb",
+            "elapsed_ns": 10107864
+          },
+          {
+            "stage": "raster_read",
+            "indicator_code": "xsqs",
+            "elapsed_ns": 41569342
+          },
+          {
+            "stage": "mask_preparation",
+            "indicator_code": "xsqs",
+            "elapsed_ns": 3462787
+          },
+          {
+            "stage": "value_validation_and_stats",
+            "indicator_code": "xsqs",
+            "elapsed_ns": 3094500
+          },
+          {
+            "stage": "weighted_accumulation",
+            "indicator_code": "xsqs",
+            "elapsed_ns": 4411307
+          },
+          {
+            "stage": "raster_read",
+            "indicator_code": "gyfb",
+            "elapsed_ns": 159695921
+          },
+          {
+            "stage": "mask_preparation",
+            "indicator_code": "gyfb",
+            "elapsed_ns": 2553944
+          },
+          {
+            "stage": "value_validation_and_stats",
+            "indicator_code": "gyfb",
+            "elapsed_ns": 2025173
+          },
+          {
+            "stage": "weighted_accumulation",
+            "indicator_code": "gyfb",
+            "elapsed_ns": 4703605
+          },
+          {
+            "stage": "raster_read",
+            "indicator_code": "fmyl",
+            "elapsed_ns": 17711474
+          },
+          {
+            "stage": "mask_preparation",
+            "indicator_code": "fmyl",
+            "elapsed_ns": 3242064
+          },
+          {
+            "stage": "value_validation_and_stats",
+            "indicator_code": "fmyl",
+            "elapsed_ns": 3141094
+          },
+          {
+            "stage": "weighted_accumulation",
+            "indicator_code": "fmyl",
+            "elapsed_ns": 5454239
+          },
+          {
+            "stage": "raster_read",
+            "indicator_code": "fmts",
+            "elapsed_ns": 19476055
+          },
+          {
+            "stage": "mask_preparation",
+            "indicator_code": "fmts",
+            "elapsed_ns": 2546372
+          },
+          {
+            "stage": "value_validation_and_stats",
+            "indicator_code": "fmts",
+            "elapsed_ns": 2304610
+          },
+          {
+            "stage": "weighted_accumulation",
+            "indicator_code": "fmts",
+            "elapsed_ns": 4261391
+          },
+          {
+            "stage": "result_finalization",
+            "indicator_code": null,
+            "elapsed_ns": 3269474
+          }
+        ]
+      },
+      {
+        "family": "pipeline_stage_timing",
+        "aoi": "large",
+        "indicator_count": 12,
+        "indicator_codes": [
+          "PM25",
+          "AQI",
+          "NDVI",
+          "hwmd",
+          "rkmd",
+          "xxmd",
+          "jmdmd",
+          "xspb",
+          "xsqs",
+          "gyfb",
+          "fmyl",
+          "fmts"
+        ],
+        "sample_index": 2,
+        "rows": 1024,
+        "cols": 1024,
+        "window_cells": 1048576,
+        "valid_cells": 723902,
+        "output_statistics": {
+          "minimum": 0.163761241734998,
+          "maximum": 0.3998586946011832,
+          "mean": 0.2964859349289192
+        },
+        "pipeline_elapsed_ns": 2316266178,
+        "attributed_ns": 2297459078,
+        "unattributed_ns": 18807100,
+        "stage_events": [
+          {
+            "stage": "input_validation",
+            "indicator_code": null,
+            "elapsed_ns": 1373730
+          },
+          {
+            "stage": "source_open",
+            "indicator_code": "PM25",
+            "elapsed_ns": 27439833
+          },
+          {
+            "stage": "source_open",
+            "indicator_code": "AQI",
+            "elapsed_ns": 34144884
+          },
+          {
+            "stage": "source_open",
+            "indicator_code": "NDVI",
+            "elapsed_ns": 45125125
+          },
+          {
+            "stage": "source_open",
+            "indicator_code": "hwmd",
+            "elapsed_ns": 30747471
+          },
+          {
+            "stage": "source_open",
+            "indicator_code": "rkmd",
+            "elapsed_ns": 28276387
+          },
+          {
+            "stage": "source_open",
+            "indicator_code": "xxmd",
+            "elapsed_ns": 15395847
+          },
+          {
+            "stage": "source_open",
+            "indicator_code": "jmdmd",
+            "elapsed_ns": 13722124
+          },
+          {
+            "stage": "source_open",
+            "indicator_code": "xspb",
+            "elapsed_ns": 21641851
+          },
+          {
+            "stage": "source_open",
+            "indicator_code": "xsqs",
+            "elapsed_ns": 21543065
+          },
+          {
+            "stage": "source_open",
+            "indicator_code": "gyfb",
+            "elapsed_ns": 23902681
+          },
+          {
+            "stage": "source_open",
+            "indicator_code": "fmyl",
+            "elapsed_ns": 19063346
+          },
+          {
+            "stage": "source_open",
+            "indicator_code": "fmts",
+            "elapsed_ns": 18095942
+          },
+          {
+            "stage": "grid_validation",
+            "indicator_code": null,
+            "elapsed_ns": 829023
+          },
+          {
+            "stage": "window_geometry_setup",
+            "indicator_code": null,
+            "elapsed_ns": 8991043
+          },
+          {
+            "stage": "raster_read",
+            "indicator_code": "PM25",
+            "elapsed_ns": 164608040
+          },
+          {
+            "stage": "mask_preparation",
+            "indicator_code": "PM25",
+            "elapsed_ns": 2940617
+          },
+          {
+            "stage": "value_validation_and_stats",
+            "indicator_code": "PM25",
+            "elapsed_ns": 2433670
+          },
+          {
+            "stage": "weighted_accumulation",
+            "indicator_code": "PM25",
+            "elapsed_ns": 2981250
+          },
+          {
+            "stage": "raster_read",
+            "indicator_code": "AQI",
+            "elapsed_ns": 260894856
+          },
+          {
+            "stage": "mask_preparation",
+            "indicator_code": "AQI",
+            "elapsed_ns": 3733011
+          },
+          {
+            "stage": "value_validation_and_stats",
+            "indicator_code": "AQI",
+            "elapsed_ns": 2071642
+          },
+          {
+            "stage": "weighted_accumulation",
+            "indicator_code": "AQI",
+            "elapsed_ns": 3851702
+          },
+          {
+            "stage": "raster_read",
+            "indicator_code": "NDVI",
+            "elapsed_ns": 287821398
+          },
+          {
+            "stage": "mask_preparation",
+            "indicator_code": "NDVI",
+            "elapsed_ns": 3233657
+          },
+          {
+            "stage": "value_validation_and_stats",
+            "indicator_code": "NDVI",
+            "elapsed_ns": 2070028
+          },
+          {
+            "stage": "weighted_accumulation",
+            "indicator_code": "NDVI",
+            "elapsed_ns": 4022773
+          },
+          {
+            "stage": "raster_read",
+            "indicator_code": "hwmd",
+            "elapsed_ns": 256887886
+          },
+          {
+            "stage": "mask_preparation",
+            "indicator_code": "hwmd",
+            "elapsed_ns": 4812207
+          },
+          {
+            "stage": "value_validation_and_stats",
+            "indicator_code": "hwmd",
+            "elapsed_ns": 4710396
+          },
+          {
+            "stage": "weighted_accumulation",
+            "indicator_code": "hwmd",
+            "elapsed_ns": 4532080
+          },
+          {
+            "stage": "raster_read",
+            "indicator_code": "rkmd",
+            "elapsed_ns": 283208764
+          },
+          {
+            "stage": "mask_preparation",
+            "indicator_code": "rkmd",
+            "elapsed_ns": 2965482
+          },
+          {
+            "stage": "value_validation_and_stats",
+            "indicator_code": "rkmd",
+            "elapsed_ns": 2604502
+          },
+          {
+            "stage": "weighted_accumulation",
+            "indicator_code": "rkmd",
+            "elapsed_ns": 4833214
+          },
+          {
+            "stage": "raster_read",
+            "indicator_code": "xxmd",
+            "elapsed_ns": 154838110
+          },
+          {
+            "stage": "mask_preparation",
+            "indicator_code": "xxmd",
+            "elapsed_ns": 2394488
+          },
+          {
+            "stage": "value_validation_and_stats",
+            "indicator_code": "xxmd",
+            "elapsed_ns": 2270092
+          },
+          {
+            "stage": "weighted_accumulation",
+            "indicator_code": "xxmd",
+            "elapsed_ns": 3131433
+          },
+          {
+            "stage": "raster_read",
+            "indicator_code": "jmdmd",
+            "elapsed_ns": 103550896
+          },
+          {
+            "stage": "mask_preparation",
+            "indicator_code": "jmdmd",
+            "elapsed_ns": 4753571
+          },
+          {
+            "stage": "value_validation_and_stats",
+            "indicator_code": "jmdmd",
+            "elapsed_ns": 3132041
+          },
+          {
+            "stage": "weighted_accumulation",
+            "indicator_code": "jmdmd",
+            "elapsed_ns": 3687538
+          },
+          {
+            "stage": "raster_read",
+            "indicator_code": "xspb",
+            "elapsed_ns": 50340157
+          },
+          {
+            "stage": "mask_preparation",
+            "indicator_code": "xspb",
+            "elapsed_ns": 5100835
+          },
+          {
+            "stage": "value_validation_and_stats",
+            "indicator_code": "xspb",
+            "elapsed_ns": 2702565
+          },
+          {
+            "stage": "weighted_accumulation",
+            "indicator_code": "xspb",
+            "elapsed_ns": 3019211
+          },
+          {
+            "stage": "raster_read",
+            "indicator_code": "xsqs",
+            "elapsed_ns": 41217967
+          },
+          {
+            "stage": "mask_preparation",
+            "indicator_code": "xsqs",
+            "elapsed_ns": 2387336
+          },
+          {
+            "stage": "value_validation_and_stats",
+            "indicator_code": "xsqs",
+            "elapsed_ns": 1755842
+          },
+          {
+            "stage": "weighted_accumulation",
+            "indicator_code": "xsqs",
+            "elapsed_ns": 2956690
+          },
+          {
+            "stage": "raster_read",
+            "indicator_code": "gyfb",
+            "elapsed_ns": 193068796
+          },
+          {
+            "stage": "mask_preparation",
+            "indicator_code": "gyfb",
+            "elapsed_ns": 2657557
+          },
+          {
+            "stage": "value_validation_and_stats",
+            "indicator_code": "gyfb",
+            "elapsed_ns": 2251042
+          },
+          {
+            "stage": "weighted_accumulation",
+            "indicator_code": "gyfb",
+            "elapsed_ns": 3412365
+          },
+          {
+            "stage": "raster_read",
+            "indicator_code": "fmyl",
+            "elapsed_ns": 36193822
+          },
+          {
+            "stage": "mask_preparation",
+            "indicator_code": "fmyl",
+            "elapsed_ns": 2856531
+          },
+          {
+            "stage": "value_validation_and_stats",
+            "indicator_code": "fmyl",
+            "elapsed_ns": 1882000
+          },
+          {
+            "stage": "weighted_accumulation",
+            "indicator_code": "fmyl",
+            "elapsed_ns": 5355002
+          },
+          {
+            "stage": "raster_read",
+            "indicator_code": "fmts",
+            "elapsed_ns": 34636721
+          },
+          {
+            "stage": "mask_preparation",
+            "indicator_code": "fmts",
+            "elapsed_ns": 3268969
+          },
+          {
+            "stage": "value_validation_and_stats",
+            "indicator_code": "fmts",
+            "elapsed_ns": 2869004
+          },
+          {
+            "stage": "weighted_accumulation",
+            "indicator_code": "fmts",
+            "elapsed_ns": 3443369
+          },
+          {
+            "stage": "result_finalization",
+            "indicator_code": null,
+            "elapsed_ns": 2815601
+          }
+        ]
+      },
+      {
+        "family": "pipeline_stage_timing",
+        "aoi": "large",
+        "indicator_count": 12,
+        "indicator_codes": [
+          "PM25",
+          "AQI",
+          "NDVI",
+          "hwmd",
+          "rkmd",
+          "xxmd",
+          "jmdmd",
+          "xspb",
+          "xsqs",
+          "gyfb",
+          "fmyl",
+          "fmts"
+        ],
+        "sample_index": 3,
+        "rows": 1024,
+        "cols": 1024,
+        "window_cells": 1048576,
+        "valid_cells": 723902,
+        "output_statistics": {
+          "minimum": 0.163761241734998,
+          "maximum": 0.3998586946011832,
+          "mean": 0.2964859349289192
+        },
+        "pipeline_elapsed_ns": 1754444117,
+        "attributed_ns": 1738479847,
+        "unattributed_ns": 15964270,
+        "stage_events": [
+          {
+            "stage": "input_validation",
+            "indicator_code": null,
+            "elapsed_ns": 1000404
+          },
+          {
+            "stage": "source_open",
+            "indicator_code": "PM25",
+            "elapsed_ns": 19443511
+          },
+          {
+            "stage": "source_open",
+            "indicator_code": "AQI",
+            "elapsed_ns": 25876583
+          },
+          {
+            "stage": "source_open",
+            "indicator_code": "NDVI",
+            "elapsed_ns": 32146634
+          },
+          {
+            "stage": "source_open",
+            "indicator_code": "hwmd",
+            "elapsed_ns": 17299524
+          },
+          {
+            "stage": "source_open",
+            "indicator_code": "rkmd",
+            "elapsed_ns": 17487222
+          },
+          {
+            "stage": "source_open",
+            "indicator_code": "xxmd",
+            "elapsed_ns": 11841260
+          },
+          {
+            "stage": "source_open",
+            "indicator_code": "jmdmd",
+            "elapsed_ns": 10841967
+          },
+          {
+            "stage": "source_open",
+            "indicator_code": "xspb",
+            "elapsed_ns": 10804050
+          },
+          {
+            "stage": "source_open",
+            "indicator_code": "xsqs",
+            "elapsed_ns": 11165437
+          },
+          {
+            "stage": "source_open",
+            "indicator_code": "gyfb",
+            "elapsed_ns": 7613811
+          },
+          {
+            "stage": "source_open",
+            "indicator_code": "fmyl",
+            "elapsed_ns": 9401000
+          },
+          {
+            "stage": "source_open",
+            "indicator_code": "fmts",
+            "elapsed_ns": 20052124
+          },
+          {
+            "stage": "grid_validation",
+            "indicator_code": null,
+            "elapsed_ns": 292776
+          },
+          {
+            "stage": "window_geometry_setup",
+            "indicator_code": null,
+            "elapsed_ns": 6481345
+          },
+          {
+            "stage": "raster_read",
+            "indicator_code": "PM25",
+            "elapsed_ns": 76394654
+          },
+          {
+            "stage": "mask_preparation",
+            "indicator_code": "PM25",
+            "elapsed_ns": 2847001
+          },
+          {
+            "stage": "value_validation_and_stats",
+            "indicator_code": "PM25",
+            "elapsed_ns": 2293662
+          },
+          {
+            "stage": "weighted_accumulation",
+            "indicator_code": "PM25",
+            "elapsed_ns": 2936240
+          },
+          {
+            "stage": "raster_read",
+            "indicator_code": "AQI",
+            "elapsed_ns": 284564733
+          },
+          {
+            "stage": "mask_preparation",
+            "indicator_code": "AQI",
+            "elapsed_ns": 3030363
+          },
+          {
+            "stage": "value_validation_and_stats",
+            "indicator_code": "AQI",
+            "elapsed_ns": 3839797
+          },
+          {
+            "stage": "weighted_accumulation",
+            "indicator_code": "AQI",
+            "elapsed_ns": 4669903
+          },
+          {
+            "stage": "raster_read",
+            "indicator_code": "NDVI",
+            "elapsed_ns": 283196028
+          },
+          {
+            "stage": "mask_preparation",
+            "indicator_code": "NDVI",
+            "elapsed_ns": 4600421
+          },
+          {
+            "stage": "value_validation_and_stats",
+            "indicator_code": "NDVI",
+            "elapsed_ns": 3590859
+          },
+          {
+            "stage": "weighted_accumulation",
+            "indicator_code": "NDVI",
+            "elapsed_ns": 5297081
+          },
+          {
+            "stage": "raster_read",
+            "indicator_code": "hwmd",
+            "elapsed_ns": 77946462
+          },
+          {
+            "stage": "mask_preparation",
+            "indicator_code": "hwmd",
+            "elapsed_ns": 3530353
+          },
+          {
+            "stage": "value_validation_and_stats",
+            "indicator_code": "hwmd",
+            "elapsed_ns": 3522505
+          },
+          {
+            "stage": "weighted_accumulation",
+            "indicator_code": "hwmd",
+            "elapsed_ns": 3853714
+          },
+          {
+            "stage": "raster_read",
+            "indicator_code": "rkmd",
+            "elapsed_ns": 138901895
+          },
+          {
+            "stage": "mask_preparation",
+            "indicator_code": "rkmd",
+            "elapsed_ns": 3684904
+          },
+          {
+            "stage": "value_validation_and_stats",
+            "indicator_code": "rkmd",
+            "elapsed_ns": 4468727
+          },
+          {
+            "stage": "weighted_accumulation",
+            "indicator_code": "rkmd",
+            "elapsed_ns": 4681163
+          },
+          {
+            "stage": "raster_read",
+            "indicator_code": "xxmd",
+            "elapsed_ns": 47656938
+          },
+          {
+            "stage": "mask_preparation",
+            "indicator_code": "xxmd",
+            "elapsed_ns": 3302048
+          },
+          {
+            "stage": "value_validation_and_stats",
+            "indicator_code": "xxmd",
+            "elapsed_ns": 2184507
+          },
+          {
+            "stage": "weighted_accumulation",
+            "indicator_code": "xxmd",
+            "elapsed_ns": 4677062
+          },
+          {
+            "stage": "raster_read",
+            "indicator_code": "jmdmd",
+            "elapsed_ns": 84723138
+          },
+          {
+            "stage": "mask_preparation",
+            "indicator_code": "jmdmd",
+            "elapsed_ns": 2243807
+          },
+          {
+            "stage": "value_validation_and_stats",
+            "indicator_code": "jmdmd",
+            "elapsed_ns": 1913766
+          },
+          {
+            "stage": "weighted_accumulation",
+            "indicator_code": "jmdmd",
+            "elapsed_ns": 3367977
+          },
+          {
+            "stage": "raster_read",
+            "indicator_code": "xspb",
+            "elapsed_ns": 73192650
+          },
+          {
+            "stage": "mask_preparation",
+            "indicator_code": "xspb",
+            "elapsed_ns": 3262559
+          },
+          {
+            "stage": "value_validation_and_stats",
+            "indicator_code": "xspb",
+            "elapsed_ns": 2516861
+          },
+          {
+            "stage": "weighted_accumulation",
+            "indicator_code": "xspb",
+            "elapsed_ns": 3880650
+          },
+          {
+            "stage": "raster_read",
+            "indicator_code": "xsqs",
+            "elapsed_ns": 168796413
+          },
+          {
+            "stage": "mask_preparation",
+            "indicator_code": "xsqs",
+            "elapsed_ns": 3536574
+          },
+          {
+            "stage": "value_validation_and_stats",
+            "indicator_code": "xsqs",
+            "elapsed_ns": 3584662
+          },
+          {
+            "stage": "weighted_accumulation",
+            "indicator_code": "xsqs",
+            "elapsed_ns": 4894192
+          },
+          {
+            "stage": "raster_read",
+            "indicator_code": "gyfb",
+            "elapsed_ns": 126122874
+          },
+          {
+            "stage": "mask_preparation",
+            "indicator_code": "gyfb",
+            "elapsed_ns": 2264387
+          },
+          {
+            "stage": "value_validation_and_stats",
+            "indicator_code": "gyfb",
+            "elapsed_ns": 1777385
+          },
+          {
+            "stage": "weighted_accumulation",
+            "indicator_code": "gyfb",
+            "elapsed_ns": 2871417
+          },
+          {
+            "stage": "raster_read",
+            "indicator_code": "fmyl",
+            "elapsed_ns": 12944315
+          },
+          {
+            "stage": "mask_preparation",
+            "indicator_code": "fmyl",
+            "elapsed_ns": 3343054
+          },
+          {
+            "stage": "value_validation_and_stats",
+            "indicator_code": "fmyl",
+            "elapsed_ns": 1682704
+          },
+          {
+            "stage": "weighted_accumulation",
+            "indicator_code": "fmyl",
+            "elapsed_ns": 3585126
+          },
+          {
+            "stage": "raster_read",
+            "indicator_code": "fmts",
+            "elapsed_ns": 38571309
+          },
+          {
+            "stage": "mask_preparation",
+            "indicator_code": "fmts",
+            "elapsed_ns": 4447239
+          },
+          {
+            "stage": "value_validation_and_stats",
+            "indicator_code": "fmts",
+            "elapsed_ns": 2287246
+          },
+          {
+            "stage": "weighted_accumulation",
+            "indicator_code": "fmts",
+            "elapsed_ns": 2763249
+          },
+          {
+            "stage": "result_finalization",
+            "indicator_code": null,
+            "elapsed_ns": 2487625
+          }
+        ]
+      },
+      {
+        "family": "pipeline_stage_timing",
+        "aoi": "large",
+        "indicator_count": 12,
+        "indicator_codes": [
+          "PM25",
+          "AQI",
+          "NDVI",
+          "hwmd",
+          "rkmd",
+          "xxmd",
+          "jmdmd",
+          "xspb",
+          "xsqs",
+          "gyfb",
+          "fmyl",
+          "fmts"
+        ],
+        "sample_index": 4,
+        "rows": 1024,
+        "cols": 1024,
+        "window_cells": 1048576,
+        "valid_cells": 723902,
+        "output_statistics": {
+          "minimum": 0.163761241734998,
+          "maximum": 0.3998586946011832,
+          "mean": 0.2964859349289192
+        },
+        "pipeline_elapsed_ns": 1107063521,
+        "attributed_ns": 1099949308,
+        "unattributed_ns": 7114213,
+        "stage_events": [
+          {
+            "stage": "input_validation",
+            "indicator_code": null,
+            "elapsed_ns": 1345103
+          },
+          {
+            "stage": "source_open",
+            "indicator_code": "PM25",
+            "elapsed_ns": 50825219
+          },
+          {
+            "stage": "source_open",
+            "indicator_code": "AQI",
+            "elapsed_ns": 35265427
+          },
+          {
+            "stage": "source_open",
+            "indicator_code": "NDVI",
+            "elapsed_ns": 33765087
+          },
+          {
+            "stage": "source_open",
+            "indicator_code": "hwmd",
+            "elapsed_ns": 18571051
+          },
+          {
+            "stage": "source_open",
+            "indicator_code": "rkmd",
+            "elapsed_ns": 27203472
+          },
+          {
+            "stage": "source_open",
+            "indicator_code": "xxmd",
+            "elapsed_ns": 17579541
+          },
+          {
+            "stage": "source_open",
+            "indicator_code": "jmdmd",
+            "elapsed_ns": 18849605
+          },
+          {
+            "stage": "source_open",
+            "indicator_code": "xspb",
+            "elapsed_ns": 9553575
+          },
+          {
+            "stage": "source_open",
+            "indicator_code": "xsqs",
+            "elapsed_ns": 5484286
+          },
+          {
+            "stage": "source_open",
+            "indicator_code": "gyfb",
+            "elapsed_ns": 4790067
+          },
+          {
+            "stage": "source_open",
+            "indicator_code": "fmyl",
+            "elapsed_ns": 3378145
+          },
+          {
+            "stage": "source_open",
+            "indicator_code": "fmts",
+            "elapsed_ns": 3276624
+          },
+          {
+            "stage": "grid_validation",
+            "indicator_code": null,
+            "elapsed_ns": 319616
+          },
+          {
+            "stage": "window_geometry_setup",
+            "indicator_code": null,
+            "elapsed_ns": 4115390
+          },
+          {
+            "stage": "raster_read",
+            "indicator_code": "PM25",
+            "elapsed_ns": 84950293
+          },
+          {
+            "stage": "mask_preparation",
+            "indicator_code": "PM25",
+            "elapsed_ns": 2237146
+          },
+          {
+            "stage": "value_validation_and_stats",
+            "indicator_code": "PM25",
+            "elapsed_ns": 2002603
+          },
+          {
+            "stage": "weighted_accumulation",
+            "indicator_code": "PM25",
+            "elapsed_ns": 4949676
+          },
+          {
+            "stage": "raster_read",
+            "indicator_code": "AQI",
+            "elapsed_ns": 120884926
+          },
+          {
+            "stage": "mask_preparation",
+            "indicator_code": "AQI",
+            "elapsed_ns": 3119361
+          },
+          {
+            "stage": "value_validation_and_stats",
+            "indicator_code": "AQI",
+            "elapsed_ns": 1693748
+          },
+          {
+            "stage": "weighted_accumulation",
+            "indicator_code": "AQI",
+            "elapsed_ns": 5550004
+          },
+          {
+            "stage": "raster_read",
+            "indicator_code": "NDVI",
+            "elapsed_ns": 122581389
+          },
+          {
+            "stage": "mask_preparation",
+            "indicator_code": "NDVI",
+            "elapsed_ns": 2695918
+          },
+          {
+            "stage": "value_validation_and_stats",
+            "indicator_code": "NDVI",
+            "elapsed_ns": 1966931
+          },
+          {
+            "stage": "weighted_accumulation",
+            "indicator_code": "NDVI",
+            "elapsed_ns": 2844375
+          },
+          {
+            "stage": "raster_read",
+            "indicator_code": "hwmd",
+            "elapsed_ns": 124265296
+          },
+          {
+            "stage": "mask_preparation",
+            "indicator_code": "hwmd",
+            "elapsed_ns": 3955358
+          },
+          {
+            "stage": "value_validation_and_stats",
+            "indicator_code": "hwmd",
+            "elapsed_ns": 2957296
+          },
+          {
+            "stage": "weighted_accumulation",
+            "indicator_code": "hwmd",
+            "elapsed_ns": 5493110
+          },
+          {
+            "stage": "raster_read",
+            "indicator_code": "rkmd",
+            "elapsed_ns": 163320370
+          },
+          {
+            "stage": "mask_preparation",
+            "indicator_code": "rkmd",
+            "elapsed_ns": 3036661
+          },
+          {
+            "stage": "value_validation_and_stats",
+            "indicator_code": "rkmd",
+            "elapsed_ns": 1882524
+          },
+          {
+            "stage": "weighted_accumulation",
+            "indicator_code": "rkmd",
+            "elapsed_ns": 3736647
+          },
+          {
+            "stage": "raster_read",
+            "indicator_code": "xxmd",
+            "elapsed_ns": 30323013
+          },
+          {
+            "stage": "mask_preparation",
+            "indicator_code": "xxmd",
+            "elapsed_ns": 2910549
+          },
+          {
+            "stage": "value_validation_and_stats",
+            "indicator_code": "xxmd",
+            "elapsed_ns": 2826929
+          },
+          {
+            "stage": "weighted_accumulation",
+            "indicator_code": "xxmd",
+            "elapsed_ns": 3603688
+          },
+          {
+            "stage": "raster_read",
+            "indicator_code": "jmdmd",
+            "elapsed_ns": 25560413
+          },
+          {
+            "stage": "mask_preparation",
+            "indicator_code": "jmdmd",
+            "elapsed_ns": 2185927
+          },
+          {
+            "stage": "value_validation_and_stats",
+            "indicator_code": "jmdmd",
+            "elapsed_ns": 1607816
+          },
+          {
+            "stage": "weighted_accumulation",
+            "indicator_code": "jmdmd",
+            "elapsed_ns": 3070814
+          },
+          {
+            "stage": "raster_read",
+            "indicator_code": "xspb",
+            "elapsed_ns": 12304758
+          },
+          {
+            "stage": "mask_preparation",
+            "indicator_code": "xspb",
+            "elapsed_ns": 2465105
+          },
+          {
+            "stage": "value_validation_and_stats",
+            "indicator_code": "xspb",
+            "elapsed_ns": 1661225
+          },
+          {
+            "stage": "weighted_accumulation",
+            "indicator_code": "xspb",
+            "elapsed_ns": 3952385
+          },
+          {
+            "stage": "raster_read",
+            "indicator_code": "xsqs",
+            "elapsed_ns": 12344769
+          },
+          {
+            "stage": "mask_preparation",
+            "indicator_code": "xsqs",
+            "elapsed_ns": 2527167
+          },
+          {
+            "stage": "value_validation_and_stats",
+            "indicator_code": "xsqs",
+            "elapsed_ns": 1644100
+          },
+          {
+            "stage": "weighted_accumulation",
+            "indicator_code": "xsqs",
+            "elapsed_ns": 2815449
+          },
+          {
+            "stage": "raster_read",
+            "indicator_code": "gyfb",
+            "elapsed_ns": 33045203
+          },
+          {
+            "stage": "mask_preparation",
+            "indicator_code": "gyfb",
+            "elapsed_ns": 2890505
+          },
+          {
+            "stage": "value_validation_and_stats",
+            "indicator_code": "gyfb",
+            "elapsed_ns": 1840271
+          },
+          {
+            "stage": "weighted_accumulation",
+            "indicator_code": "gyfb",
+            "elapsed_ns": 3087456
+          },
+          {
+            "stage": "raster_read",
+            "indicator_code": "fmyl",
+            "elapsed_ns": 12804092
+          },
+          {
+            "stage": "mask_preparation",
+            "indicator_code": "fmyl",
+            "elapsed_ns": 2219626
+          },
+          {
+            "stage": "value_validation_and_stats",
+            "indicator_code": "fmyl",
+            "elapsed_ns": 1720270
+          },
+          {
+            "stage": "weighted_accumulation",
+            "indicator_code": "fmyl",
+            "elapsed_ns": 4399722
+          },
+          {
+            "stage": "raster_read",
+            "indicator_code": "fmts",
+            "elapsed_ns": 12567619
+          },
+          {
+            "stage": "mask_preparation",
+            "indicator_code": "fmts",
+            "elapsed_ns": 3693938
+          },
+          {
+            "stage": "value_validation_and_stats",
+            "indicator_code": "fmts",
+            "elapsed_ns": 1592805
+          },
+          {
+            "stage": "weighted_accumulation",
+            "indicator_code": "fmts",
+            "elapsed_ns": 5772369
+          },
+          {
+            "stage": "result_finalization",
+            "indicator_code": null,
+            "elapsed_ns": 4065485
+          }
+        ]
+      }
+    ],
+    "summaries": [
+      {
+        "indicator_count": 3,
+        "rows": 1024,
+        "cols": 1024,
+        "window_cells": 1048576,
+        "valid_cells": {
+          "min": 736372.0,
+          "median": 736372.0,
+          "max": 736372.0
+        },
+        "pipeline_elapsed_ms": {
+          "min": 263.730283,
+          "median": 586.681475,
+          "max": 717.667343
+        },
+        "unattributed_ms": {
+          "min": 2.895966,
+          "median": 3.651984,
+          "max": 4.611557
+        },
+        "unattributed_percent": {
+          "min": 0.5065844289697403,
+          "median": 0.5991599569973205,
+          "max": 1.0980786760843841
+        },
+        "stages": [
+          {
+            "stage": "input_validation",
+            "calls_per_sample": {
+              "min": 1,
+              "median": 1,
+              "max": 1
+            },
+            "elapsed_ms": {
+              "min": 0.419037,
+              "median": 0.715131,
+              "max": 2.113312
+            },
+            "pipeline_share_percent": {
+              "min": 0.05838875129086095,
+              "median": 0.15410865207699873,
+              "max": 0.47184783007506875
+            }
+          },
+          {
+            "stage": "source_open",
+            "calls_per_sample": {
+              "min": 3,
+              "median": 3,
+              "max": 3
+            },
+            "elapsed_ms": {
+              "min": 37.035213,
+              "median": 42.424759,
+              "max": 80.594514
+            },
+            "pipeline_share_percent": {
+              "min": 6.312661056836675,
+              "median": 9.202581092331773,
+              "max": 16.08641924522562
+            }
+          },
+          {
+            "stage": "grid_validation",
+            "calls_per_sample": {
+              "min": 1,
+              "median": 1,
+              "max": 1
+            },
+            "elapsed_ms": {
+              "min": 0.127284,
+              "median": 0.206089,
+              "max": 0.486442
+            },
+            "pipeline_share_percent": {
+              "min": 0.028627088443672746,
+              "median": 0.04826294445678049,
+              "max": 0.06778098582089168
+            }
+          },
+          {
+            "stage": "window_geometry_setup",
+            "calls_per_sample": {
+              "min": 1,
+              "median": 1,
+              "max": 1
+            },
+            "elapsed_ms": {
+              "min": 5.131817,
+              "median": 5.834106,
+              "max": 9.879429
+            },
+            "pipeline_share_percent": {
+              "min": 0.9653077932961834,
+              "median": 1.3026047533577338,
+              "max": 1.9458580719757541
+            }
+          },
+          {
+            "stage": "raster_read",
+            "calls_per_sample": {
+              "min": 3,
+              "median": 3,
+              "max": 3
+            },
+            "elapsed_ms": {
+              "min": 183.966223,
+              "median": 505.057656,
+              "max": 582.499364
+            },
+            "pipeline_share_percent": {
+              "min": 69.75544139540472,
+              "median": 81.16565003014216,
+              "max": 86.08720021371052
+            }
+          },
+          {
+            "stage": "mask_preparation",
+            "calls_per_sample": {
+              "min": 3,
+              "median": 3,
+              "max": 3
+            },
+            "elapsed_ms": {
+              "min": 8.659911,
+              "median": 9.6218,
+              "max": 15.186088
+            },
+            "pipeline_share_percent": {
+              "min": 1.5785932452707403,
+              "median": 1.7324997606864772,
+              "max": 3.3906600966298592
+            }
+          },
+          {
+            "stage": "value_validation_and_stats",
+            "calls_per_sample": {
+              "min": 3,
+              "median": 3,
+              "max": 3
+            },
+            "elapsed_ms": {
+              "min": 5.928532,
+              "median": 7.847331,
+              "max": 9.920419
+            },
+            "pipeline_share_percent": {
+              "min": 1.2335879689038602,
+              "median": 1.287466348292802,
+              "max": 2.24795269339623
+            }
+          },
+          {
+            "stage": "weighted_accumulation",
+            "calls_per_sample": {
+              "min": 3,
+              "median": 3,
+              "max": 3
+            },
+            "elapsed_ms": {
+              "min": 11.358087,
+              "median": 15.230355,
+              "max": 19.172874
+            },
+            "pipeline_share_percent": {
+              "min": 1.9530961157305997,
+              "median": 3.1455828835381108,
+              "max": 4.30670565048459
+            }
+          },
+          {
+            "stage": "result_finalization",
+            "calls_per_sample": {
+              "min": 1,
+              "median": 1,
+              "max": 1
+            },
+            "elapsed_ms": {
+              "min": 2.522573,
+              "median": 3.968786,
+              "max": 4.249328
+            },
+            "pipeline_share_percent": {
+              "min": 0.5252489010327112,
+              "median": 0.6583159415401597,
+              "max": 0.9564972862824404
+            }
+          }
+        ],
+        "per_indicator_stages": [
+          {
+            "stage": "source_open",
+            "indicator_code": "PM25",
+            "sample_count": 5,
+            "elapsed_ms": {
+              "min": 9.229919,
+              "median": 12.637092,
+              "max": 22.30647
+            }
+          },
+          {
+            "stage": "source_open",
+            "indicator_code": "AQI",
+            "sample_count": 5,
+            "elapsed_ms": {
+              "min": 12.816605,
+              "median": 16.959447,
+              "max": 35.000888
+            }
+          },
+          {
+            "stage": "source_open",
+            "indicator_code": "NDVI",
+            "sample_count": 5,
+            "elapsed_ms": {
+              "min": 8.362349,
+              "median": 12.619116,
+              "max": 24.158298
+            }
+          },
+          {
+            "stage": "raster_read",
+            "indicator_code": "PM25",
+            "sample_count": 5,
+            "elapsed_ms": {
+              "min": 58.480727,
+              "median": 93.276835,
+              "max": 127.696868
+            }
+          },
+          {
+            "stage": "raster_read",
+            "indicator_code": "AQI",
+            "sample_count": 5,
+            "elapsed_ms": {
+              "min": 38.261537,
+              "median": 129.511601,
+              "max": 223.065364
+            }
+          },
+          {
+            "stage": "raster_read",
+            "indicator_code": "NDVI",
+            "sample_count": 5,
+            "elapsed_ms": {
+              "min": 64.190336,
+              "median": 204.172419,
+              "max": 325.290895
+            }
+          },
+          {
+            "stage": "mask_preparation",
+            "indicator_code": "PM25",
+            "sample_count": 5,
+            "elapsed_ms": {
+              "min": 2.762854,
+              "median": 3.160295,
+              "max": 5.478021
+            }
+          },
+          {
+            "stage": "mask_preparation",
+            "indicator_code": "AQI",
+            "sample_count": 5,
+            "elapsed_ms": {
+              "min": 2.767425,
+              "median": 3.058011,
+              "max": 6.482549
+            }
+          },
+          {
+            "stage": "mask_preparation",
+            "indicator_code": "NDVI",
+            "sample_count": 5,
+            "elapsed_ms": {
+              "min": 2.482165,
+              "median": 3.353012,
+              "max": 3.897553
+            }
+          },
+          {
+            "stage": "value_validation_and_stats",
+            "indicator_code": "PM25",
+            "sample_count": 5,
+            "elapsed_ms": {
+              "min": 2.067832,
+              "median": 2.997116,
+              "max": 4.519579
+            }
+          },
+          {
+            "stage": "value_validation_and_stats",
+            "indicator_code": "AQI",
+            "sample_count": 5,
+            "elapsed_ms": {
+              "min": 2.097429,
+              "median": 2.298571,
+              "max": 2.503803
+            }
+          },
+          {
+            "stage": "value_validation_and_stats",
+            "indicator_code": "NDVI",
+            "sample_count": 5,
+            "elapsed_ms": {
+              "min": 1.763271,
+              "median": 2.511283,
+              "max": 3.106535
+            }
+          },
+          {
+            "stage": "weighted_accumulation",
+            "indicator_code": "PM25",
+            "sample_count": 5,
+            "elapsed_ms": {
+              "min": 5.157954,
+              "median": 5.591128,
+              "max": 9.180464
+            }
+          },
+          {
+            "stage": "weighted_accumulation",
+            "indicator_code": "AQI",
+            "sample_count": 5,
+            "elapsed_ms": {
+              "min": 3.14123,
+              "median": 3.335772,
+              "max": 4.954335
+            }
+          },
+          {
+            "stage": "weighted_accumulation",
+            "indicator_code": "NDVI",
+            "sample_count": 5,
+            "elapsed_ms": {
+              "min": 2.997221,
+              "median": 5.118066,
+              "max": 5.986887
+            }
+          }
+        ]
+      },
+      {
+        "indicator_count": 6,
+        "rows": 1024,
+        "cols": 1024,
+        "window_cells": 1048576,
+        "valid_cells": {
+          "min": 724106.0,
+          "median": 724106.0,
+          "max": 724106.0
+        },
+        "pipeline_elapsed_ms": {
+          "min": 507.890178,
+          "median": 918.332701,
+          "max": 1562.532922
+        },
+        "unattributed_ms": {
+          "min": 3.707572,
+          "median": 6.400601,
+          "max": 8.74332
+        },
+        "unattributed_percent": {
+          "min": 0.23727960849966653,
+          "median": 0.5336124908395263,
+          "max": 1.26023327035082
+        },
+        "stages": [
+          {
+            "stage": "input_validation",
+            "calls_per_sample": {
+              "min": 1,
+              "median": 1,
+              "max": 1
+            },
+            "elapsed_ms": {
+              "min": 0.470045,
+              "median": 0.743084,
+              "max": 1.141282
+            },
+            "pipeline_share_percent": {
+              "min": 0.05321862024123407,
+              "median": 0.07304050903063149,
+              "max": 0.10326622225011801
+            }
+          },
+          {
+            "stage": "source_open",
+            "calls_per_sample": {
+              "min": 6,
+              "median": 6,
+              "max": 6
+            },
+            "elapsed_ms": {
+              "min": 43.843678,
+              "median": 92.674286,
+              "max": 121.872394
+            },
+            "pipeline_share_percent": {
+              "min": 5.705642055957796,
+              "median": 8.632511495428052,
+              "max": 10.091580741825288
+            }
+          },
+          {
+            "stage": "grid_validation",
+            "calls_per_sample": {
+              "min": 1,
+              "median": 1,
+              "max": 1
+            },
+            "elapsed_ms": {
+              "min": 0.193255,
+              "median": 0.194475,
+              "max": 0.304225
+            },
+            "pipeline_share_percent": {
+              "min": 0.012368059403998913,
+              "median": 0.024616467844476526,
+              "max": 0.038290758204030474
+            }
+          },
+          {
+            "stage": "window_geometry_setup",
+            "calls_per_sample": {
+              "min": 1,
+              "median": 1,
+              "max": 1
+            },
+            "elapsed_ms": {
+              "min": 5.013183,
+              "median": 7.212042,
+              "max": 8.250007
+            },
+            "pipeline_share_percent": {
+              "min": 0.4615609628735874,
+              "median": 0.7006450494789987,
+              "max": 0.9870604349430833
+            }
+          },
+          {
+            "stage": "raster_read",
+            "calls_per_sample": {
+              "min": 6,
+              "median": 6,
+              "max": 6
+            },
+            "elapsed_ms": {
+              "min": 390.642632,
+              "median": 739.113426,
+              "max": 1383.908299
+            },
+            "pipeline_share_percent": {
+              "min": 76.91478373106085,
+              "median": 83.544027803085,
+              "max": 88.56826499557108
+            }
+          },
+          {
+            "stage": "mask_preparation",
+            "calls_per_sample": {
+              "min": 6,
+              "median": 6,
+              "max": 6
+            },
+            "elapsed_ms": {
+              "min": 20.051803,
+              "median": 22.652871,
+              "max": 24.220163
+            },
+            "pipeline_share_percent": {
+              "min": 1.4497531975841467,
+              "median": 2.6374061354480722,
+              "max": 3.94805882621341
+            }
+          },
+          {
+            "stage": "value_validation_and_stats",
+            "calls_per_sample": {
+              "min": 6,
+              "median": 6,
+              "max": 6
+            },
+            "elapsed_ms": {
+              "min": 13.734501,
+              "median": 15.57874,
+              "max": 16.819276
+            },
+            "pipeline_share_percent": {
+              "min": 0.9970183527435462,
+              "median": 1.8315013700029397,
+              "max": 2.704226542455405
+            }
+          },
+          {
+            "stage": "weighted_accumulation",
+            "calls_per_sample": {
+              "min": 6,
+              "median": 6,
+              "max": 6
+            },
+            "elapsed_ms": {
+              "min": 24.412383,
+              "median": 28.618212,
+              "max": 30.063087
+            },
+            "pipeline_share_percent": {
+              "min": 1.8315269775800602,
+              "median": 3.03464386813772,
+              "max": 4.8066263254258095
+            }
+          },
+          {
+            "stage": "result_finalization",
+            "calls_per_sample": {
+              "min": 1,
+              "median": 1,
+              "max": 1
+            },
+            "elapsed_ms": {
+              "min": 3.072443,
+              "median": 3.496662,
+              "max": 3.847758
+            },
+            "pipeline_share_percent": {
+              "min": 0.2237816529026708,
+              "median": 0.3745667551917004,
+              "max": 0.6049423936684202
+            }
+          }
+        ],
+        "per_indicator_stages": [
+          {
+            "stage": "source_open",
+            "indicator_code": "PM25",
+            "sample_count": 5,
+            "elapsed_ms": {
+              "min": 4.739519,
+              "median": 6.908773,
+              "max": 16.733224
+            }
+          },
+          {
+            "stage": "source_open",
+            "indicator_code": "AQI",
+            "sample_count": 5,
+            "elapsed_ms": {
+              "min": 6.303181,
+              "median": 17.750258,
+              "max": 22.945733
+            }
+          },
+          {
+            "stage": "source_open",
+            "indicator_code": "NDVI",
+            "sample_count": 5,
+            "elapsed_ms": {
+              "min": 8.21933,
+              "median": 14.078844,
+              "max": 32.334879
+            }
+          },
+          {
+            "stage": "source_open",
+            "indicator_code": "rkmd",
+            "sample_count": 5,
+            "elapsed_ms": {
+              "min": 9.696149,
+              "median": 18.440707,
+              "max": 23.401922
+            }
+          },
+          {
+            "stage": "source_open",
+            "indicator_code": "gyfb",
+            "sample_count": 5,
+            "elapsed_ms": {
+              "min": 4.715356,
+              "median": 11.499945,
+              "max": 14.985584
+            }
+          },
+          {
+            "stage": "source_open",
+            "indicator_code": "fmyl",
+            "sample_count": 5,
+            "elapsed_ms": {
+              "min": 4.272205,
+              "median": 13.621254,
+              "max": 18.199785
+            }
+          },
+          {
+            "stage": "raster_read",
+            "indicator_code": "PM25",
+            "sample_count": 5,
+            "elapsed_ms": {
+              "min": 46.929575,
+              "median": 151.642483,
+              "max": 218.885642
+            }
+          },
+          {
+            "stage": "raster_read",
+            "indicator_code": "AQI",
+            "sample_count": 5,
+            "elapsed_ms": {
+              "min": 54.98728,
+              "median": 115.54034,
+              "max": 251.765932
+            }
+          },
+          {
+            "stage": "raster_read",
+            "indicator_code": "NDVI",
+            "sample_count": 5,
+            "elapsed_ms": {
+              "min": 76.120564,
+              "median": 171.639581,
+              "max": 378.845957
+            }
+          },
+          {
+            "stage": "raster_read",
+            "indicator_code": "rkmd",
+            "sample_count": 5,
+            "elapsed_ms": {
+              "min": 68.638934,
+              "median": 144.416053,
+              "max": 438.867988
+            }
+          },
+          {
+            "stage": "raster_read",
+            "indicator_code": "gyfb",
+            "sample_count": 5,
+            "elapsed_ms": {
+              "min": 114.09395,
+              "median": 131.862788,
+              "max": 223.728904
+            }
+          },
+          {
+            "stage": "raster_read",
+            "indicator_code": "fmyl",
+            "sample_count": 5,
+            "elapsed_ms": {
+              "min": 26.400962,
+              "median": 39.46605,
+              "max": 55.107121
+            }
+          },
+          {
+            "stage": "mask_preparation",
+            "indicator_code": "PM25",
+            "sample_count": 5,
+            "elapsed_ms": {
+              "min": 3.129013,
+              "median": 3.764484,
+              "max": 4.34077
+            }
+          },
+          {
+            "stage": "mask_preparation",
+            "indicator_code": "AQI",
+            "sample_count": 5,
+            "elapsed_ms": {
+              "min": 3.776506,
+              "median": 4.543787,
+              "max": 5.373628
+            }
+          },
+          {
+            "stage": "mask_preparation",
+            "indicator_code": "NDVI",
+            "sample_count": 5,
+            "elapsed_ms": {
+              "min": 2.197376,
+              "median": 3.473006,
+              "max": 4.885516
+            }
+          },
+          {
+            "stage": "mask_preparation",
+            "indicator_code": "rkmd",
+            "sample_count": 5,
+            "elapsed_ms": {
+              "min": 2.705832,
+              "median": 3.321188,
+              "max": 4.614123
+            }
+          },
+          {
+            "stage": "mask_preparation",
+            "indicator_code": "gyfb",
+            "sample_count": 5,
+            "elapsed_ms": {
+              "min": 3.012645,
+              "median": 3.707474,
+              "max": 3.867926
+            }
+          },
+          {
+            "stage": "mask_preparation",
+            "indicator_code": "fmyl",
+            "sample_count": 5,
+            "elapsed_ms": {
+              "min": 2.844748,
+              "median": 3.038476,
+              "max": 4.014917
+            }
+          },
+          {
+            "stage": "value_validation_and_stats",
+            "indicator_code": "PM25",
+            "sample_count": 5,
+            "elapsed_ms": {
+              "min": 2.02146,
+              "median": 3.029449,
+              "max": 3.459918
+            }
+          },
+          {
+            "stage": "value_validation_and_stats",
+            "indicator_code": "AQI",
+            "sample_count": 5,
+            "elapsed_ms": {
+              "min": 2.061229,
+              "median": 3.043528,
+              "max": 3.80472
+            }
+          },
+          {
+            "stage": "value_validation_and_stats",
+            "indicator_code": "NDVI",
+            "sample_count": 5,
+            "elapsed_ms": {
+              "min": 1.870454,
+              "median": 2.350777,
+              "max": 3.150893
+            }
+          },
+          {
+            "stage": "value_validation_and_stats",
+            "indicator_code": "rkmd",
+            "sample_count": 5,
+            "elapsed_ms": {
+              "min": 1.916996,
+              "median": 2.26978,
+              "max": 4.114185
+            }
+          },
+          {
+            "stage": "value_validation_and_stats",
+            "indicator_code": "gyfb",
+            "sample_count": 5,
+            "elapsed_ms": {
+              "min": 1.666768,
+              "median": 2.450919,
+              "max": 2.839542
+            }
+          },
+          {
+            "stage": "value_validation_and_stats",
+            "indicator_code": "fmyl",
+            "sample_count": 5,
+            "elapsed_ms": {
+              "min": 1.729006,
+              "median": 2.111968,
+              "max": 3.380089
+            }
+          },
+          {
+            "stage": "weighted_accumulation",
+            "indicator_code": "PM25",
+            "sample_count": 5,
+            "elapsed_ms": {
+              "min": 4.498076,
+              "median": 4.760441,
+              "max": 5.330211
+            }
+          },
+          {
+            "stage": "weighted_accumulation",
+            "indicator_code": "AQI",
+            "sample_count": 5,
+            "elapsed_ms": {
+              "min": 3.635515,
+              "median": 4.778395,
+              "max": 6.359108
+            }
+          },
+          {
+            "stage": "weighted_accumulation",
+            "indicator_code": "NDVI",
+            "sample_count": 5,
+            "elapsed_ms": {
+              "min": 3.159076,
+              "median": 3.648266,
+              "max": 4.089645
+            }
+          },
+          {
+            "stage": "weighted_accumulation",
+            "indicator_code": "rkmd",
+            "sample_count": 5,
+            "elapsed_ms": {
+              "min": 3.249923,
+              "median": 3.368673,
+              "max": 4.833403
+            }
+          },
+          {
+            "stage": "weighted_accumulation",
+            "indicator_code": "gyfb",
+            "sample_count": 5,
+            "elapsed_ms": {
+              "min": 4.286155,
+              "median": 5.88822,
+              "max": 7.86959
+            }
+          },
+          {
+            "stage": "weighted_accumulation",
+            "indicator_code": "fmyl",
+            "sample_count": 5,
+            "elapsed_ms": {
+              "min": 3.194702,
+              "median": 4.53196,
+              "max": 6.681763
+            }
+          }
+        ]
+      },
+      {
+        "indicator_count": 12,
+        "rows": 1024,
+        "cols": 1024,
+        "window_cells": 1048576,
+        "valid_cells": {
+          "min": 723902.0,
+          "median": 723902.0,
+          "max": 723902.0
+        },
+        "pipeline_elapsed_ms": {
+          "min": 1107.063521,
+          "median": 1521.499158,
+          "max": 2316.266178
+        },
+        "unattributed_ms": {
+          "min": 6.977411,
+          "median": 15.96427,
+          "max": 23.056034
+        },
+        "unattributed_percent": {
+          "min": 0.49989582869126703,
+          "median": 0.8119576315809762,
+          "max": 1.51534977057148
+        },
+        "stages": [
+          {
+            "stage": "input_validation",
+            "calls_per_sample": {
+              "min": 1,
+              "median": 1,
+              "max": 1
+            },
+            "elapsed_ms": {
+              "min": 0.449443,
+              "median": 1.000404,
+              "max": 1.37373
+            },
+            "pipeline_share_percent": {
+              "min": 0.030942968159039887,
+              "median": 0.05702113793801733,
+              "max": 0.12150188083019672
+            }
+          },
+          {
+            "stage": "source_open",
+            "calls_per_sample": {
+              "min": 12,
+              "median": 12,
+              "max": 12
+            },
+            "elapsed_ms": {
+              "min": 128.756545,
+              "median": 193.973123,
+              "max": 299.098556
+            },
+            "pipeline_share_percent": {
+              "min": 9.224748228562058,
+              "median": 12.52649710634937,
+              "max": 20.643991484206804
+            }
+          },
+          {
+            "stage": "grid_validation",
+            "calls_per_sample": {
+              "min": 1,
+              "median": 1,
+              "max": 1
+            },
+            "elapsed_ms": {
+              "min": 0.292776,
+              "median": 0.352066,
+              "max": 0.829023
+            },
+            "pipeline_share_percent": {
+              "min": 0.01668767885868205,
+              "median": 0.02887061075874796,
+              "max": 0.05409196198385551
+            }
+          },
+          {
+            "stage": "window_geometry_setup",
+            "calls_per_sample": {
+              "min": 1,
+              "median": 1,
+              "max": 1
+            },
+            "elapsed_ms": {
+              "min": 4.11539,
+              "median": 6.481345,
+              "max": 9.499681
+            },
+            "pipeline_share_percent": {
+              "min": 0.36942441980327834,
+              "median": 0.38113862695939793,
+              "max": 0.6806035800095027
+            }
+          },
+          {
+            "stage": "raster_read",
+            "calls_per_sample": {
+              "min": 12,
+              "median": 12,
+              "max": 12
+            },
+            "elapsed_ms": {
+              "min": 754.952141,
+              "median": 1167.738744,
+              "max": 1867.267413
+            },
+            "pipeline_share_percent": {
+              "min": 68.19411232320788,
+              "median": 79.4713853036786,
+              "max": 80.61540727639118
+            }
+          },
+          {
+            "stage": "mask_preparation",
+            "calls_per_sample": {
+              "min": 12,
+              "median": 12,
+              "max": 12
+            },
+            "elapsed_ms": {
+              "min": 33.937261,
+              "median": 41.104261,
+              "max": 46.094416
+            },
+            "pipeline_share_percent": {
+              "min": 1.7745914260809106,
+              "median": 2.7554554847804917,
+              "max": 3.30242926557716
+            }
+          },
+          {
+            "stage": "value_validation_and_stats",
+            "calls_per_sample": {
+              "min": 12,
+              "median": 12,
+              "max": 12
+            },
+            "elapsed_ms": {
+              "min": 23.396518,
+              "median": 33.662681,
+              "max": 37.359211
+            },
+            "pipeline_share_percent": {
+              "min": 1.3276895501946928,
+              "median": 2.113385325791075,
+              "max": 2.6765964828640447
+            }
+          },
+          {
+            "stage": "weighted_accumulation",
+            "calls_per_sample": {
+              "min": 12,
+              "median": 12,
+              "max": 12
+            },
+            "elapsed_ms": {
+              "min": 45.226627,
+              "median": 49.275695,
+              "max": 54.412224
+            },
+            "pipeline_share_percent": {
+              "min": 1.9525660491684649,
+              "median": 3.576224391180373,
+              "max": 4.451026889178837
+            }
+          },
+          {
+            "stage": "result_finalization",
+            "calls_per_sample": {
+              "min": 1,
+              "median": 1,
+              "max": 1
+            },
+            "elapsed_ms": {
+              "min": 2.487625,
+              "median": 3.269474,
+              "max": 4.065485
+            },
+            "pipeline_share_percent": {
+              "min": 0.12155774784188038,
+              "median": 0.21488503511876408,
+              "max": 0.3672314120085617
+            }
+          }
+        ],
+        "per_indicator_stages": [
+          {
+            "stage": "source_open",
+            "indicator_code": "PM25",
+            "sample_count": 5,
+            "elapsed_ms": {
+              "min": 4.801404,
+              "median": 19.443511,
+              "max": 50.825219
+            }
+          },
+          {
+            "stage": "source_open",
+            "indicator_code": "AQI",
+            "sample_count": 5,
+            "elapsed_ms": {
+              "min": 6.103909,
+              "median": 25.876583,
+              "max": 35.265427
+            }
+          },
+          {
+            "stage": "source_open",
+            "indicator_code": "NDVI",
+            "sample_count": 5,
+            "elapsed_ms": {
+              "min": 14.489509,
+              "median": 32.146634,
+              "max": 45.125125
+            }
+          },
+          {
+            "stage": "source_open",
+            "indicator_code": "hwmd",
+            "sample_count": 5,
+            "elapsed_ms": {
+              "min": 9.080516,
+              "median": 17.299524,
+              "max": 30.747471
+            }
+          },
+          {
+            "stage": "source_open",
+            "indicator_code": "rkmd",
+            "sample_count": 5,
+            "elapsed_ms": {
+              "min": 16.058921,
+              "median": 18.403893,
+              "max": 28.276387
+            }
+          },
+          {
+            "stage": "source_open",
+            "indicator_code": "xxmd",
+            "sample_count": 5,
+            "elapsed_ms": {
+              "min": 9.383965,
+              "median": 15.000515,
+              "max": 17.579541
+            }
+          },
+          {
+            "stage": "source_open",
+            "indicator_code": "jmdmd",
+            "sample_count": 5,
+            "elapsed_ms": {
+              "min": 8.94973,
+              "median": 13.722124,
+              "max": 24.561104
+            }
+          },
+          {
+            "stage": "source_open",
+            "indicator_code": "xspb",
+            "sample_count": 5,
+            "elapsed_ms": {
+              "min": 6.639899,
+              "median": 10.80405,
+              "max": 21.641851
+            }
+          },
+          {
+            "stage": "source_open",
+            "indicator_code": "xsqs",
+            "sample_count": 5,
+            "elapsed_ms": {
+              "min": 5.484286,
+              "median": 11.165437,
+              "max": 21.543065
+            }
+          },
+          {
+            "stage": "source_open",
+            "indicator_code": "gyfb",
+            "sample_count": 5,
+            "elapsed_ms": {
+              "min": 4.790067,
+              "median": 7.955788,
+              "max": 23.902681
+            }
+          },
+          {
+            "stage": "source_open",
+            "indicator_code": "fmyl",
+            "sample_count": 5,
+            "elapsed_ms": {
+              "min": 3.378145,
+              "median": 11.358645,
+              "max": 19.702006
+            }
+          },
+          {
+            "stage": "source_open",
+            "indicator_code": "fmts",
+            "sample_count": 5,
+            "elapsed_ms": {
+              "min": 3.276624,
+              "median": 18.095942,
+              "max": 27.266627
+            }
+          },
+          {
+            "stage": "raster_read",
+            "indicator_code": "PM25",
+            "sample_count": 5,
+            "elapsed_ms": {
+              "min": 76.394654,
+              "median": 145.629015,
+              "max": 222.139629
+            }
+          },
+          {
+            "stage": "raster_read",
+            "indicator_code": "AQI",
+            "sample_count": 5,
+            "elapsed_ms": {
+              "min": 56.302873,
+              "median": 187.839208,
+              "max": 284.564733
+            }
+          },
+          {
+            "stage": "raster_read",
+            "indicator_code": "NDVI",
+            "sample_count": 5,
+            "elapsed_ms": {
+              "min": 50.769596,
+              "median": 278.175838,
+              "max": 287.821398
+            }
+          },
+          {
+            "stage": "raster_read",
+            "indicator_code": "hwmd",
+            "sample_count": 5,
+            "elapsed_ms": {
+              "min": 74.584642,
+              "median": 124.265296,
+              "max": 256.887886
+            }
+          },
+          {
+            "stage": "raster_read",
+            "indicator_code": "rkmd",
+            "sample_count": 5,
+            "elapsed_ms": {
+              "min": 90.039558,
+              "median": 163.32037,
+              "max": 283.208764
+            }
+          },
+          {
+            "stage": "raster_read",
+            "indicator_code": "xxmd",
+            "sample_count": 5,
+            "elapsed_ms": {
+              "min": 30.323013,
+              "median": 67.357242,
+              "max": 154.83811
+            }
+          },
+          {
+            "stage": "raster_read",
+            "indicator_code": "jmdmd",
+            "sample_count": 5,
+            "elapsed_ms": {
+              "min": 25.560413,
+              "median": 49.963216,
+              "max": 103.550896
+            }
+          },
+          {
+            "stage": "raster_read",
+            "indicator_code": "xspb",
+            "sample_count": 5,
+            "elapsed_ms": {
+              "min": 12.304758,
+              "median": 42.172079,
+              "max": 73.19265
+            }
+          },
+          {
+            "stage": "raster_read",
+            "indicator_code": "xsqs",
+            "sample_count": 5,
+            "elapsed_ms": {
+              "min": 12.344769,
+              "median": 41.569342,
+              "max": 168.796413
+            }
+          },
+          {
+            "stage": "raster_read",
+            "indicator_code": "gyfb",
+            "sample_count": 5,
+            "elapsed_ms": {
+              "min": 33.045203,
+              "median": 126.122874,
+              "max": 193.068796
+            }
+          },
+          {
+            "stage": "raster_read",
+            "indicator_code": "fmyl",
+            "sample_count": 5,
+            "elapsed_ms": {
+              "min": 12.804092,
+              "median": 17.711474,
+              "max": 36.193822
+            }
+          },
+          {
+            "stage": "raster_read",
+            "indicator_code": "fmts",
+            "sample_count": 5,
+            "elapsed_ms": {
+              "min": 12.567619,
+              "median": 26.082515,
+              "max": 38.571309
+            }
+          },
+          {
+            "stage": "mask_preparation",
+            "indicator_code": "PM25",
+            "sample_count": 5,
+            "elapsed_ms": {
+              "min": 2.237146,
+              "median": 2.940617,
+              "max": 3.912411
+            }
+          },
+          {
+            "stage": "mask_preparation",
+            "indicator_code": "AQI",
+            "sample_count": 5,
+            "elapsed_ms": {
+              "min": 2.327163,
+              "median": 3.119361,
+              "max": 3.733011
+            }
+          },
+          {
+            "stage": "mask_preparation",
+            "indicator_code": "NDVI",
+            "sample_count": 5,
+            "elapsed_ms": {
+              "min": 2.695918,
+              "median": 3.233657,
+              "max": 4.600421
+            }
+          },
+          {
+            "stage": "mask_preparation",
+            "indicator_code": "hwmd",
+            "sample_count": 5,
+            "elapsed_ms": {
+              "min": 2.624887,
+              "median": 3.955358,
+              "max": 4.812207
+            }
+          },
+          {
+            "stage": "mask_preparation",
+            "indicator_code": "rkmd",
+            "sample_count": 5,
+            "elapsed_ms": {
+              "min": 2.777893,
+              "median": 3.036661,
+              "max": 5.439661
+            }
+          },
+          {
+            "stage": "mask_preparation",
+            "indicator_code": "xxmd",
+            "sample_count": 5,
+            "elapsed_ms": {
+              "min": 2.394488,
+              "median": 2.910549,
+              "max": 3.56185
+            }
+          },
+          {
+            "stage": "mask_preparation",
+            "indicator_code": "jmdmd",
+            "sample_count": 5,
+            "elapsed_ms": {
+              "min": 2.185927,
+              "median": 3.829564,
+              "max": 4.753571
+            }
+          },
+          {
+            "stage": "mask_preparation",
+            "indicator_code": "xspb",
+            "sample_count": 5,
+            "elapsed_ms": {
+              "min": 2.465105,
+              "median": 3.262559,
+              "max": 5.374506
+            }
+          },
+          {
+            "stage": "mask_preparation",
+            "indicator_code": "xsqs",
+            "sample_count": 5,
+            "elapsed_ms": {
+              "min": 2.387336,
+              "median": 3.462787,
+              "max": 4.666922
+            }
+          },
+          {
+            "stage": "mask_preparation",
+            "indicator_code": "gyfb",
+            "sample_count": 5,
+            "elapsed_ms": {
+              "min": 2.264387,
+              "median": 2.657557,
+              "max": 4.981793
+            }
+          },
+          {
+            "stage": "mask_preparation",
+            "indicator_code": "fmyl",
+            "sample_count": 5,
+            "elapsed_ms": {
+              "min": 2.219626,
+              "median": 3.242064,
+              "max": 6.616709
+            }
+          },
+          {
+            "stage": "mask_preparation",
+            "indicator_code": "fmts",
+            "sample_count": 5,
+            "elapsed_ms": {
+              "min": 2.546372,
+              "median": 3.268969,
+              "max": 4.447239
+            }
+          },
+          {
+            "stage": "value_validation_and_stats",
+            "indicator_code": "PM25",
+            "sample_count": 5,
+            "elapsed_ms": {
+              "min": 2.002603,
+              "median": 2.43367,
+              "max": 2.639965
+            }
+          },
+          {
+            "stage": "value_validation_and_stats",
+            "indicator_code": "AQI",
+            "sample_count": 5,
+            "elapsed_ms": {
+              "min": 1.693748,
+              "median": 2.071642,
+              "max": 3.839797
+            }
+          },
+          {
+            "stage": "value_validation_and_stats",
+            "indicator_code": "NDVI",
+            "sample_count": 5,
+            "elapsed_ms": {
+              "min": 1.966931,
+              "median": 2.323906,
+              "max": 3.590859
+            }
+          },
+          {
+            "stage": "value_validation_and_stats",
+            "indicator_code": "hwmd",
+            "sample_count": 5,
+            "elapsed_ms": {
+              "min": 2.619858,
+              "median": 3.522505,
+              "max": 4.710396
+            }
+          },
+          {
+            "stage": "value_validation_and_stats",
+            "indicator_code": "rkmd",
+            "sample_count": 5,
+            "elapsed_ms": {
+              "min": 1.882524,
+              "median": 2.739247,
+              "max": 4.468727
+            }
+          },
+          {
+            "stage": "value_validation_and_stats",
+            "indicator_code": "xxmd",
+            "sample_count": 5,
+            "elapsed_ms": {
+              "min": 1.927078,
+              "median": 2.270092,
+              "max": 3.018141
+            }
+          },
+          {
+            "stage": "value_validation_and_stats",
+            "indicator_code": "jmdmd",
+            "sample_count": 5,
+            "elapsed_ms": {
+              "min": 1.607816,
+              "median": 2.751262,
+              "max": 3.292517
+            }
+          },
+          {
+            "stage": "value_validation_and_stats",
+            "indicator_code": "xspb",
+            "sample_count": 5,
+            "elapsed_ms": {
+              "min": 1.661225,
+              "median": 2.633042,
+              "max": 4.833082
+            }
+          },
+          {
+            "stage": "value_validation_and_stats",
+            "indicator_code": "xsqs",
+            "sample_count": 5,
+            "elapsed_ms": {
+              "min": 1.6441,
+              "median": 3.0945,
+              "max": 5.278988
+            }
+          },
+          {
+            "stage": "value_validation_and_stats",
+            "indicator_code": "gyfb",
+            "sample_count": 5,
+            "elapsed_ms": {
+              "min": 1.777385,
+              "median": 2.025173,
+              "max": 2.744209
+            }
+          },
+          {
+            "stage": "value_validation_and_stats",
+            "indicator_code": "fmyl",
+            "sample_count": 5,
+            "elapsed_ms": {
+              "min": 1.682704,
+              "median": 1.882,
+              "max": 5.586656
+            }
+          },
+          {
+            "stage": "value_validation_and_stats",
+            "indicator_code": "fmts",
+            "sample_count": 5,
+            "elapsed_ms": {
+              "min": 1.592805,
+              "median": 2.287246,
+              "max": 2.869004
+            }
+          },
+          {
+            "stage": "weighted_accumulation",
+            "indicator_code": "PM25",
+            "sample_count": 5,
+            "elapsed_ms": {
+              "min": 2.93624,
+              "median": 3.312421,
+              "max": 4.949676
+            }
+          },
+          {
+            "stage": "weighted_accumulation",
+            "indicator_code": "AQI",
+            "sample_count": 5,
+            "elapsed_ms": {
+              "min": 2.71393,
+              "median": 3.98591,
+              "max": 5.550004
+            }
+          },
+          {
+            "stage": "weighted_accumulation",
+            "indicator_code": "NDVI",
+            "sample_count": 5,
+            "elapsed_ms": {
+              "min": 2.844375,
+              "median": 3.582437,
+              "max": 5.297081
+            }
+          },
+          {
+            "stage": "weighted_accumulation",
+            "indicator_code": "hwmd",
+            "sample_count": 5,
+            "elapsed_ms": {
+              "min": 3.690983,
+              "median": 4.421621,
+              "max": 5.49311
+            }
+          },
+          {
+            "stage": "weighted_accumulation",
+            "indicator_code": "rkmd",
+            "sample_count": 5,
+            "elapsed_ms": {
+              "min": 3.069067,
+              "median": 3.88506,
+              "max": 4.833214
+            }
+          },
+          {
+            "stage": "weighted_accumulation",
+            "indicator_code": "xxmd",
+            "sample_count": 5,
+            "elapsed_ms": {
+              "min": 2.802467,
+              "median": 3.603688,
+              "max": 4.677062
+            }
+          },
+          {
+            "stage": "weighted_accumulation",
+            "indicator_code": "jmdmd",
+            "sample_count": 5,
+            "elapsed_ms": {
+              "min": 3.070814,
+              "median": 3.687538,
+              "max": 5.352454
+            }
+          },
+          {
+            "stage": "weighted_accumulation",
+            "indicator_code": "xspb",
+            "sample_count": 5,
+            "elapsed_ms": {
+              "min": 3.019211,
+              "median": 3.952385,
+              "max": 10.107864
+            }
+          },
+          {
+            "stage": "weighted_accumulation",
+            "indicator_code": "xsqs",
+            "sample_count": 5,
+            "elapsed_ms": {
+              "min": 2.815449,
+              "median": 4.411307,
+              "max": 5.422398
+            }
+          },
+          {
+            "stage": "weighted_accumulation",
+            "indicator_code": "gyfb",
+            "sample_count": 5,
+            "elapsed_ms": {
+              "min": 2.871417,
+              "median": 3.412365,
+              "max": 4.703605
+            }
+          },
+          {
+            "stage": "weighted_accumulation",
+            "indicator_code": "fmyl",
+            "sample_count": 5,
+            "elapsed_ms": {
+              "min": 3.585126,
+              "median": 5.355002,
+              "max": 6.98108
+            }
+          },
+          {
+            "stage": "weighted_accumulation",
+            "indicator_code": "fmts",
+            "sample_count": 5,
+            "elapsed_ms": {
+              "min": 2.763249,
+              "median": 4.261391,
+              "max": 5.772369
+            }
+          }
+        ]
+      }
+    ]
+  }
+}
