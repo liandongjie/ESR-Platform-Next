@@ -4,6 +4,7 @@ import csv
 import inspect
 import json
 import pstats
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -14,6 +15,7 @@ from rasterio.transform import from_origin
 from app.gis.indicators import INDICATORS
 from app.gis.risk_benchmark import (
     ALLOWED_BENCHMARK_PATHS,
+    ALLOWED_PIPELINE_DIAGNOSTIC_PATHS,
     BASELINE_SHA,
     COMPUTE_SIZES,
     DEFAULT_RUNS,
@@ -21,13 +23,19 @@ from app.gis.risk_benchmark import (
     INDICATOR_GROUPS,
     PIPELINE_PROFILE_SIZE,
     PIPELINE_PROFILE_TOP_N,
+    PIPELINE_STAGE_TIMING_SIZE,
+    PIPELINE_STAGES,
+    PRODUCTION_CANDIDATE_SHA,
     SOURCE_TREE_VERIFICATION_METHOD,
     SPATIAL_SIZES,
     VALIDATION_INCLUDED_IN_TOTAL_SERVICE,
     VALIDATION_TIMING,
+    _parse_args,
+    _verified_instrumentation_lineage,
     _verified_provenance,
     run_benchmark,
     run_pipeline_profile,
+    run_pipeline_stage_timing,
     write_reports,
 )
 
@@ -116,6 +124,7 @@ def test_benchmark_keeps_raw_samples_and_writes_all_reports(tmp_path: Path):
 
 def test_formal_p3a_benchmark_contract_is_locked():
     assert BASELINE_SHA == "5810240e14d1d5a86562d73d6b85f2cdd2083cc4"
+    assert PRODUCTION_CANDIDATE_SHA == "8f85c420dcc07edbcbf03674478b973c108e6746"
     assert COMPUTE_SIZES == {"small": 128, "medium": 384, "large": 1024}
     assert SPATIAL_SIZES == {"small": 32, "medium": 64, "large": 128}
     assert INDICATOR_GROUPS == {
@@ -134,12 +143,157 @@ def test_formal_p3a_benchmark_contract_is_locked():
     assert inspect.signature(run_pipeline_profile).parameters["warmups"].default == 1
     assert inspect.signature(run_pipeline_profile).parameters["runs"].default == 5
     assert inspect.signature(run_pipeline_profile).parameters["size"].default == 1024
+    assert PIPELINE_STAGE_TIMING_SIZE == 1024
+    assert inspect.signature(run_pipeline_stage_timing).parameters["warmups"].default == 1
+    assert inspect.signature(run_pipeline_stage_timing).parameters["runs"].default == 5
+    assert inspect.signature(run_pipeline_stage_timing).parameters["size"].default == 1024
+    assert PIPELINE_STAGES == (
+        "input_validation",
+        "source_open",
+        "grid_validation",
+        "window_geometry_setup",
+        "raster_read",
+        "mask_preparation",
+        "value_validation_and_stats",
+        "weighted_accumulation",
+        "result_finalization",
+    )
     assert ALLOWED_BENCHMARK_PATHS == (
         "backend/app/gis/risk_benchmark.py",
         "backend/tests/test_risk_benchmark.py",
         "scripts/benchmark-risk-analysis.ps1",
         "docs/performance/",
     )
+    assert ALLOWED_PIPELINE_DIAGNOSTIC_PATHS == (
+        "backend/app/gis/risk_pipeline.py",
+        "backend/tests/test_risk_pipeline.py",
+        *ALLOWED_BENCHMARK_PATHS,
+    )
+
+
+def test_pipeline_stage_timing_keeps_raw_events_and_reports(tmp_path: Path):
+    raster_dir = tmp_path / "rasters"
+    _write_catalog_rasters(raster_dir)
+    instrumented_sha = "2" * 40
+
+    result, paths = run_pipeline_stage_timing(
+        raster_dir=raster_dir,
+        output_dir=tmp_path / "stage-timing",
+        subject_baseline_sha=instrumented_sha,
+        repository_head_sha=instrumented_sha,
+        source_tree_verified=True,
+        baseline_is_ancestor=True,
+        production_candidate_is_ancestor=True,
+        diagnostic_source_tree_verified=True,
+        diagnostic_differences=("M:backend/app/gis/risk_pipeline.py",),
+        warmups=0,
+        runs=1,
+        size=2,
+    )
+
+    assert result["benchmark"] == "risk-analysis-pipeline-stage-timing"
+    assert result["production_candidate_sha"] == PRODUCTION_CANDIDATE_SHA
+    assert result["instrumented_subject_sha"] == instrumented_sha
+    assert result["configuration"] == {
+        "warmups_per_scenario": 0,
+        "measured_runs_per_scenario": 1,
+        "stage_timing_size": 2,
+        "indicator_groups": {
+            "3": ["PM25", "AQI", "NDVI"],
+            "6": ["PM25", "AQI", "NDVI", "rkmd", "gyfb", "fmyl"],
+            "12": [indicator.code for indicator in INDICATORS],
+        },
+        "stages": list(PIPELINE_STAGES),
+    }
+    samples = result["pipeline_stage_timing"]["raw_samples"]
+    assert len(samples) == 3
+    for sample in samples:
+        assert sample["rows"] == 2
+        assert sample["cols"] == 2
+        assert sample["window_cells"] == 4
+        assert sample["valid_cells"] == 4
+        assert sample["output_statistics"] == pytest.approx(
+            {"minimum": 0.5, "maximum": 0.5, "mean": 0.5}
+        )
+        assert len(sample["stage_events"]) == 4 + 5 * sample["indicator_count"]
+        assert all(event["elapsed_ns"] >= 0 for event in sample["stage_events"])
+        assert sample["attributed_ns"] <= sample["pipeline_elapsed_ns"]
+        assert sample["unattributed_ns"] == (
+            sample["pipeline_elapsed_ns"] - sample["attributed_ns"]
+        )
+    assert len(result["pipeline_stage_timing"]["summaries"]) == 3
+    assert len(result["raster_dataset"]["files"]) == 12
+    persisted = json.loads(paths["json"].read_text(encoding="utf-8"))
+    assert persisted["pipeline_stage_timing"]["raw_samples"] == samples
+    markdown = paths["markdown"].read_text(encoding="utf-8")
+    assert "Production candidate" in markdown
+    assert "Instrumented subject" in markdown
+    assert "unattributed" in markdown
+    assert "diagnostic and is not a replacement latency baseline" in markdown
+
+
+def test_pipeline_diagnostic_lineage_contract():
+    instrumented_sha = "2" * 40
+    lineage = _verified_instrumentation_lineage(
+        PRODUCTION_CANDIDATE_SHA,
+        instrumented_sha,
+        True,
+        True,
+        ALLOWED_PIPELINE_DIAGNOSTIC_PATHS,
+        (
+            "M:backend/app/gis/risk_pipeline.py",
+            "M:backend/tests/test_risk_pipeline.py",
+            "A:docs/performance/p3b-pipeline-stage-timing/result.json",
+        ),
+    )
+    assert lineage["production_candidate_sha"] == PRODUCTION_CANDIDATE_SHA
+    assert lineage["instrumented_subject_sha"] == instrumented_sha
+    assert lineage["diagnostic_source_tree_verified"] is True
+
+    with pytest.raises(ValueError, match="ancestor"):
+        _verified_instrumentation_lineage(
+            PRODUCTION_CANDIDATE_SHA,
+            instrumented_sha,
+            False,
+            True,
+            ALLOWED_PIPELINE_DIAGNOSTIC_PATHS,
+            (),
+        )
+    with pytest.raises(ValueError, match="非 diagnostic"):
+        _verified_instrumentation_lineage(
+            PRODUCTION_CANDIDATE_SHA,
+            instrumented_sha,
+            True,
+            True,
+            ALLOWED_PIPELINE_DIAGNOSTIC_PATHS,
+            ("M:backend/app/services/risk_analysis_jobs.py",),
+        )
+
+
+def test_pipeline_profile_modes_are_mutually_exclusive(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "risk-benchmark",
+            "--raster-dir",
+            "rasters",
+            "--output-dir",
+            "reports",
+            "--repository-head-sha",
+            BASELINE_SHA,
+            "--source-tree-verification-method",
+            SOURCE_TREE_VERIFICATION_METHOD,
+            "--source-tree-verified",
+            "--baseline-is-ancestor",
+            "--allowed-benchmark-path",
+            ALLOWED_BENCHMARK_PATHS[0],
+            "--pipeline-profile",
+            "--pipeline-stage-timing",
+        ],
+    )
+    with pytest.raises(SystemExit):
+        _parse_args()
 
 
 def test_pipeline_profile_keeps_raw_samples_and_writes_loadable_profiles(tmp_path: Path):
