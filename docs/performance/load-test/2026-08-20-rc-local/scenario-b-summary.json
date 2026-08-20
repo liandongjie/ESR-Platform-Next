@@ -1,0 +1,202 @@
+{
+    "metrics": {
+        "http_req_duration{endpoint:status}": {
+            "min": 4.894368,
+            "p(50)": 6.1824555,
+            "p(95)": 8.414382149999996,
+            "p(99)": 93.60173119999989,
+            "max": 428.287399,
+            "thresholds": {
+                "p(95)<500": false
+            }
+        },
+        "http_req_duration{expected_response:true}": {
+            "p(99)": 688.1920296499998,
+            "max": 771.371139,
+            "min": 4.894368,
+            "p(50)": 6.4810585,
+            "p(95)": 551.1967685499998
+        },
+        "iterations": {
+            "count": 50,
+            "rate": 12.194385883216398
+        },
+        "vus_max": {
+            "value": 50,
+            "min": 50,
+            "max": 50
+        },
+        "http_reqs": {
+            "count": 468,
+            "rate": 114.13945186690549
+        },
+        "esr_server_execution_ms": {
+            "p(95)": 139.2,
+            "p(99)": 167.57,
+            "max": 171,
+            "min": 86,
+            "p(50)": 118.5
+        },
+        "http_req_waiting": {
+            "min": 4.786531,
+            "p(50)": 6.3399695000000005,
+            "p(95)": 551.0565557499997,
+            "p(99)": 687.9190292999998,
+            "max": 771.180696
+        },
+        "http_req_failed": {
+            "passes": 0,
+            "fails": 468,
+            "thresholds": {
+                "rate<0.01": false
+            },
+            "value": 0
+        },
+        "data_received": {
+            "count": 346133,
+            "rate": 84417.58737830684
+        },
+        "http_req_tls_handshaking": {
+            "p(50)": 0,
+            "p(95)": 0,
+            "p(99)": 0,
+            "max": 0,
+            "min": 0
+        },
+        "esr_enqueued_jobs_terminal": {
+            "passes": 50,
+            "fails": 0,
+            "thresholds": {
+                "rate==1": false
+            },
+            "value": 1
+        },
+        "checks": {
+            "passes": 618,
+            "fails": 0,
+            "thresholds": {
+                "rate>0.99": false
+            },
+            "value": 1
+        },
+        "http_req_receiving": {
+            "min": 0.02243,
+            "p(50)": 0.0863515,
+            "p(95)": 0.21129594999999993,
+            "p(99)": 0.3665908,
+            "max": 0.89295
+        },
+        "esr_server_queue_wait_ms": {
+            "min": 24,
+            "p(50)": 1340,
+            "p(95)": 2641.1,
+            "p(99)": 2752.59,
+            "max": 2757
+        },
+        "http_req_sending": {
+            "min": 0.009029,
+            "p(50)": 0.030105,
+            "p(95)": 0.06180734999999999,
+            "p(99)": 0.09529873999999987,
+            "max": 0.133943
+        },
+        "iteration_duration": {
+            "min": 854.063247,
+            "p(50)": 2415.4269515,
+            "p(95)": 4072.4909805499997,
+            "p(99)": 4098.78806016,
+            "max": 4098.804777
+        },
+        "data_sent": {
+            "count": 238242,
+            "rate": 58104.29763178482
+        },
+        "http_req_connecting": {
+            "p(95)": 12.413342149999982,
+            "p(99)": 17.58973177,
+            "max": 18.313199,
+            "min": 0,
+            "p(50)": 0
+        },
+        "http_req_duration": {
+            "min": 4.894368,
+            "p(50)": 6.4810585,
+            "p(95)": 551.1967685499998,
+            "p(99)": 688.1920296499998,
+            "max": 771.371139
+        },
+        "http_req_blocked": {
+            "min": 0.00282,
+            "p(50)": 0.0057894999999999995,
+            "p(95)": 14.132308699999987,
+            "p(99)": 19.58031891,
+            "max": 20.272985
+        },
+        "vus": {
+            "max": 47,
+            "value": 4,
+            "min": 4
+        },
+        "esr_enqueue_request_duration_ms": {
+            "p(95)": 665.91717075,
+            "p(99)": 695.1132510599999,
+            "max": 708.5958,
+            "min": 104.531805,
+            "p(50)": 474.224647
+        },
+        "esr_terminal_jobs": {
+            "count": 50,
+            "rate": 12.194385883216398
+        }
+    },
+    "root_group": {
+        "path": "",
+        "id": "d41d8cd98f00b204e9800998ecf8427e",
+        "groups": {},
+        "checks": {
+                "login status is 200": {
+                    "name": "login status is 200",
+                    "path": "::login status is 200",
+                    "id": "baba87e761865dc93085ee0c1fe25f4c",
+                    "passes": 50,
+                    "fails": 0
+                },
+                "login returns access token": {
+                    "name": "login returns access token",
+                    "path": "::login returns access token",
+                    "id": "6293b1160fa705bac3d194d14543619f",
+                    "passes": 50,
+                    "fails": 0
+                },
+                "enqueue status is 200 or 202": {
+                    "passes": 50,
+                    "fails": 0,
+                    "name": "enqueue status is 200 or 202",
+                    "path": "::enqueue status is 200 or 202",
+                    "id": "f97125ed2dce2ebcc6aaa295745610dd"
+                },
+                "enqueue returns task id": {
+                    "fails": 0,
+                    "name": "enqueue returns task id",
+                    "path": "::enqueue returns task id",
+                    "id": "fff2d882fde339a5f4b8ee6164c021ab",
+                    "passes": 50
+                },
+                "poll status is 200": {
+                    "passes": 368,
+                    "fails": 0,
+                    "name": "poll status is 200",
+                    "path": "::poll status is 200",
+                    "id": "7b54b3667d04a78cedf538fd3d433d8f"
+                },
+                "job reaches a terminal status": {
+                    "id": "0324e357614aeb86c9e5bfa8ba87b7c9",
+                    "passes": 50,
+                    "fails": 0,
+                    "name": "job reaches a terminal status",
+                    "path": "::job reaches a terminal status"
+                }
+            },
+        "name": ""
+    }
+}

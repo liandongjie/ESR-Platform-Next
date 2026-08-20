@@ -1,0 +1,135 @@
+
+         /\      Grafana   /‾‾/
+    /\  /  \     |\  __   /  /
+   /  \/    \    | |/ /  /   ‾‾\
+  /          \   |   (  |  (‾)  |
+ / __________ \  |_|\_\  \_____/
+
+     execution: local
+        script: /scripts/esr-load-test.js
+        output: -
+
+     scenarios: (100.00%) 1 scenario, 50 max VUs, 40s max duration (incl. graceful stop):
+              * api_read_path: 50 looping VUs for 30s (exec: scenarioA, gracefulStop: 10s)
+
+
+running (01.0s), 50/50 VUs, 5 complete and 0 interrupted iterations
+api_read_path   [   3% ] 50 VUs  01.0s/30s
+
+running (02.0s), 50/50 VUs, 70 complete and 0 interrupted iterations
+api_read_path   [   7% ] 50 VUs  02.0s/30s
+
+running (03.0s), 50/50 VUs, 140 complete and 0 interrupted iterations
+api_read_path   [  10% ] 50 VUs  03.0s/30s
+
+running (04.0s), 50/50 VUs, 203 complete and 0 interrupted iterations
+api_read_path   [  13% ] 50 VUs  04.0s/30s
+
+running (05.0s), 50/50 VUs, 253 complete and 0 interrupted iterations
+api_read_path   [  17% ] 50 VUs  05.0s/30s
+
+running (06.0s), 50/50 VUs, 305 complete and 0 interrupted iterations
+api_read_path   [  20% ] 50 VUs  06.0s/30s
+
+running (07.0s), 50/50 VUs, 355 complete and 0 interrupted iterations
+api_read_path   [  23% ] 50 VUs  07.0s/30s
+
+running (08.0s), 50/50 VUs, 407 complete and 0 interrupted iterations
+api_read_path   [  27% ] 50 VUs  08.0s/30s
+
+running (09.0s), 50/50 VUs, 454 complete and 0 interrupted iterations
+api_read_path   [  30% ] 50 VUs  09.0s/30s
+
+running (10.0s), 50/50 VUs, 508 complete and 0 interrupted iterations
+api_read_path   [  33% ] 50 VUs  10.0s/30s
+
+running (11.0s), 50/50 VUs, 561 complete and 0 interrupted iterations
+api_read_path   [  37% ] 50 VUs  11.0s/30s
+
+running (12.0s), 50/50 VUs, 606 complete and 0 interrupted iterations
+api_read_path   [  40% ] 50 VUs  12.0s/30s
+
+running (13.0s), 50/50 VUs, 669 complete and 0 interrupted iterations
+api_read_path   [  43% ] 50 VUs  13.0s/30s
+
+running (14.0s), 50/50 VUs, 717 complete and 0 interrupted iterations
+api_read_path   [  47% ] 50 VUs  14.0s/30s
+
+running (15.0s), 50/50 VUs, 758 complete and 0 interrupted iterations
+api_read_path   [  50% ] 50 VUs  15.0s/30s
+
+running (16.0s), 50/50 VUs, 813 complete and 0 interrupted iterations
+api_read_path   [  53% ] 50 VUs  16.0s/30s
+
+running (17.0s), 50/50 VUs, 871 complete and 0 interrupted iterations
+api_read_path   [  57% ] 50 VUs  17.0s/30s
+
+running (18.0s), 50/50 VUs, 936 complete and 0 interrupted iterations
+api_read_path   [  60% ] 50 VUs  18.0s/30s
+
+running (19.0s), 50/50 VUs, 998 complete and 0 interrupted iterations
+api_read_path   [  63% ] 50 VUs  19.0s/30s
+
+running (20.0s), 50/50 VUs, 1046 complete and 0 interrupted iterations
+api_read_path   [  67% ] 50 VUs  20.0s/30s
+
+running (21.0s), 50/50 VUs, 1102 complete and 0 interrupted iterations
+api_read_path   [  70% ] 50 VUs  21.0s/30s
+
+running (22.0s), 50/50 VUs, 1147 complete and 0 interrupted iterations
+api_read_path   [  73% ] 50 VUs  22.0s/30s
+
+running (23.0s), 50/50 VUs, 1207 complete and 0 interrupted iterations
+api_read_path   [  77% ] 50 VUs  23.0s/30s
+
+running (24.0s), 50/50 VUs, 1259 complete and 0 interrupted iterations
+api_read_path   [  80% ] 50 VUs  24.0s/30s
+
+running (25.0s), 50/50 VUs, 1309 complete and 0 interrupted iterations
+api_read_path   [  83% ] 50 VUs  25.0s/30s
+
+running (26.0s), 50/50 VUs, 1361 complete and 0 interrupted iterations
+api_read_path   [  87% ] 50 VUs  26.0s/30s
+
+running (27.0s), 50/50 VUs, 1414 complete and 0 interrupted iterations
+api_read_path   [  90% ] 50 VUs  27.0s/30s
+
+running (28.0s), 50/50 VUs, 1470 complete and 0 interrupted iterations
+api_read_path   [  93% ] 50 VUs  28.0s/30s
+
+running (29.0s), 50/50 VUs, 1511 complete and 0 interrupted iterations
+api_read_path   [  97% ] 50 VUs  29.0s/30s
+
+running (30.0s), 50/50 VUs, 1569 complete and 0 interrupted iterations
+api_read_path   [ 100% ] 50 VUs  30.0s/30s
+
+     ✓ login status is 200
+     ✓ login returns access token
+     ✓ list status is 200
+     ✓ status response is 200
+     ✓ artifact status is 200
+
+   ✓ checks.............................: 100.00% 8095 out of 8095
+     data_received......................: 11 MB   366 kB/s
+     data_sent..........................: 2.8 MB  91 kB/s
+   ✓ esr_artifact_candidate_available...: 100.00% 1619 out of 1619
+     http_req_blocked...................: min=1.8µs    p(50)=5.28µs   p(95)=14.9µs   p(99)=52.2µs   max=26.51ms
+     http_req_connecting................: min=0s       p(50)=0s       p(95)=0s       p(99)=0s       max=25.36ms
+     http_req_duration..................: min=4.68ms   p(50)=173.28ms p(95)=441.72ms p(99)=549.76ms max=746.34ms
+     ✓ { endpoint:list }................: min=6.43ms   p(50)=229.1ms  p(95)=441.34ms p(99)=531.17ms max=598.08ms
+     ✓ { endpoint:status }..............: min=4.68ms   p(50)=133.04ms p(95)=382.99ms p(99)=499.53ms max=603.48ms
+       { expected_response:true }.......: min=4.68ms   p(50)=173.28ms p(95)=441.72ms p(99)=549.76ms max=746.34ms
+   ✓ http_req_failed....................: 0.00%   0 out of 6476
+     http_req_receiving.................: min=14.61µs  p(50)=107.32µs p(95)=268.82µs p(99)=376.33µs max=2.48ms
+     http_req_sending...................: min=5.3µs    p(50)=28.32µs  p(95)=75.16µs  p(99)=117.11µs max=753.32µs
+     http_req_tls_handshaking...........: min=0s       p(50)=0s       p(95)=0s       p(99)=0s       max=0s
+     http_req_waiting...................: min=4.6ms    p(50)=173.16ms p(95)=441.47ms p(99)=549.62ms max=746.14ms
+     http_reqs..........................: 6476    210.187383/s
+     iteration_duration.................: min=305.08ms p(50)=966.07ms p(95)=1.19s    p(99)=1.27s    max=1.4s
+     iterations.........................: 1619    52.546846/s
+     vus................................: 50      min=50           max=50
+     vus_max............................: 50      min=50           max=50
+
+
+running (30.8s), 00/50 VUs, 1619 complete and 0 interrupted iterations
+api_read_path ✓ [ 100% ] 50 VUs  30s

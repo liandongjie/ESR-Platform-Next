@@ -1,0 +1,19 @@
+{
+  "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+      [
+        [118.895, 32.095],
+        [118.905, 32.095],
+        [118.905, 32.105],
+        [118.895, 32.105],
+        [118.895, 32.095]
+      ]
+    ]
+  },
+  "weights": [
+    { "code": "PM25", "weight_percent": 30 },
+    { "code": "AQI", "weight_percent": 40 },
+    { "code": "NDVI", "weight_percent": 30 }
+  ]
+}
