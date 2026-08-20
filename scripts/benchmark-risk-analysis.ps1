@@ -7,7 +7,8 @@ param(
     [switch]$VerifySourceTreeOnly,
     [switch]$PipelineProfile,
     [switch]$PipelineStageTiming,
-    [switch]$PipelineReadAttribution
+    [switch]$PipelineReadAttribution,
+    [switch]$PipelineHandleReuseApplicability
 )
 
 $ErrorActionPreference = "Stop"
@@ -28,12 +29,17 @@ $AllowedPipelineDiagnosticPaths = @(
 $SelectedDiagnosticModes = @(
     $PipelineProfile,
     $PipelineStageTiming,
-    $PipelineReadAttribution
+    $PipelineReadAttribution,
+    $PipelineHandleReuseApplicability
 ) | Where-Object { $_ }
 if ($SelectedDiagnosticModes.Count -gt 1) {
     throw "Pipeline diagnostic modes 不能同时启用。benchmark 未运行。"
 }
-$RequiresDiagnosticLineage = $PipelineStageTiming -or $PipelineReadAttribution
+$RequiresDiagnosticLineage = (
+    $PipelineStageTiming -or
+    $PipelineReadAttribution -or
+    $PipelineHandleReuseApplicability
+)
 
 $SubjectBaselineSha = $SubjectBaselineSha.ToLowerInvariant()
 $ProductionCandidateSha = $ProductionCandidateSha.ToLowerInvariant()
@@ -197,6 +203,9 @@ if ($PipelineStageTiming) {
 }
 if ($PipelineReadAttribution) {
     $BenchmarkArguments += "--pipeline-read-attribution"
+}
+if ($PipelineHandleReuseApplicability) {
+    $BenchmarkArguments += "--pipeline-handle-reuse-applicability"
 }
 if ($RequiresDiagnosticLineage) {
     $BenchmarkArguments += @(

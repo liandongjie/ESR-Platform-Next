@@ -15,6 +15,7 @@ import sys
 import tempfile
 import time
 from collections.abc import Sequence
+from contextlib import ExitStack
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any
@@ -74,6 +75,17 @@ RASTER_READ_MODES = (
     "data_plus_mask",
 )
 RASTER_READ_CACHE_SEMANTICS = "warm_process_and_os_cache_not_explicitly_flushed"
+HANDLE_REUSE_APPLICABILITY_SIZE = COMPUTE_SIZES["large"]
+HANDLE_REUSE_WINDOW_SHIFTS = {
+    "same_window": 0,
+    "half_overlap": 512,
+    "zero_block_overlap": 1152,
+}
+HANDLE_REUSE_MODES = (
+    "reopen_between_requests",
+    "reuse_same_process_handles",
+)
+HANDLE_REUSE_MIN_SPEEDUP = 1.5
 SOURCE_TREE_VERIFICATION_METHOD = "host_git_diff_and_untracked_allowlist_v1"
 ALLOWED_BENCHMARK_PATHS = (
     "backend/app/gis/risk_benchmark.py",
@@ -340,6 +352,52 @@ def _window_block_metrics(
         "estimated_decoded_cells": decoded_cells,
         "estimated_uncompressed_bytes": decoded_cells * np.dtype(dtype).itemsize,
         "read_amplification_ratio": decoded_cells / window_cells,
+    }
+
+
+def _window_overlap_metrics(
+    base: Window,
+    target: Window,
+    block_shape: tuple[int, int],
+) -> dict[str, int | float]:
+    overlap_width = max(
+        0,
+        min(base.col_off + base.width, target.col_off + target.width)
+        - max(base.col_off, target.col_off),
+    )
+    overlap_height = max(
+        0,
+        min(base.row_off + base.height, target.row_off + target.height)
+        - max(base.row_off, target.row_off),
+    )
+    pixel_overlap_cells = int(overlap_width * overlap_height)
+
+    block_rows, block_cols = block_shape
+
+    def touched_blocks(window: Window) -> set[tuple[int, int]]:
+        return {
+            (row, col)
+            for row in range(
+                math.floor(window.row_off / block_rows),
+                math.ceil((window.row_off + window.height) / block_rows),
+            )
+            for col in range(
+                math.floor(window.col_off / block_cols),
+                math.ceil((window.col_off + window.width) / block_cols),
+            )
+        }
+
+    base_blocks = touched_blocks(base)
+    target_blocks = touched_blocks(target)
+    shared_blocks = base_blocks & target_blocks
+    target_cells = int(target.width * target.height)
+    return {
+        "pixel_overlap_cells": pixel_overlap_cells,
+        "pixel_overlap_ratio": pixel_overlap_cells / target_cells,
+        "base_touched_block_count": len(base_blocks),
+        "target_touched_block_count": len(target_blocks),
+        "shared_block_count": len(shared_blocks),
+        "target_block_cache_coverage_ratio": len(shared_blocks) / len(target_blocks),
     }
 
 
@@ -1569,6 +1627,497 @@ def run_raster_read_attribution(
     return result, paths
 
 
+def _read_handle_reuse_sequence(
+    opened: Sequence[tuple[Any, Any]],
+    window: Window,
+) -> tuple[int, list[dict[str, Any]], dict[str, np.ma.MaskedArray]]:
+    timings: list[tuple[Any, int]] = []
+    bands: dict[str, np.ma.MaskedArray] = {}
+    sequence_started = time.perf_counter_ns()
+    for indicator, dataset in opened:
+        started = time.perf_counter_ns()
+        band = dataset.read(1, window=window, masked=True)
+        elapsed_ns = time.perf_counter_ns() - started
+        bands[indicator.code] = band
+        timings.append((indicator, elapsed_ns))
+    sequence_elapsed_ns = time.perf_counter_ns() - sequence_started
+    events = []
+    for indicator, elapsed_ns in timings:
+        band = bands[indicator.code]
+        events.append(
+            {
+                "indicator_code": indicator.code,
+                "filename": indicator.filename,
+                "rows": int(band.shape[0]),
+                "cols": int(band.shape[1]),
+                "window_cells": int(band.size),
+                "valid_cells": int(
+                    np.count_nonzero(~np.ma.getmaskarray(band))
+                ),
+                "elapsed_ns": elapsed_ns,
+            }
+        )
+    return sequence_elapsed_ns, events, bands
+
+
+def _run_handle_reuse_mode(
+    raster_dir: Path,
+    base_window: Window,
+    target_window: Window,
+    mode: str,
+) -> tuple[int, list[dict[str, Any]], dict[str, np.ma.MaskedArray]]:
+    def open_catalog(stack: ExitStack) -> list[tuple[Any, Any]]:
+        return [
+            (
+                indicator,
+                stack.enter_context(rasterio.open(raster_dir / indicator.filename)),
+            )
+            for indicator in INDICATORS
+        ]
+
+    if mode == "reopen_between_requests":
+        with ExitStack() as stack:
+            primed = open_catalog(stack)
+            for _, dataset in primed:
+                dataset.read(1, window=base_window, masked=True)
+        with ExitStack() as stack:
+            return _read_handle_reuse_sequence(open_catalog(stack), target_window)
+
+    if mode == "reuse_same_process_handles":
+        with ExitStack() as stack:
+            opened = open_catalog(stack)
+            for _, dataset in opened:
+                dataset.read(1, window=base_window, masked=True)
+            return _read_handle_reuse_sequence(opened, target_window)
+
+    raise ValueError(f"不支持的 DatasetReader reuse mode: {mode}")
+
+
+def _verify_handle_reuse_equivalence(
+    reopen: dict[str, np.ma.MaskedArray],
+    reuse: dict[str, np.ma.MaskedArray],
+) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    for indicator in INDICATORS:
+        reopened = reopen[indicator.code]
+        reused = reuse[indicator.code]
+        if reopened.shape != reused.shape or reopened.dtype != reused.dtype:
+            raise RuntimeError(f"{indicator.code} 两种句柄模式的 shape 或 dtype 不一致")
+        if not np.array_equal(reopened.data, reused.data, equal_nan=True):
+            raise RuntimeError(f"{indicator.code} 两种句柄模式的像元值不一致")
+        if not np.array_equal(
+            np.ma.getmaskarray(reopened), np.ma.getmaskarray(reused)
+        ):
+            raise RuntimeError(f"{indicator.code} 两种句柄模式的 mask 不一致")
+        records.append(
+            {
+                "indicator_code": indicator.code,
+                "rows": int(reopened.shape[0]),
+                "cols": int(reopened.shape[1]),
+                "dtype": str(reopened.dtype),
+                "valid_cells": int(
+                    np.count_nonzero(~np.ma.getmaskarray(reopened))
+                ),
+                "equivalent": True,
+            }
+        )
+    return records
+
+
+def _handle_reuse_summaries(
+    samples: Sequence[dict[str, Any]],
+    relationships: Sequence[str],
+) -> list[dict[str, Any]]:
+    summaries: list[dict[str, Any]] = []
+    for relationship in relationships:
+        modes = {
+            mode: _numeric_summary(
+                [
+                    sample["sequence_elapsed_ns"] / 1_000_000
+                    for sample in samples
+                    if sample["relationship"] == relationship
+                    and sample["mode"] == mode
+                ]
+            )
+            for mode in HANDLE_REUSE_MODES
+        }
+        reopen = modes["reopen_between_requests"]
+        reuse = modes["reuse_same_process_handles"]
+        per_indicator: list[dict[str, Any]] = []
+        for indicator in INDICATORS:
+            indicator_modes = {
+                mode: _numeric_summary(
+                    [
+                        event["elapsed_ns"] / 1_000_000
+                        for sample in samples
+                        if sample["relationship"] == relationship
+                        and sample["mode"] == mode
+                        for event in sample["indicator_events"]
+                        if event["indicator_code"] == indicator.code
+                    ]
+                )
+                for mode in HANDLE_REUSE_MODES
+            }
+            per_indicator.append(
+                {
+                    "indicator_code": indicator.code,
+                    "modes": indicator_modes,
+                    "median_speedup": (
+                        indicator_modes["reopen_between_requests"]["median"]
+                        / indicator_modes["reuse_same_process_handles"]["median"]
+                    ),
+                }
+            )
+        summaries.append(
+            {
+                "relationship": relationship,
+                "modes": modes,
+                "median_speedup": reopen["median"] / reuse["median"],
+                "reuse_median_below_reopen_min": reuse["median"] < reopen["min"],
+                "quantitative_gate_pass": (
+                    reopen["median"] / reuse["median"] >= HANDLE_REUSE_MIN_SPEEDUP
+                    and reuse["median"] < reopen["min"]
+                ),
+                "per_indicator": per_indicator,
+            }
+        )
+    return summaries
+
+
+def _handle_reuse_markdown(result: dict[str, Any]) -> str:
+    source = result["source_provenance"]
+    lineage = result["instrumentation_lineage"]
+    scenarios = result["handle_reuse_applicability"]["scenarios"]
+    summaries = {
+        item["relationship"]: item
+        for item in result["handle_reuse_applicability"]["summaries"]
+    }
+    lines = [
+        "# Risk DatasetReader Handle Reuse Applicability",
+        "",
+        f"- Production candidate: `{lineage['production_candidate_sha']}`",
+        f"- Diagnostic subject: `{lineage['instrumented_subject_sha']}`",
+        f"- Repository HEAD: `{source['repository_head_sha']}`",
+        "- Source tree and diagnostic lineage verified: `true`",
+        f"- Benchmark elapsed: `{result['benchmark_elapsed_seconds']:.3f}s`",
+        (
+            "- Repetition: warm-up "
+            f"{result['configuration']['warmups_per_relationship_and_mode']} + measured "
+            f"{result['configuration']['measured_runs_per_relationship_and_mode']} "
+            "per relationship/mode"
+        ),
+        "",
+        "## Timing semantics",
+        "",
+        f"- Cache state: `{result['timing_semantics']['cache_state']}`.",
+        "- Windows OS cache is not flushed; these are not physical cold-disk timings.",
+        "- Only target `read(masked=True)` calls are timed.",
+        "- Open, close, base-window priming and result equivalence run outside timing.",
+        "- This is a single-process, single-thread diagnostic, not full Pipeline latency.",
+        "",
+        "## Window relationships",
+        "",
+        "| Relationship | Column shift | Pixel overlap | Block cache coverage |",
+        "|---|---:|---:|---:|",
+    ]
+    for scenario in scenarios:
+        coverages = [
+            item["target_block_cache_coverage_ratio"]
+            for item in scenario["per_indicator_block_overlap"]
+        ]
+        coverage = (
+            f"{coverages[0] * 100:.1f}%"
+            if min(coverages) == max(coverages)
+            else f"{min(coverages) * 100:.1f}%–{max(coverages) * 100:.1f}%"
+        )
+        lines.append(
+            f"| `{scenario['relationship']}` | {scenario['column_shift']} | "
+            f"{scenario['pixel_overlap_ratio'] * 100:.1f}% | {coverage} |"
+        )
+    lines.extend(
+        [
+            "",
+            "## 12-TIF sequence timing",
+            "",
+            "All values are min/median/max milliseconds.",
+            "",
+            "| Relationship | Reopen | Reuse | Median speedup | Reuse median < reopen min | Gate |",
+            "|---|---:|---:|---:|---|---|",
+        ]
+    )
+    for scenario in scenarios:
+        summary = summaries[scenario["relationship"]]
+        lines.append(
+            f"| `{scenario['relationship']}` | "
+            f"{_range_text(summary['modes']['reopen_between_requests'])} | "
+            f"{_range_text(summary['modes']['reuse_same_process_handles'])} | "
+            f"{summary['median_speedup']:.2f}× | "
+            f"{str(summary['reuse_median_below_reopen_min']).lower()} | "
+            f"{str(summary['quantitative_gate_pass']).lower()} |"
+        )
+    lines.extend(
+        [
+            "",
+            (
+                f"The quantitative gate requires at least {HANDLE_REUSE_MIN_SPEEDUP:.1f}× "
+                "median speedup and reuse median below reopen minimum. Variability and "
+                "semantic equivalence still require manual review."
+            ),
+            "",
+            "All sequence samples, per-TIF nanosecond events, environment metadata, "
+            "GDAL configuration and TIF SHA-256 values are retained in JSON/CSV.",
+            "",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def _write_handle_reuse_csv(
+    path: Path,
+    samples: Sequence[dict[str, Any]],
+) -> None:
+    fields = [
+        "relationship",
+        "column_shift",
+        "mode",
+        "sample_index",
+        "order_index",
+        "sequence_elapsed_ns",
+        "indicator_code",
+        "filename",
+        "rows",
+        "cols",
+        "window_cells",
+        "valid_cells",
+        "elapsed_ns",
+    ]
+    with path.open("w", encoding="utf-8", newline="") as stream:
+        writer = csv.DictWriter(stream, fieldnames=fields)
+        writer.writeheader()
+        for sample in samples:
+            for event in sample["indicator_events"]:
+                writer.writerow(
+                    {
+                        **{field: sample[field] for field in fields[:6]},
+                        **event,
+                    }
+                )
+
+
+def run_handle_reuse_applicability(
+    *,
+    raster_dir: Path,
+    output_dir: Path,
+    repository_head_sha: str,
+    source_tree_verified: bool,
+    baseline_is_ancestor: bool,
+    production_candidate_is_ancestor: bool,
+    diagnostic_source_tree_verified: bool,
+    subject_baseline_sha: str,
+    production_candidate_sha: str = PRODUCTION_CANDIDATE_SHA,
+    verification_method: str = SOURCE_TREE_VERIFICATION_METHOD,
+    allowed_benchmark_paths: Sequence[str] = ALLOWED_BENCHMARK_PATHS,
+    tracked_differences: Sequence[str] = (),
+    untracked_paths: Sequence[str] = (),
+    allowed_diagnostic_paths: Sequence[str] = ALLOWED_PIPELINE_DIAGNOSTIC_PATHS,
+    diagnostic_differences: Sequence[str] = (),
+    warmups: int = DEFAULT_WARMUPS,
+    runs: int = DEFAULT_RUNS,
+    size: int = HANDLE_REUSE_APPLICABILITY_SIZE,
+    window_shifts: dict[str, int] = HANDLE_REUSE_WINDOW_SHIFTS,
+) -> tuple[dict[str, Any], dict[str, Path]]:
+    raster_dir = raster_dir.expanduser().resolve()
+    provenance = _verified_provenance(
+        subject_baseline_sha,
+        repository_head_sha,
+        verification_method,
+        source_tree_verified,
+        baseline_is_ancestor,
+        allowed_benchmark_paths,
+        tracked_differences,
+        untracked_paths,
+    )
+    lineage = _verified_instrumentation_lineage(
+        production_candidate_sha,
+        subject_baseline_sha,
+        production_candidate_is_ancestor,
+        diagnostic_source_tree_verified,
+        allowed_diagnostic_paths,
+        diagnostic_differences,
+    )
+    if warmups < 0 or runs < 1 or size < 1:
+        raise ValueError("warmups 必须 >= 0，runs/size 必须 >= 1")
+    if tuple(window_shifts) != tuple(HANDLE_REUSE_WINDOW_SHIFTS):
+        raise ValueError("DatasetReader reuse window relationships 与 Contract 不一致")
+
+    started = time.perf_counter_ns()
+    output_dir.mkdir(parents=True, exist_ok=True)
+    reference_path = raster_dir / INDICATOR_BY_CODE["PM25"].filename
+    with rasterio.open(reference_path) as reference:
+        base_window, grid_center = _scenario_window(reference, size)
+
+    scenarios: list[dict[str, Any]] = []
+    samples: list[dict[str, Any]] = []
+    for relationship_index, (relationship, column_shift) in enumerate(
+        window_shifts.items()
+    ):
+        target_window = Window(
+            col_off=base_window.col_off + column_shift,
+            row_off=base_window.row_off,
+            width=base_window.width,
+            height=base_window.height,
+        )
+        per_indicator_overlap: list[dict[str, Any]] = []
+        for indicator in INDICATORS:
+            path = raster_dir / indicator.filename
+            with rasterio.open(path) as dataset:
+                if (
+                    target_window.col_off < 0
+                    or target_window.row_off < 0
+                    or target_window.col_off + target_window.width > dataset.width
+                    or target_window.row_off + target_window.height > dataset.height
+                ):
+                    raise ValueError(
+                        f"{relationship} 的目标窗口超出 {indicator.code} 栅格范围"
+                    )
+                per_indicator_overlap.append(
+                    {
+                        "indicator_code": indicator.code,
+                        "block_rows": dataset.block_shapes[0][0],
+                        "block_cols": dataset.block_shapes[0][1],
+                        **_window_overlap_metrics(
+                            base_window, target_window, dataset.block_shapes[0]
+                        ),
+                    }
+                )
+
+        for _ in range(warmups):
+            for mode in HANDLE_REUSE_MODES:
+                _run_handle_reuse_mode(
+                    raster_dir, base_window, target_window, mode
+                )
+
+        equivalence: list[dict[str, Any]] | None = None
+        for sample_index in range(runs):
+            mode_order = list(HANDLE_REUSE_MODES)
+            if (relationship_index + sample_index) % 2:
+                mode_order.reverse()
+            pair_results: dict[str, dict[str, np.ma.MaskedArray]] = {}
+            for order_index, mode in enumerate(mode_order):
+                sequence_elapsed_ns, events, bands = _run_handle_reuse_mode(
+                    raster_dir, base_window, target_window, mode
+                )
+                pair_results[mode] = bands
+                samples.append(
+                    {
+                        "relationship": relationship,
+                        "column_shift": column_shift,
+                        "mode": mode,
+                        "sample_index": sample_index,
+                        "order_index": order_index,
+                        "sequence_elapsed_ns": sequence_elapsed_ns,
+                        "indicator_events": events,
+                    }
+                )
+            equivalence = _verify_handle_reuse_equivalence(
+                pair_results["reopen_between_requests"],
+                pair_results["reuse_same_process_handles"],
+            )
+
+        if equivalence is None:
+            raise RuntimeError("DatasetReader reuse applicability 未产生结果")
+        pixel_metrics = per_indicator_overlap[0]
+        scenarios.append(
+            {
+                "relationship": relationship,
+                "column_shift": column_shift,
+                "base_window": {
+                    "row_off": int(base_window.row_off),
+                    "col_off": int(base_window.col_off),
+                    "height": int(base_window.height),
+                    "width": int(base_window.width),
+                },
+                "target_window": {
+                    "row_off": int(target_window.row_off),
+                    "col_off": int(target_window.col_off),
+                    "height": int(target_window.height),
+                    "width": int(target_window.width),
+                },
+                "grid_aligned_center": list(grid_center),
+                "pixel_overlap_cells": pixel_metrics["pixel_overlap_cells"],
+                "pixel_overlap_ratio": pixel_metrics["pixel_overlap_ratio"],
+                "per_indicator_block_overlap": per_indicator_overlap,
+                "read_equivalence": equivalence,
+            }
+        )
+
+    relationships = list(window_shifts)
+    result = {
+        "schema_version": 1,
+        "benchmark": "risk-datasetreader-handle-reuse-applicability",
+        "production_candidate_sha": lineage["production_candidate_sha"],
+        "diagnostic_subject_sha": lineage["instrumented_subject_sha"],
+        "source_provenance": provenance,
+        "instrumentation_lineage": lineage,
+        "benchmark_elapsed_seconds": _elapsed_ms(started) / 1000.0,
+        "configuration": {
+            "warmups_per_relationship_and_mode": warmups,
+            "measured_runs_per_relationship_and_mode": runs,
+            "window_size": size,
+            "indicator_codes": [indicator.code for indicator in INDICATORS],
+            "window_shifts": dict(window_shifts),
+            "modes": list(HANDLE_REUSE_MODES),
+            "measured_sequence_sample_count": len(samples),
+            "measured_indicator_event_count": sum(
+                len(sample["indicator_events"]) for sample in samples
+            ),
+            "minimum_decision_speedup": HANDLE_REUSE_MIN_SPEEDUP,
+        },
+        "timing_semantics": {
+            "clock": "time.perf_counter_ns",
+            "raw_sample_unit": "nanoseconds",
+            "cache_state": RASTER_READ_CACHE_SEMANTICS,
+            "target_operation": "dataset.read(1, window=target, masked=True)",
+            "target_read_only_timed": True,
+            "open_close_outside_timing": True,
+            "base_window_prime_outside_timing": True,
+            "result_equivalence_outside_timing": True,
+            "handles_recreated_per_sample": True,
+            "mode_order": "alternates by relationship and sample index",
+            "execution_scope": "single_process_single_thread_diagnostic",
+            "physical_cold_disk_claimed": False,
+            "comparable_to_full_pipeline_latency": False,
+        },
+        "gdal_runtime": {
+            "version": rasterio.__gdal_version__,
+            "GDAL_CACHEMAX": rasterio.env.get_gdal_config("GDAL_CACHEMAX"),
+            "GDAL_NUM_THREADS": rasterio.env.get_gdal_config("GDAL_NUM_THREADS"),
+            "VSI_CACHE": rasterio.env.get_gdal_config("VSI_CACHE"),
+        },
+        "environment": _environment_metadata(),
+        "raster_dataset": {
+            "directory": str(raster_dir),
+            "files": _raster_metadata(raster_dir),
+        },
+        "handle_reuse_applicability": {
+            "scenarios": scenarios,
+            "raw_sequence_samples": samples,
+            "summaries": _handle_reuse_summaries(samples, relationships),
+        },
+    }
+    paths = {
+        "json": output_dir / "risk-handle-reuse-applicability.json",
+        "csv": output_dir / "risk-handle-reuse-applicability.csv",
+        "markdown": output_dir / "risk-handle-reuse-applicability.md",
+    }
+    paths["json"].write_text(
+        json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    _write_handle_reuse_csv(paths["csv"], samples)
+    paths["markdown"].write_text(_handle_reuse_markdown(result), encoding="utf-8")
+    return result, paths
+
+
 def run_benchmark(
     *,
     raster_dir: Path,
@@ -1841,6 +2390,7 @@ def _parse_args() -> argparse.Namespace:
     mode.add_argument("--pipeline-profile", action="store_true")
     mode.add_argument("--pipeline-stage-timing", action="store_true")
     mode.add_argument("--pipeline-read-attribution", action="store_true")
+    mode.add_argument("--pipeline-handle-reuse-applicability", action="store_true")
     parser.add_argument("--production-candidate-sha")
     parser.add_argument("--production-candidate-is-ancestor", action="store_true")
     parser.add_argument("--diagnostic-source-tree-verified", action="store_true")
@@ -1851,6 +2401,36 @@ def _parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = _parse_args()
+    if args.pipeline_handle_reuse_applicability:
+        if args.production_candidate_sha is None or args.allowed_diagnostic_path is None:
+            raise ValueError(
+                "DatasetReader reuse applicability 需要 production candidate 和 "
+                "diagnostic allowlist"
+            )
+        result, paths = run_handle_reuse_applicability(
+            raster_dir=args.raster_dir,
+            output_dir=args.output_dir,
+            subject_baseline_sha=args.subject_baseline_sha,
+            repository_head_sha=args.repository_head_sha,
+            verification_method=args.source_tree_verification_method,
+            source_tree_verified=args.source_tree_verified,
+            baseline_is_ancestor=args.baseline_is_ancestor,
+            allowed_benchmark_paths=args.allowed_benchmark_path,
+            tracked_differences=args.tracked_difference,
+            untracked_paths=args.untracked_path,
+            production_candidate_sha=args.production_candidate_sha,
+            production_candidate_is_ancestor=args.production_candidate_is_ancestor,
+            diagnostic_source_tree_verified=args.diagnostic_source_tree_verified,
+            allowed_diagnostic_paths=args.allowed_diagnostic_path,
+            diagnostic_differences=args.diagnostic_difference,
+        )
+        for kind, path in paths.items():
+            print(f"[OK] {kind}: {path}")
+        print(
+            "[INFO] DatasetReader reuse applicability elapsed: "
+            f"{result['benchmark_elapsed_seconds']:.3f}s"
+        )
+        return 0
     if args.pipeline_read_attribution:
         if args.production_candidate_sha is None or args.allowed_diagnostic_path is None:
             raise ValueError(
