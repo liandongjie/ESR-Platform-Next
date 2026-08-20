@@ -14,6 +14,7 @@ from app.services.risk_analysis_jobs import (
     RiskAnalysisArtifactError,
     RiskAnalysisJobService,
     build_risk_analysis_spatial_result,
+    validate_risk_analysis_raster,
     write_failure_manifest,
 )
 
@@ -65,6 +66,185 @@ def _request() -> RiskAnalysisJobRequest:
             ],
         }
     )
+
+
+def _success_manifest(
+    *,
+    task_id: str,
+    shape: tuple[int, int],
+    nodata: float,
+    statistics: dict[str, int | float],
+) -> RiskAnalysisSuccessResult:
+    return RiskAnalysisSuccessResult.model_validate(
+        {
+            "task_id": task_id,
+            "status": "SUCCEEDED",
+            "algorithm_version": "weighted-overlay-v1",
+            "geometry": {"type": "Polygon", "bounds": [118.0, 31.9, 118.1, 32.0]},
+            "grid": {"crs": "EPSG:4326", "shape": shape, "nodata": nodata},
+            "statistics": statistics,
+            "indicators": [
+                {
+                    "code": "a",
+                    "name": "指标A",
+                    "weight_percent": 100.0,
+                    "statistics": statistics,
+                }
+            ],
+            "artifacts": {
+                "raster": f"risk-analysis/{task_id}/risk.tif",
+                "manifest": f"risk-analysis/{task_id}/result.json",
+            },
+        }
+    )
+
+
+def _write_result_raster(
+    tmp_path: Path,
+    *,
+    task_id: str,
+    values: np.ndarray,
+    nodata: float = -9999.0,
+) -> Path:
+    runtime_dir = tmp_path / "runtime"
+    task_dir = runtime_dir / "risk-analysis" / task_id
+    task_dir.mkdir(parents=True)
+    _write_raster(task_dir / "risk.tif", values, nodata=nodata)
+    return runtime_dir
+
+
+def test_validate_risk_raster_keeps_zero_and_skips_masked_or_non_finite_values(
+    tmp_path: Path,
+):
+    task_id = "task-direct-valid"
+    nodata = -9999.0
+    values = np.array(
+        [[0.0, 0.25, nodata], [np.nan, np.inf, 1.0]],
+        dtype="float32",
+    )
+    runtime_dir = _write_result_raster(
+        tmp_path,
+        task_id=task_id,
+        values=values,
+        nodata=nodata,
+    )
+    manifest = _success_manifest(
+        task_id=task_id,
+        shape=values.shape,
+        nodata=nodata,
+        statistics={
+            "valid_pixel_count": 3,
+            "minimum": 0.0,
+            "maximum": 1.0,
+            "mean": 5.0 / 12.0,
+        },
+    )
+
+    band, transform = validate_risk_analysis_raster(
+        runtime_dir=runtime_dir,
+        task_id=task_id,
+        manifest=manifest,
+    )
+
+    assert band.dtype == np.dtype("float32")
+    np.testing.assert_array_equal(np.ma.getmaskarray(band), values == nodata)
+    assert transform == from_origin(118.0, 32.0, 0.01, 0.01)
+
+
+def test_validate_risk_raster_accepts_empty_finite_valid_set(tmp_path: Path):
+    task_id = "task-direct-empty"
+    nodata = -9999.0
+    values = np.array([[nodata, np.nan, np.inf]], dtype="float32")
+    runtime_dir = _write_result_raster(
+        tmp_path,
+        task_id=task_id,
+        values=values,
+        nodata=nodata,
+    )
+    manifest = _success_manifest(
+        task_id=task_id,
+        shape=values.shape,
+        nodata=nodata,
+        statistics={
+            "valid_pixel_count": 0,
+            "minimum": 0.0,
+            "maximum": 0.0,
+            "mean": 0.0,
+        },
+    )
+
+    band, _ = validate_risk_analysis_raster(
+        runtime_dir=runtime_dir,
+        task_id=task_id,
+        manifest=manifest,
+    )
+
+    assert band.count() == 2
+    assert np.isfinite(band.compressed()).sum() == 0
+
+
+@pytest.mark.parametrize("value", [-0.01, 1.01])
+def test_validate_risk_raster_rejects_out_of_range_before_count_mismatch(
+    tmp_path: Path,
+    value: float,
+):
+    task_id = f"task-direct-range-{value}"
+    values = np.array([[value]], dtype="float32")
+    runtime_dir = _write_result_raster(tmp_path, task_id=task_id, values=values)
+    manifest = _success_manifest(
+        task_id=task_id,
+        shape=values.shape,
+        nodata=-9999.0,
+        statistics={
+            "valid_pixel_count": 0,
+            "minimum": 0.0,
+            "maximum": 0.0,
+            "mean": 0.0,
+        },
+    )
+
+    with pytest.raises(RiskAnalysisArtifactError, match="超出 \\[0,1\\]"):
+        validate_risk_analysis_raster(
+            runtime_dir=runtime_dir,
+            task_id=task_id,
+            manifest=manifest,
+        )
+
+
+@pytest.mark.parametrize(
+    ("statistics", "error_message"),
+    [
+        (
+            {"valid_pixel_count": 1, "minimum": 0.25, "maximum": 0.75, "mean": 0.5},
+            "有效像元数与结果清单不一致",
+        ),
+        (
+            {"valid_pixel_count": 2, "minimum": 0.25, "maximum": 0.75, "mean": 0.6},
+            "统计值与结果清单不一致",
+        ),
+    ],
+)
+def test_validate_risk_raster_rejects_manifest_value_mismatch(
+    tmp_path: Path,
+    statistics: dict[str, int | float],
+    error_message: str,
+):
+    task_id = "task-direct-manifest-mismatch"
+    values = np.array([[0.25, 0.75]], dtype="float32")
+    runtime_dir = _write_result_raster(tmp_path, task_id=task_id, values=values)
+    manifest = _success_manifest(
+        task_id=task_id,
+        shape=values.shape,
+        nodata=-9999.0,
+        statistics=statistics,
+    )
+
+    with pytest.raises(RiskAnalysisArtifactError, match=error_message):
+        validate_risk_analysis_raster(
+            runtime_dir=runtime_dir,
+            task_id=task_id,
+            manifest=manifest,
+        )
 
 
 def test_job_service_persists_task_scoped_raster_and_manifest(tmp_path: Path):

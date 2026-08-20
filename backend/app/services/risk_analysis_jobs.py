@@ -180,21 +180,16 @@ def validate_risk_analysis_raster(
         raise RiskAnalysisArtifactError("风险栅格文件无法读取") from exc
 
     mask = np.ma.getmaskarray(band)
-    valid_values: list[float] = []
-    for row, col in np.ndindex(band.shape):
-        value = float(band.data[row, col])
-        if mask[row, col] or not np.isfinite(value):
-            continue
-        if not 0.0 <= value <= 1.0:
-            raise RiskAnalysisArtifactError("风险栅格存在超出 [0,1] 的有效值")
-        valid_values.append(value)
+    valid_values = band.data[~mask & np.isfinite(band.data)]
+    if np.any((valid_values < 0.0) | (valid_values > 1.0)):
+        raise RiskAnalysisArtifactError("风险栅格存在超出 [0,1] 的有效值")
 
-    if len(valid_values) != manifest.statistics.valid_pixel_count:
+    if valid_values.size != manifest.statistics.valid_pixel_count:
         raise RiskAnalysisArtifactError("风险栅格有效像元数与结果清单不一致")
-    if valid_values:
+    if valid_values.size:
         actual_statistics = (
-            min(valid_values),
-            max(valid_values),
+            valid_values.min(),
+            valid_values.max(),
             float(np.mean(valid_values, dtype=np.float64)),
         )
         expected_statistics = (
