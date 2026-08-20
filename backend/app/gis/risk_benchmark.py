@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import argparse
+import cProfile
 import csv
 import hashlib
 import json
 import math
 import os
 import platform
+import pstats
 import re
 import statistics
 import sys
@@ -23,7 +25,10 @@ from rasterio.windows import bounds as window_bounds
 from shapely.geometry import box, mapping
 
 from app import create_app
+from app.gis.geojson import parse_geojson_geometry
 from app.gis.indicators import INDICATOR_BY_CODE, INDICATORS
+from app.gis.risk_models import IndicatorWeight
+from app.gis.risk_pipeline import RiskAnalysisPipeline
 from app.schemas.risk_analysis import RiskAnalysisJobRequest, RiskAnalysisSuccessResult
 from app.services.risk_analysis_jobs import (
     RiskAnalysisJobService,
@@ -43,6 +48,8 @@ VALIDATION_TIMING = "standalone_post_execute_warm_cache"
 VALIDATION_INCLUDED_IN_TOTAL_SERVICE = False
 DEFAULT_WARMUPS = 1
 DEFAULT_RUNS = 5
+PIPELINE_PROFILE_SIZE = COMPUTE_SIZES["large"]
+PIPELINE_PROFILE_TOP_N = 30
 SOURCE_TREE_VERIFICATION_METHOD = "host_git_diff_and_untracked_allowlist_v1"
 ALLOWED_BENCHMARK_PATHS = (
     "backend/app/gis/risk_benchmark.py",
@@ -485,6 +492,270 @@ def _summaries(
     return summaries
 
 
+def _profile_entries(
+    profiler: cProfile.Profile,
+    *,
+    sort_by: str,
+    limit: int,
+) -> list[dict[str, Any]]:
+    if sort_by not in {"self_seconds", "cumulative_seconds"}:
+        raise ValueError(f"不支持的 profile 排序字段: {sort_by}")
+    entries: list[dict[str, Any]] = []
+    for (filename, line, function), values in pstats.Stats(profiler).stats.items():
+        primitive_calls, total_calls, self_seconds, cumulative_seconds, _ = values
+        normalized = filename.replace("\\", "/")
+        if normalized.startswith("/app/"):
+            normalized = normalized.removeprefix("/app/")
+        entries.append(
+            {
+                "file": normalized,
+                "line": line,
+                "function": function,
+                "primitive_calls": primitive_calls,
+                "total_calls": total_calls,
+                "self_seconds": self_seconds,
+                "cumulative_seconds": cumulative_seconds,
+            }
+        )
+    return sorted(entries, key=lambda item: item[sort_by], reverse=True)[:limit]
+
+
+def _profile_markdown(result: dict[str, Any]) -> str:
+    lines = [
+        "# Risk Analysis Pipeline cProfile",
+        "",
+        f"- Subject production candidate: `{result['source_provenance']['subject_baseline_sha']}`",
+        f"- Repository HEAD: `{result['source_provenance']['repository_head_sha']}`",
+        (
+            "- Source-tree verification: "
+            f"`{result['source_provenance']['source_tree_verification_method']}`"
+        ),
+        "- Source tree verified: `true`",
+        f"- Profile elapsed: `{result['profile_elapsed_seconds']:.3f}s`",
+        (
+            "- Repetition: warm-up "
+            f"{result['configuration']['warmups_per_scenario']} + profiled "
+            f"{result['configuration']['measured_runs_per_scenario']} per scenario"
+        ),
+        "",
+        "## Profiling semantics",
+        "",
+        "- `cProfile` wraps only `RiskAnalysisPipeline.run()`.",
+        (
+            "- Profiled wall time includes cProfile overhead and must not be compared "
+            "with baseline latency."
+        ),
+        "- Function rankings use aggregate self/cumulative time across all measured runs.",
+        "",
+        "## Scenarios",
+        "",
+        "Profiled wall time is min/median/max milliseconds and is diagnostic only.",
+        "",
+        "| Indicators | Rows×Cols | Cells | Valid cells | Profiled wall time | Profile file |",
+        "|---:|---:|---:|---:|---:|---|",
+    ]
+    for summary in result["pipeline_profile"]["summaries"]:
+        scenario = next(
+            item
+            for item in result["pipeline_profile"]["scenarios"]
+            if item["indicator_count"] == summary["indicator_count"]
+        )
+        lines.append(
+            f"| {summary['indicator_count']} | {summary['rows']}×{summary['cols']} | "
+            f"{summary['window_cells']} | {_range_text(summary['valid_cells'], 0)} | "
+            f"{_range_text(summary['metrics']['profiled_pipeline_elapsed_ms'])} | "
+            f"`{scenario['profile_file']}` |"
+        )
+    for scenario in result["pipeline_profile"]["scenarios"]:
+        lines.extend(
+            [
+                "",
+                f"## {scenario['indicator_count']}-indicator hotspots",
+                "",
+                "### Top cumulative time",
+                "",
+                "| Function | Calls | Self s | Cumulative s |",
+                "|---|---:|---:|---:|",
+            ]
+        )
+        for entry in scenario["top_cumulative"][:10]:
+            label = (
+                f"{entry['file']}:{entry['line']}:{entry['function']}".replace("|", "\\|")
+            )
+            lines.append(
+                f"| `{label}` | {entry['total_calls']} | {entry['self_seconds']:.6f} | "
+                f"{entry['cumulative_seconds']:.6f} |"
+            )
+        lines.extend(
+            [
+                "",
+                "### Top self time",
+                "",
+                "| Function | Calls | Self s | Cumulative s |",
+                "|---|---:|---:|---:|",
+            ]
+        )
+        for entry in scenario["top_self"][:10]:
+            label = (
+                f"{entry['file']}:{entry['line']}:{entry['function']}".replace("|", "\\|")
+            )
+            lines.append(
+                f"| `{label}` | {entry['total_calls']} | {entry['self_seconds']:.6f} | "
+                f"{entry['cumulative_seconds']:.6f} |"
+            )
+    lines.extend(
+        [
+            "",
+            (
+                "Full call graphs are retained in the `.prof` files; raw samples and "
+                "metadata are in JSON."
+            ),
+            "",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def run_pipeline_profile(
+    *,
+    raster_dir: Path,
+    output_dir: Path,
+    repository_head_sha: str,
+    source_tree_verified: bool,
+    baseline_is_ancestor: bool,
+    subject_baseline_sha: str = BASELINE_SHA,
+    verification_method: str = SOURCE_TREE_VERIFICATION_METHOD,
+    allowed_benchmark_paths: Sequence[str] = ALLOWED_BENCHMARK_PATHS,
+    tracked_differences: Sequence[str] = (),
+    untracked_paths: Sequence[str] = (),
+    warmups: int = DEFAULT_WARMUPS,
+    runs: int = DEFAULT_RUNS,
+    size: int = PIPELINE_PROFILE_SIZE,
+    top_n: int = PIPELINE_PROFILE_TOP_N,
+) -> tuple[dict[str, Any], dict[str, Path]]:
+    raster_dir = raster_dir.expanduser().resolve()
+    provenance = _verified_provenance(
+        subject_baseline_sha,
+        repository_head_sha,
+        verification_method,
+        source_tree_verified,
+        baseline_is_ancestor,
+        allowed_benchmark_paths,
+        tracked_differences,
+        untracked_paths,
+    )
+    if warmups < 0 or runs < 1 or size < 1 or top_n < 1:
+        raise ValueError("warmups 必须 >= 0，runs/size/top_n 必须 >= 1")
+
+    started = time.perf_counter_ns()
+    output_dir.mkdir(parents=True, exist_ok=True)
+    reference_path = raster_dir / INDICATOR_BY_CODE["PM25"].filename
+    scenarios: list[dict[str, Any]] = []
+    samples: list[dict[str, Any]] = []
+    paths: dict[str, Path] = {}
+    for indicator_count, codes in INDICATOR_GROUPS.items():
+        request, aoi = _request(reference_path, size, codes)
+        geometry = parse_geojson_geometry(request.geometry)
+        weights = tuple(
+            IndicatorWeight(item.code, float(item.weight_percent)) for item in request.weights
+        )
+        pipeline = RiskAnalysisPipeline(raster_dir)
+        for _ in range(warmups):
+            pipeline.run(geometry=geometry, weights=weights)
+
+        profiler = cProfile.Profile()
+        last_result = None
+        for sample_index in range(runs):
+            sample_started = time.perf_counter_ns()
+            last_result = profiler.runcall(pipeline.run, geometry=geometry, weights=weights)
+            samples.append(
+                {
+                    "family": "pipeline_profile",
+                    "aoi": "large",
+                    "indicator_count": indicator_count,
+                    "indicator_codes": list(codes),
+                    "sample_index": sample_index,
+                    "rows": int(last_result.array.shape[0]),
+                    "cols": int(last_result.array.shape[1]),
+                    "window_cells": int(last_result.array.size),
+                    "valid_cells": last_result.stats.valid_pixel_count,
+                    "profiled_pipeline_elapsed_ms": _elapsed_ms(sample_started),
+                }
+            )
+        if last_result is None:  # guarded by runs >= 1; keeps type narrowing explicit
+            raise RuntimeError("Pipeline profile 未产生结果")
+
+        profile_path = output_dir / f"risk-pipeline-{indicator_count}.prof"
+        profiler.dump_stats(profile_path)
+        paths[f"profile_{indicator_count}"] = profile_path
+        scenarios.append(
+            {
+                "aoi": "large",
+                "indicator_count": indicator_count,
+                "indicator_codes": list(codes),
+                "weights": request.model_dump(mode="json")["weights"],
+                "rows": int(last_result.array.shape[0]),
+                "cols": int(last_result.array.shape[1]),
+                "window_cells": int(last_result.array.size),
+                "valid_cells": last_result.stats.valid_pixel_count,
+                "profile_file": profile_path.name,
+                "top_cumulative": _profile_entries(
+                    profiler,
+                    sort_by="cumulative_seconds",
+                    limit=top_n,
+                ),
+                "top_self": _profile_entries(
+                    profiler,
+                    sort_by="self_seconds",
+                    limit=top_n,
+                ),
+                **aoi,
+            }
+        )
+
+    result = {
+        "schema_version": 1,
+        "benchmark": "risk-analysis-pipeline-cprofile",
+        "subject_baseline_sha": provenance["subject_baseline_sha"],
+        "source_provenance": provenance,
+        "profile_elapsed_seconds": _elapsed_ms(started) / 1000.0,
+        "configuration": {
+            "warmups_per_scenario": warmups,
+            "measured_runs_per_scenario": runs,
+            "profile_size": size,
+            "indicator_groups": {
+                str(count): list(codes) for count, codes in INDICATOR_GROUPS.items()
+            },
+            "top_entries_per_sort": top_n,
+        },
+        "profiling_semantics": {
+            "target": "RiskAnalysisPipeline.run() only",
+            "profiler": "Python standard library cProfile/pstats",
+            "aggregation": "one profiler aggregates all measured runs per indicator group",
+            "wall_time_includes_profiler_overhead": True,
+            "wall_time_comparable_to_unprofiled_benchmark": False,
+        },
+        "environment": _environment_metadata(),
+        "raster_dataset": {
+            "directory": str(raster_dir),
+            "files": _raster_metadata(raster_dir),
+        },
+        "pipeline_profile": {
+            "scenarios": scenarios,
+            "raw_samples": samples,
+            "summaries": _summaries(samples, ("profiled_pipeline_elapsed_ms",)),
+        },
+    }
+    paths["json"] = output_dir / "risk-pipeline-profile.json"
+    paths["markdown"] = output_dir / "risk-pipeline-profile.md"
+    paths["json"].write_text(
+        json.dumps(result, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    paths["markdown"].write_text(_profile_markdown(result), encoding="utf-8")
+    return result, paths
+
+
 def run_benchmark(
     *,
     raster_dir: Path,
@@ -738,7 +1009,7 @@ def write_reports(result: dict[str, Any], output_dir: Path) -> dict[str, Path]:
 
 
 def _parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run the P3A Risk Analysis baseline.")
+    parser = argparse.ArgumentParser(description="Run Risk Analysis performance diagnostics.")
     parser.add_argument("--raster-dir", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--subject-baseline-sha", default=BASELINE_SHA)
@@ -753,11 +1024,29 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--allowed-benchmark-path", action="append", required=True)
     parser.add_argument("--tracked-difference", action="append", default=[])
     parser.add_argument("--untracked-path", action="append", default=[])
+    parser.add_argument("--pipeline-profile", action="store_true")
     return parser.parse_args()
 
 
 def main() -> int:
     args = _parse_args()
+    if args.pipeline_profile:
+        result, paths = run_pipeline_profile(
+            raster_dir=args.raster_dir,
+            output_dir=args.output_dir,
+            subject_baseline_sha=args.subject_baseline_sha,
+            repository_head_sha=args.repository_head_sha,
+            verification_method=args.source_tree_verification_method,
+            source_tree_verified=args.source_tree_verified,
+            baseline_is_ancestor=args.baseline_is_ancestor,
+            allowed_benchmark_paths=args.allowed_benchmark_path,
+            tracked_differences=args.tracked_difference,
+            untracked_paths=args.untracked_path,
+        )
+        for kind, path in paths.items():
+            print(f"[OK] {kind}: {path}")
+        print(f"[INFO] profile elapsed: {result['profile_elapsed_seconds']:.3f}s")
+        return 0
     result = run_benchmark(
         raster_dir=args.raster_dir,
         subject_baseline_sha=args.subject_baseline_sha,

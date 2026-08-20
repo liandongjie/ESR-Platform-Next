@@ -2,7 +2,8 @@ param(
     [string]$OutputDir = "/workspace/docs/performance",
     [ValidatePattern("^[0-9a-fA-F]{40}$")]
     [string]$SubjectBaselineSha = "5810240e14d1d5a86562d73d6b85f2cdd2083cc4",
-    [switch]$VerifySourceTreeOnly
+    [switch]$VerifySourceTreeOnly,
+    [switch]$PipelineProfile
 )
 
 $ErrorActionPreference = "Stop"
@@ -112,6 +113,9 @@ foreach ($Difference in $TrackedDifferences) {
 }
 foreach ($Path in $AllowedUntrackedPaths) {
     $BenchmarkArguments += @("--untracked-path", $Path)
+}
+if ($PipelineProfile) {
+    $BenchmarkArguments += "--pipeline-profile"
 }
 
 docker @BenchmarkArguments

@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import inspect
 import json
+import pstats
 from pathlib import Path
 
 import numpy as np
@@ -18,12 +19,15 @@ from app.gis.risk_benchmark import (
     DEFAULT_RUNS,
     DEFAULT_WARMUPS,
     INDICATOR_GROUPS,
+    PIPELINE_PROFILE_SIZE,
+    PIPELINE_PROFILE_TOP_N,
     SOURCE_TREE_VERIFICATION_METHOD,
     SPATIAL_SIZES,
     VALIDATION_INCLUDED_IN_TOTAL_SERVICE,
     VALIDATION_TIMING,
     _verified_provenance,
     run_benchmark,
+    run_pipeline_profile,
     write_reports,
 )
 
@@ -125,12 +129,76 @@ def test_formal_p3a_benchmark_contract_is_locked():
     assert inspect.signature(run_benchmark).parameters["runs"].default == 5
     assert VALIDATION_TIMING == "standalone_post_execute_warm_cache"
     assert VALIDATION_INCLUDED_IN_TOTAL_SERVICE is False
+    assert PIPELINE_PROFILE_SIZE == 1024
+    assert PIPELINE_PROFILE_TOP_N == 30
+    assert inspect.signature(run_pipeline_profile).parameters["warmups"].default == 1
+    assert inspect.signature(run_pipeline_profile).parameters["runs"].default == 5
+    assert inspect.signature(run_pipeline_profile).parameters["size"].default == 1024
     assert ALLOWED_BENCHMARK_PATHS == (
         "backend/app/gis/risk_benchmark.py",
         "backend/tests/test_risk_benchmark.py",
         "scripts/benchmark-risk-analysis.ps1",
         "docs/performance/",
     )
+
+
+def test_pipeline_profile_keeps_raw_samples_and_writes_loadable_profiles(tmp_path: Path):
+    raster_dir = tmp_path / "rasters"
+    _write_catalog_rasters(raster_dir)
+
+    result, paths = run_pipeline_profile(
+        raster_dir=raster_dir,
+        output_dir=tmp_path / "profiles",
+        repository_head_sha=BASELINE_SHA,
+        source_tree_verified=True,
+        baseline_is_ancestor=True,
+        warmups=0,
+        runs=1,
+        size=2,
+        top_n=5,
+    )
+
+    assert result["benchmark"] == "risk-analysis-pipeline-cprofile"
+    assert result["configuration"] == {
+        "warmups_per_scenario": 0,
+        "measured_runs_per_scenario": 1,
+        "profile_size": 2,
+        "indicator_groups": {
+            "3": ["PM25", "AQI", "NDVI"],
+            "6": ["PM25", "AQI", "NDVI", "rkmd", "gyfb", "fmyl"],
+            "12": [indicator.code for indicator in INDICATORS],
+        },
+        "top_entries_per_sort": 5,
+    }
+    assert result["profiling_semantics"]["wall_time_includes_profiler_overhead"] is True
+    assert result["profiling_semantics"]["wall_time_comparable_to_unprofiled_benchmark"] is False
+    assert len(result["pipeline_profile"]["raw_samples"]) == 3
+    assert all(
+        sample["rows"] == 2
+        and sample["cols"] == 2
+        and sample["valid_cells"] == 4
+        and sample["profiled_pipeline_elapsed_ms"] >= 0
+        for sample in result["pipeline_profile"]["raw_samples"]
+    )
+    assert len(result["raster_dataset"]["files"]) == 12
+    for count in (3, 6, 12):
+        profile_path = paths[f"profile_{count}"]
+        stats = pstats.Stats(str(profile_path))
+        assert stats.total_calls > 0
+        scenario = next(
+            item
+            for item in result["pipeline_profile"]["scenarios"]
+            if item["indicator_count"] == count
+        )
+        assert any(entry["function"] == "run" for entry in scenario["top_cumulative"])
+        assert all(entry["self_seconds"] >= 0 for entry in scenario["top_self"])
+    persisted = json.loads(paths["json"].read_text(encoding="utf-8"))
+    assert persisted["pipeline_profile"]["raw_samples"] == result["pipeline_profile"][
+        "raw_samples"
+    ]
+    markdown = paths["markdown"].read_text(encoding="utf-8")
+    assert "cProfile overhead" in markdown
+    assert "must not be compared with baseline latency" in markdown
 
 
 @pytest.mark.parametrize(
