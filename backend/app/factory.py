@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import logging
 import os
+from collections.abc import Mapping
 from pathlib import Path
+from typing import Any
 
 from flask import Flask, jsonify
 from werkzeug.exceptions import RequestEntityTooLarge
@@ -13,7 +15,10 @@ from app.config import CONFIG_BY_NAME, validate_production_config
 from app.extensions import celery, cors, create_redis_client, db, jwt, migrate
 
 
-def create_app(config_name: str | None = None) -> Flask:
+def create_app(
+    config_name: str | None = None,
+    config_overrides: Mapping[str, Any] | None = None,
+) -> Flask:
     resolved_name = config_name or os.getenv("APP_ENV", "development")
     config_class = CONFIG_BY_NAME.get(resolved_name)
     if config_class is None:
@@ -21,6 +26,8 @@ def create_app(config_name: str | None = None) -> Flask:
 
     app = Flask(__name__)
     app.config.from_object(config_class)
+    if config_overrides:
+        app.config.update(config_overrides)
     if resolved_name == "production":
         validate_production_config(app.config)
 

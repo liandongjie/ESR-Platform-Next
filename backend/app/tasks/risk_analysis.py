@@ -81,11 +81,8 @@ def run_risk_analysis(self, payload: dict[str, Any]) -> dict[str, Any]:
     service = RiskAnalysisJobService(raster_dir, runtime_dir)
 
     def report_progress(stage: str, progress: int) -> None:
+        # PostgreSQL 是任务状态事实源；不要让冗余 Celery Result Backend 写入阻断 GIS 任务。
         mark_job_running(task_id, stage, progress)
-        self.update_state(
-            state="PROGRESS",
-            meta={"stage": stage, "progress": progress},
-        )
 
     try:
         report_progress("VALIDATING", 5)
