@@ -5,11 +5,13 @@ import { getApiErrorMessage } from '@/api/errors'
 import type { PoiExportData } from '@/export/poiCsv'
 import {
   createRiskAnalysisJob,
+  downloadRiskAnalysisPreview,
   getRiskAnalysisJob,
   getRiskAnalysisResult,
   getRiskAnalysisSpatialResult,
   getRiskAnalysisSubmission,
   getRiskIndicatorCatalog,
+  isRiskAnalysisPreviewUnavailable,
 } from '@/api/riskAnalysis'
 import { searchAmapPois, searchAmapPoisInGeometry } from '@/map/amapPoi'
 import type {
@@ -22,6 +24,7 @@ import type {
 import type {
   RiskAnalysisJobStatus,
   RiskAnalysisResult,
+  RiskAnalysisPreview,
   RiskAnalysisSpatialResult,
   RiskAnalysisSubmissionDetail,
   RiskIndicatorCatalog,
@@ -89,8 +92,10 @@ interface AnalysisState {
   jobStatus: RiskAnalysisJobStatus | null
   result: RiskAnalysisResult | null
   spatialResult: RiskAnalysisSpatialResult | null
+  riskPreview: RiskAnalysisPreview | null
   spatialLoadingTaskId: string | null
   spatialWarning: string | null
+  riskVisualizationRevision: number
   submissionContext: RiskAnalysisSubmissionDetail | null
   submissionLoading: boolean
   submissionError: string | null
@@ -258,8 +263,10 @@ export const useAnalysisStore = defineStore('analysis', {
     jobStatus: null,
     result: null,
     spatialResult: null,
+    riskPreview: null,
     spatialLoadingTaskId: null,
     spatialWarning: null,
+    riskVisualizationRevision: 0,
     submissionContext: null,
     submissionLoading: false,
     submissionError: null,
@@ -291,6 +298,28 @@ export const useAnalysisStore = defineStore('analysis', {
     },
   },
   actions: {
+    resetForUserBoundary() {
+      const bufferRequestRevision = this.bufferRequestRevision + 1
+      const poiRequestRevision = this.poiRequestRevision + 1
+      const poiExportRevision = this.poiExportRevision + 1
+      const jobRevision = this.jobRevision + 1
+      const riskVisualizationRevision = this.riskVisualizationRevision + 1
+      this.releaseRiskPreview()
+      this.$reset()
+      this.bufferRequestRevision = bufferRequestRevision
+      this.poiRequestRevision = poiRequestRevision
+      this.poiExportRevision = poiExportRevision
+      this.jobRevision = jobRevision
+      this.riskVisualizationRevision = riskVisualizationRevision
+      clearWorkspaceTaskId()
+      clearWorkspaceDraft()
+    },
+    releaseRiskPreview() {
+      this.riskVisualizationRevision += 1
+      if (this.riskPreview) URL.revokeObjectURL(this.riskPreview.url)
+      this.riskPreview = null
+      this.spatialLoadingTaskId = null
+    },
     async loadRiskIndicatorCatalog() {
       this.riskIndicatorCatalogLoading = true
       this.riskIndicatorCatalogError = null
@@ -569,6 +598,7 @@ export const useAnalysisStore = defineStore('analysis', {
     resetRiskAnalysis() {
       // 不把 Timer 放进 Pinia；递增版本号即可让旧轮询在下一次唤醒时自行退出。
       this.jobRevision += 1
+      this.releaseRiskPreview()
       clearWorkspaceTaskId()
       this.job = null
       this.jobStatus = null
@@ -686,6 +716,9 @@ export const useAnalysisStore = defineStore('analysis', {
     async restoreRiskAnalysis() {
       // 路由重新挂载时只允许补取缺失的 Context，不能重复查询状态或启动第二个轮询。
       if (this.job) {
+        if (this.result && !this.riskPreview && !this.spatialResult) {
+          void this.loadRiskAnalysisSpatialResult(this.job.task_id, this.jobRevision)
+        }
         if (!this.bufferResult) void this.restoreRiskAnalysisSubmission(this.job.task_id)
         return
       }
@@ -709,6 +742,7 @@ export const useAnalysisStore = defineStore('analysis', {
       this.job = { task_id: taskId }
       this.jobStatus = null
       this.result = null
+      this.releaseRiskPreview()
       this.spatialResult = null
       this.spatialLoadingTaskId = null
       this.spatialWarning = null
@@ -784,6 +818,7 @@ export const useAnalysisStore = defineStore('analysis', {
         revision !== this.jobRevision ||
         this.job?.task_id !== taskId ||
         this.result?.task_id !== taskId ||
+        this.riskPreview?.task_id === taskId ||
         this.spatialResult?.task_id === taskId ||
         this.spatialLoadingTaskId === taskId
       ) {
@@ -792,19 +827,47 @@ export const useAnalysisStore = defineStore('analysis', {
 
       this.spatialLoadingTaskId = taskId
       this.spatialWarning = null
+      const visualizationRevision = ++this.riskVisualizationRevision
       try {
-        const spatialResult = await getRiskAnalysisSpatialResult(taskId)
+        const result = this.result
+        if (!result) return
+        const hasPreview = Boolean(result.artifacts.preview && result.grid.bounds)
+        let previewArtifact = null
+        let spatialResult = null
+        if (hasPreview) {
+          try {
+            previewArtifact = await downloadRiskAnalysisPreview(taskId)
+          } catch (error: unknown) {
+            if (!isRiskAnalysisPreviewUnavailable(error)) throw error
+            spatialResult = await getRiskAnalysisSpatialResult(taskId)
+          }
+        } else {
+          spatialResult = await getRiskAnalysisSpatialResult(taskId)
+        }
         if (
           revision !== this.jobRevision ||
+          visualizationRevision !== this.riskVisualizationRevision ||
           this.job?.task_id !== taskId ||
           this.result?.task_id !== taskId
         ) {
           return
         }
-        this.spatialResult = spatialResult
+        if (previewArtifact && result.grid.bounds) {
+          if (this.riskPreview) URL.revokeObjectURL(this.riskPreview.url)
+          this.riskPreview = {
+            task_id: taskId,
+            url: URL.createObjectURL(previewArtifact.blob),
+            bounds: result.grid.bounds,
+          }
+          this.spatialResult = null
+        } else {
+          this.spatialResult = spatialResult
+          if (hasPreview) this.spatialWarning = '轻量风险预览不可用，已回退到兼容图层'
+        }
       } catch (error: unknown) {
         if (
           revision !== this.jobRevision ||
+          visualizationRevision !== this.riskVisualizationRevision ||
           this.job?.task_id !== taskId ||
           this.result?.task_id !== taskId
         ) {
@@ -814,6 +877,7 @@ export const useAnalysisStore = defineStore('analysis', {
       } finally {
         if (
           revision === this.jobRevision &&
+          visualizationRevision === this.riskVisualizationRevision &&
           this.job?.task_id === taskId &&
           this.spatialLoadingTaskId === taskId
         ) {
@@ -891,6 +955,7 @@ export const useAnalysisStore = defineStore('analysis', {
       this.job = null
       this.jobStatus = null
       this.result = null
+      this.releaseRiskPreview()
       this.spatialResult = null
       this.spatialLoadingTaskId = null
       this.spatialWarning = null

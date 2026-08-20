@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
 import WorkspaceWorkflowNavigator from '@/components/workspace/WorkspaceWorkflowNavigator.vue'
 import MapCanvas from '@/components/map/MapCanvas.vue'
@@ -315,6 +315,10 @@ onMounted(async () => {
   deriveInitialWorkflowStep()
   riskNotificationsArmed = true
 })
+
+onBeforeUnmount(() => {
+  analysisStore.releaseRiskPreview()
+})
 </script>
 
 <template>
@@ -338,6 +342,7 @@ onMounted(async () => {
           ref="mapCanvasRef"
           :source-geometry="analysisStore.sourceGeometryWgs84"
           :buffer-geometry="bufferGeometry"
+          :risk-preview="analysisStore.riskPreview"
           :risk-spatial-result="analysisStore.spatialResult"
           :poi-items="analysisStore.poiItems"
           :selection-disabled="mapSelectionDisabled"

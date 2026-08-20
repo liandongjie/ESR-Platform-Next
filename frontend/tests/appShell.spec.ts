@@ -6,6 +6,7 @@
  * @Description:
  */
 import { flushPromises, mount } from '@vue/test-utils'
+import { createPinia } from 'pinia'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import { describe, expect, it } from 'vitest'
 
@@ -27,7 +28,7 @@ describe('AppShell', () => {
     await router.push('/')
     await router.isReady()
     const wrapper = mount(AppShell, {
-      global: { plugins: [router] },
+      global: { plugins: [createPinia(), router] },
       slots: { default: '<div>content</div>' },
     })
 

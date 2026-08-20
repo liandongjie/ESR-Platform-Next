@@ -3,7 +3,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { getApiErrorMessage } from '@/api/errors'
 import { http } from '@/api/http'
-import { downloadRiskAnalysisArtifact } from '@/api/riskAnalysis'
+import {
+  downloadRiskAnalysisArtifact,
+  downloadRiskAnalysisPreview,
+  isRiskAnalysisPreviewUnavailable,
+} from '@/api/riskAnalysis'
 
 vi.mock('@/api/http', () => ({
   http: {
@@ -69,6 +73,43 @@ describe('downloadRiskAnalysisArtifact', () => {
       blob,
       filename: 'risk-analysis-task-1-result.json',
     })
+  })
+
+  it('downloads the authenticated preview artifact with a PNG fallback filename', async () => {
+    const blob = new Blob(['preview'], { type: 'image/png' })
+    mockedGet.mockResolvedValue({ data: blob, headers: {} } as never)
+
+    await expect(downloadRiskAnalysisArtifact('task-1', 'preview')).resolves.toEqual({
+      blob,
+      filename: 'risk-analysis-task-1-preview.png',
+    })
+    expect(mockedGet.mock.calls[0]?.[0]).toBe(
+      '/risk-analysis/jobs/task-1/result/artifacts/preview',
+    )
+  })
+
+  it('accepts only a non-empty PNG for map preview', async () => {
+    const blob = new Blob(['preview'], { type: 'image/png' })
+    mockedGet.mockResolvedValue({ data: blob, headers: {} } as never)
+
+    await expect(downloadRiskAnalysisPreview('task-1')).resolves.toMatchObject({ blob })
+  })
+
+  it.each([
+    new Blob([], { type: 'image/png' }),
+    new Blob(['preview'], { type: 'image/jpeg' }),
+    new Blob(['preview']),
+  ])('rejects an empty or non-PNG preview Blob', async (blob) => {
+    mockedGet.mockResolvedValue({ data: blob, headers: {} } as never)
+
+    await expect(downloadRiskAnalysisPreview('task-1')).rejects.toThrow('风险预览文件格式无效')
+  })
+
+  it('classifies only 404 and 410 as preview-unavailable fallback cases', () => {
+    expect(isRiskAnalysisPreviewUnavailable(blobAxiosError(new Blob(), 404))).toBe(true)
+    expect(isRiskAnalysisPreviewUnavailable(blobAxiosError(new Blob(), 410))).toBe(true)
+    expect(isRiskAnalysisPreviewUnavailable(blobAxiosError(new Blob(), 500))).toBe(false)
+    expect(isRiskAnalysisPreviewUnavailable(new Error('network'))).toBe(false)
   })
 
   it.each([202, 404, 409])(

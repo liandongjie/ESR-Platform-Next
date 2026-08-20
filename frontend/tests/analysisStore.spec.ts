@@ -4,11 +4,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createAnalysisAreaBuffer } from '@/api/analysisAreas'
 import {
   createRiskAnalysisJob,
+  downloadRiskAnalysisPreview,
   getRiskAnalysisJob,
   getRiskAnalysisResult,
   getRiskAnalysisSpatialResult,
   getRiskAnalysisSubmission,
   getRiskIndicatorCatalog,
+  isRiskAnalysisPreviewUnavailable,
 } from '@/api/riskAnalysis'
 import { searchAmapPois, searchAmapPoisInGeometry } from '@/map/amapPoi'
 import { useAnalysisStore } from '@/stores/analysis'
@@ -28,11 +30,13 @@ vi.mock('@/api/analysisAreas', () => ({
 
 vi.mock('@/api/riskAnalysis', () => ({
   createRiskAnalysisJob: vi.fn(),
+  downloadRiskAnalysisPreview: vi.fn(),
   getRiskAnalysisJob: vi.fn(),
   getRiskAnalysisResult: vi.fn(),
   getRiskAnalysisSpatialResult: vi.fn(),
   getRiskAnalysisSubmission: vi.fn(),
   getRiskIndicatorCatalog: vi.fn(),
+  isRiskAnalysisPreviewUnavailable: vi.fn(),
 }))
 
 vi.mock('@/map/amapPoi', () => ({
@@ -42,11 +46,13 @@ vi.mock('@/map/amapPoi', () => ({
 
 const mockedCreateBuffer = vi.mocked(createAnalysisAreaBuffer)
 const mockedCreateJob = vi.mocked(createRiskAnalysisJob)
+const mockedDownloadPreview = vi.mocked(downloadRiskAnalysisPreview)
 const mockedGetJob = vi.mocked(getRiskAnalysisJob)
 const mockedGetResult = vi.mocked(getRiskAnalysisResult)
 const mockedGetSpatialResult = vi.mocked(getRiskAnalysisSpatialResult)
 const mockedGetSubmission = vi.mocked(getRiskAnalysisSubmission)
 const mockedGetCatalog = vi.mocked(getRiskIndicatorCatalog)
+const mockedPreviewUnavailable = vi.mocked(isRiskAnalysisPreviewUnavailable)
 const mockedSearchPois = vi.mocked(searchAmapPois)
 const mockedSearchPoisInGeometry = vi.mocked(searchAmapPoisInGeometry)
 const workspaceTaskStorageKey = 'esr:risk-analysis:workspace-task-id'
@@ -171,6 +177,13 @@ function makeRiskResult(): RiskAnalysisResult {
   }
 }
 
+function makePreviewRiskResult(): RiskAnalysisResult {
+  const result = makeRiskResult()
+  result.grid.bounds = [118.86, 32.07, 118.94, 32.13]
+  result.artifacts.preview = 'risk-analysis/task-1/preview.png'
+  return result
+}
+
 function makeSpatialResult(taskId = 'task-1'): RiskAnalysisSpatialResult {
   return {
     schema_version: 1,
@@ -285,6 +298,7 @@ describe('analysis store', () => {
     setActivePinia(createPinia())
     mockedCreateBuffer.mockReset()
     mockedCreateJob.mockReset()
+    mockedDownloadPreview.mockReset()
     mockedGetJob.mockReset()
     mockedGetResult.mockReset()
     mockedGetSpatialResult.mockReset()
@@ -293,13 +307,18 @@ describe('analysis store', () => {
     mockedGetSubmission.mockResolvedValue(makeSubmission())
     mockedGetCatalog.mockReset()
     mockedGetCatalog.mockResolvedValue(makeRiskIndicatorCatalog())
+    mockedPreviewUnavailable.mockReset()
+    mockedPreviewUnavailable.mockReturnValue(false)
     mockedSearchPois.mockReset()
     mockedSearchPoisInGeometry.mockReset()
     window.sessionStorage.clear()
+    vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:risk-preview')
+    vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => undefined)
   })
 
   afterEach(() => {
     vi.useRealTimers()
+    vi.restoreAllMocks()
   })
 
   it('stores WGS84 point and clears stale buffer when point changes', async () => {
@@ -313,6 +332,25 @@ describe('analysis store', () => {
     store.setSourcePoint([118.91, 32.11])
     expect(store.sourceGeometryWgs84?.coordinates).toEqual([118.91, 32.11])
     expect(store.bufferResult).toBeNull()
+  })
+
+  it('clears all user-bound workspace state and invalidates pending work', () => {
+    const store = useAnalysisStore()
+    store.sourceGeometryWgs84 = { type: 'Point', coordinates: [118.9, 32.1] }
+    store.job = { task_id: 'user-a-task' }
+    store.polling = true
+    window.sessionStorage.setItem(workspaceTaskStorageKey, 'user-a-task')
+    window.sessionStorage.setItem(workspaceDraftStorageKey, JSON.stringify(makeDraft(false)))
+    const previousJobRevision = store.jobRevision
+
+    store.resetForUserBoundary()
+
+    expect(store.sourceGeometryWgs84).toBeNull()
+    expect(store.job).toBeNull()
+    expect(store.polling).toBe(false)
+    expect(store.jobRevision).toBeGreaterThan(previousJobRevision)
+    expect(window.sessionStorage.getItem(workspaceTaskStorageKey)).toBeNull()
+    expect(window.sessionStorage.getItem(workspaceDraftStorageKey)).toBeNull()
   })
 
   it.each<SourceGeometry>([
@@ -1254,6 +1292,78 @@ describe('analysis store', () => {
 
     expect(mockedGetSpatialResult).toHaveBeenCalledTimes(1)
     expect(store.spatialResult?.task_id).toBe('task-1')
+  })
+
+  it('loads the protected preview Blob instead of GeoJSON and revokes its URL on reset', async () => {
+    const store = useAnalysisStore()
+    store.job = { task_id: 'task-1' }
+    store.result = makePreviewRiskResult()
+    const blob = new Blob(['png'], { type: 'image/png' })
+    mockedDownloadPreview.mockResolvedValueOnce({ blob, filename: 'preview.png' })
+
+    await store.loadRiskAnalysisSpatialResult('task-1', store.jobRevision)
+
+    expect(mockedDownloadPreview).toHaveBeenCalledWith('task-1')
+    expect(mockedGetSpatialResult).not.toHaveBeenCalled()
+    expect(URL.createObjectURL).toHaveBeenCalledWith(blob)
+    expect(store.riskPreview).toEqual({
+      task_id: 'task-1',
+      url: 'blob:risk-preview',
+      bounds: [118.86, 32.07, 118.94, 32.13],
+    })
+
+    store.resetRiskAnalysis()
+
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:risk-preview')
+    expect(store.riskPreview).toBeNull()
+  })
+
+  it('falls back to spatial data only for an explicitly unavailable preview', async () => {
+    const store = useAnalysisStore()
+    store.job = { task_id: 'task-1' }
+    store.result = makePreviewRiskResult()
+    mockedDownloadPreview.mockRejectedValueOnce(new Error('gone'))
+    mockedPreviewUnavailable.mockReturnValueOnce(true)
+    mockedGetSpatialResult.mockResolvedValueOnce(makeSpatialResult())
+
+    await store.loadRiskAnalysisSpatialResult('task-1', store.jobRevision)
+
+    expect(mockedGetSpatialResult).toHaveBeenCalledWith('task-1')
+    expect(store.spatialResult?.task_id).toBe('task-1')
+    expect(store.spatialWarning).toBe('轻量风险预览不可用，已回退到兼容图层')
+  })
+
+  it('surfaces a preview service failure without hiding it behind GeoJSON', async () => {
+    const store = useAnalysisStore()
+    store.job = { task_id: 'task-1' }
+    store.result = makePreviewRiskResult()
+    mockedDownloadPreview.mockRejectedValueOnce(new Error('preview service failed'))
+
+    await store.loadRiskAnalysisSpatialResult('task-1', store.jobRevision)
+
+    expect(mockedGetSpatialResult).not.toHaveBeenCalled()
+    expect(store.spatialResult).toBeNull()
+    expect(store.spatialWarning).toBe('preview service failed')
+  })
+
+  it('does not create an Object URL after the preview consumer is released', async () => {
+    const store = useAnalysisStore()
+    store.job = { task_id: 'task-1' }
+    store.result = makePreviewRiskResult()
+    let resolveDownload!: (value: { blob: Blob; filename: string }) => void
+    mockedDownloadPreview.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveDownload = resolve
+      }),
+    )
+
+    const loading = store.loadRiskAnalysisSpatialResult('task-1', store.jobRevision)
+    store.releaseRiskPreview()
+    resolveDownload({ blob: new Blob(['png']), filename: 'preview.png' })
+    await loading
+
+    expect(URL.createObjectURL).not.toHaveBeenCalled()
+    expect(store.riskPreview).toBeNull()
   })
 
   it('keeps a succeeded result when the independent spatial request fails', async () => {

@@ -8,21 +8,23 @@ defineProps<{
   taskId: string
 }>()
 
-const loading = reactive<Record<RiskAnalysisArtifactKind, boolean>>({
+type UserDownloadArtifactKind = Exclude<RiskAnalysisArtifactKind, 'preview'>
+
+const loading = reactive<Record<UserDownloadArtifactKind, boolean>>({
   raster: false,
   manifest: false,
 })
-const warnings = reactive<Record<RiskAnalysisArtifactKind, string | null>>({
+const warnings = reactive<Record<UserDownloadArtifactKind, string | null>>({
   raster: null,
   manifest: null,
 })
 
-const errorFallbacks: Record<RiskAnalysisArtifactKind, string> = {
+const errorFallbacks: Record<UserDownloadArtifactKind, string> = {
   raster: '下载 GeoTIFF 失败',
   manifest: '下载结果 JSON 失败',
 }
 
-async function download(taskId: string, kind: RiskAnalysisArtifactKind) {
+async function download(taskId: string, kind: UserDownloadArtifactKind) {
   if (loading[kind]) return
 
   loading[kind] = true

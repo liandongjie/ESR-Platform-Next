@@ -81,6 +81,7 @@ onMounted(() => {
 onBeforeUnmount(() => {
   // 历史列表轮询只服务于当前页面，离开页面后停止，避免后台产生无意义请求。
   taskHistoryStore.stopAutoRefresh()
+  taskHistoryStore.closeDetail()
 })
 </script>
 
@@ -293,9 +294,13 @@ onBeforeUnmount(() => {
           />
           <el-skeleton v-if="taskHistoryStore.spatialLoading" :rows="4" animated />
           <MapCanvas
-            v-else-if="taskHistoryStore.selectedSpatialResult"
-            :key="taskHistoryStore.selectedSpatialResult.task_id"
+            v-else-if="taskHistoryStore.selectedRiskPreview || taskHistoryStore.selectedSpatialResult"
+            :key="
+              taskHistoryStore.selectedRiskPreview?.task_id ??
+                taskHistoryStore.selectedSpatialResult?.task_id
+            "
             class="task-spatial-map"
+            :risk-preview="taskHistoryStore.selectedRiskPreview"
             :risk-spatial-result="taskHistoryStore.selectedSpatialResult"
             read-only
           />

@@ -35,6 +35,8 @@ const MapCanvasStub = defineComponent({
   name: 'MapCanvas',
   props: {
     sourceGeometry: { type: Object, default: null },
+    riskPreview: { type: Object, default: null },
+    riskSpatialResult: { type: Object, default: null },
     poiItems: { type: Array, default: () => [] },
     selectionDisabled: Boolean,
   },
@@ -117,6 +119,7 @@ beforeEach(() => {
   vi.mocked(getCapabilities).mockReset().mockResolvedValue({
     project: 'ESR Platform',
     stage: 'test',
+    registration_enabled: true,
     coordinate_system: 'EPSG:4326',
     result_ttl_hours: 24,
     limits: { max_buffer_meters: 10_000, max_analysis_area_km2: 5_000 },
@@ -1761,6 +1764,20 @@ describe('WorkspaceView analysis panel wiring', () => {
     store.polling = true
     await wrapper.vm.$nextTick()
     expect(map.props('selectionDisabled')).toBe(true)
+  })
+
+  it('passes the protected risk preview to the map adapter', async () => {
+    const { wrapper, store } = mountWorkspace()
+    store.riskPreview = {
+      task_id: 'task-1',
+      url: 'blob:risk-preview',
+      bounds: [118.86, 32.07, 118.94, 32.13],
+    }
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.findComponent(MapCanvasStub).props('riskPreview')).toEqual(store.riskPreview)
+
+    wrapper.unmount()
   })
 
   it('revalidates the recent drawer type before applying Risk then POI fallback', async () => {
