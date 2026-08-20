@@ -11,6 +11,7 @@ import numpy as np
 import pytest
 import rasterio
 from rasterio.transform import from_origin
+from rasterio.windows import Window
 
 from app.gis.indicators import INDICATORS
 from app.gis.risk_benchmark import (
@@ -26,6 +27,9 @@ from app.gis.risk_benchmark import (
     PIPELINE_STAGE_TIMING_SIZE,
     PIPELINE_STAGES,
     PRODUCTION_CANDIDATE_SHA,
+    RASTER_READ_ATTRIBUTION_SIZE,
+    RASTER_READ_CACHE_SEMANTICS,
+    RASTER_READ_MODES,
     SOURCE_TREE_VERIFICATION_METHOD,
     SPATIAL_SIZES,
     VALIDATION_INCLUDED_IN_TOTAL_SERVICE,
@@ -33,9 +37,11 @@ from app.gis.risk_benchmark import (
     _parse_args,
     _verified_instrumentation_lineage,
     _verified_provenance,
+    _window_block_metrics,
     run_benchmark,
     run_pipeline_profile,
     run_pipeline_stage_timing,
+    run_raster_read_attribution,
     write_reports,
 )
 
@@ -147,6 +153,21 @@ def test_formal_p3a_benchmark_contract_is_locked():
     assert inspect.signature(run_pipeline_stage_timing).parameters["warmups"].default == 1
     assert inspect.signature(run_pipeline_stage_timing).parameters["runs"].default == 5
     assert inspect.signature(run_pipeline_stage_timing).parameters["size"].default == 1024
+    assert RASTER_READ_ATTRIBUTION_SIZE == 1024
+    assert inspect.signature(run_raster_read_attribution).parameters["warmups"].default == 1
+    assert inspect.signature(run_raster_read_attribution).parameters["runs"].default == 5
+    assert inspect.signature(run_raster_read_attribution).parameters["size"].default == 1024
+    assert RASTER_READ_MODES == (
+        "open_only",
+        "masked_read_new_handle",
+        "masked_reread_same_handle",
+        "data_read",
+        "mask_read",
+        "data_plus_mask",
+    )
+    assert RASTER_READ_CACHE_SEMANTICS == (
+        "warm_process_and_os_cache_not_explicitly_flushed"
+    )
     assert PIPELINE_STAGES == (
         "input_validation",
         "source_open",
@@ -169,6 +190,84 @@ def test_formal_p3a_benchmark_contract_is_locked():
         "backend/tests/test_risk_pipeline.py",
         *ALLOWED_BENCHMARK_PATHS,
     )
+
+
+def test_window_block_metrics_cover_aligned_and_unaligned_windows():
+    aligned = _window_block_metrics(Window(128, 128, 256, 256), (128, 128), "float32")
+    assert aligned == {
+        "touched_block_count": 4,
+        "estimated_decoded_cells": 65536,
+        "estimated_uncompressed_bytes": 262144,
+        "read_amplification_ratio": 1.0,
+    }
+    unaligned = _window_block_metrics(Window(1, 1, 128, 128), (128, 128), "float32")
+    assert unaligned == {
+        "touched_block_count": 4,
+        "estimated_decoded_cells": 65536,
+        "estimated_uncompressed_bytes": 262144,
+        "read_amplification_ratio": 4.0,
+    }
+
+
+def test_raster_read_attribution_keeps_raw_samples_and_reports(tmp_path: Path):
+    raster_dir = tmp_path / "rasters"
+    _write_catalog_rasters(raster_dir)
+    diagnostic_sha = "2" * 40
+
+    result, paths = run_raster_read_attribution(
+        raster_dir=raster_dir,
+        output_dir=tmp_path / "read-attribution",
+        subject_baseline_sha=diagnostic_sha,
+        repository_head_sha=diagnostic_sha,
+        source_tree_verified=True,
+        baseline_is_ancestor=True,
+        production_candidate_is_ancestor=True,
+        diagnostic_source_tree_verified=True,
+        diagnostic_differences=("M:backend/app/gis/risk_benchmark.py",),
+        warmups=0,
+        runs=1,
+        size=2,
+    )
+
+    assert result["benchmark"] == "risk-raster-read-attribution"
+    assert result["production_candidate_sha"] == PRODUCTION_CANDIDATE_SHA
+    assert result["diagnostic_subject_sha"] == diagnostic_sha
+    assert result["configuration"] == {
+        "warmups_per_mode": 0,
+        "measured_runs_per_mode": 1,
+        "window_size": 2,
+        "indicator_codes": [indicator.code for indicator in INDICATORS],
+        "modes": list(RASTER_READ_MODES),
+        "measured_sample_count": 72,
+    }
+    assert result["timing_semantics"]["cache_state"] == RASTER_READ_CACHE_SEMANTICS
+    assert result["timing_semantics"]["physical_cold_disk_claimed"] is False
+    assert result["gdal_runtime"]["version"]
+    scenarios = result["raster_read_attribution"]["scenarios"]
+    samples = result["raster_read_attribution"]["raw_samples"]
+    assert len(scenarios) == 12
+    assert len(samples) == 72
+    assert len(result["raster_read_attribution"]["summaries"]) == 12
+    assert all(scenario["read_equivalence"]["equivalent"] for scenario in scenarios)
+    assert all(
+        sample["rows"] == 2
+        and sample["cols"] == 2
+        and sample["window_cells"] == 4
+        and isinstance(sample["elapsed_ns"], int)
+        and sample["elapsed_ns"] >= 0
+        for sample in samples
+    )
+    assert {(sample["indicator_code"], sample["mode"]) for sample in samples} == {
+        (indicator.code, mode) for indicator in INDICATORS for mode in RASTER_READ_MODES
+    }
+    persisted = json.loads(paths["json"].read_text(encoding="utf-8"))
+    assert persisted["raster_read_attribution"]["raw_samples"] == samples
+    with paths["csv"].open(encoding="utf-8", newline="") as stream:
+        assert len(list(csv.DictReader(stream))) == 72
+    markdown = paths["markdown"].read_text(encoding="utf-8")
+    assert "Windows OS cache is not flushed" in markdown
+    assert "Masked/new" in markdown
+    assert "Raw nanosecond samples" in markdown
 
 
 def test_pipeline_stage_timing_keeps_raw_events_and_reports(tmp_path: Path):
@@ -270,7 +369,18 @@ def test_pipeline_diagnostic_lineage_contract():
         )
 
 
-def test_pipeline_profile_modes_are_mutually_exclusive(monkeypatch: pytest.MonkeyPatch):
+@pytest.mark.parametrize(
+    "modes",
+    [
+        ("--pipeline-profile", "--pipeline-stage-timing"),
+        ("--pipeline-profile", "--pipeline-read-attribution"),
+        ("--pipeline-stage-timing", "--pipeline-read-attribution"),
+    ],
+)
+def test_pipeline_profile_modes_are_mutually_exclusive(
+    monkeypatch: pytest.MonkeyPatch,
+    modes: tuple[str, str],
+):
     monkeypatch.setattr(
         sys,
         "argv",
@@ -288,8 +398,7 @@ def test_pipeline_profile_modes_are_mutually_exclusive(monkeypatch: pytest.Monke
             "--baseline-is-ancestor",
             "--allowed-benchmark-path",
             ALLOWED_BENCHMARK_PATHS[0],
-            "--pipeline-profile",
-            "--pipeline-stage-timing",
+            *modes,
         ],
     )
     with pytest.raises(SystemExit):

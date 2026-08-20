@@ -6,7 +6,8 @@ param(
     [string]$ProductionCandidateSha = "8f85c420dcc07edbcbf03674478b973c108e6746",
     [switch]$VerifySourceTreeOnly,
     [switch]$PipelineProfile,
-    [switch]$PipelineStageTiming
+    [switch]$PipelineStageTiming,
+    [switch]$PipelineReadAttribution
 )
 
 $ErrorActionPreference = "Stop"
@@ -24,9 +25,15 @@ $AllowedPipelineDiagnosticPaths = @(
     "backend/tests/test_risk_pipeline.py"
 ) + $AllowedBenchmarkPaths
 
-if ($PipelineProfile -and $PipelineStageTiming) {
-    throw "PipelineProfile 与 PipelineStageTiming 不能同时启用。benchmark 未运行。"
+$SelectedDiagnosticModes = @(
+    $PipelineProfile,
+    $PipelineStageTiming,
+    $PipelineReadAttribution
+) | Where-Object { $_ }
+if ($SelectedDiagnosticModes.Count -gt 1) {
+    throw "Pipeline diagnostic modes 不能同时启用。benchmark 未运行。"
 }
+$RequiresDiagnosticLineage = $PipelineStageTiming -or $PipelineReadAttribution
 
 $SubjectBaselineSha = $SubjectBaselineSha.ToLowerInvariant()
 $ProductionCandidateSha = $ProductionCandidateSha.ToLowerInvariant()
@@ -47,7 +54,7 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 $DiagnosticDifferences = @()
-if ($PipelineStageTiming) {
+if ($RequiresDiagnosticLineage) {
     git cat-file -e "$ProductionCandidateSha`^{commit}" 2>$null
     if ($LASTEXITCODE -ne 0) {
         throw "Production candidate commit 不存在：$ProductionCandidateSha。benchmark 未运行。"
@@ -143,14 +150,14 @@ if ($ForbiddenDifferences.Count -gt 0) {
     throw "Source tree verification 失败；非 benchmark-only 差异：$Details。benchmark 未运行。"
 }
 
-if ($PipelineStageTiming) {
-    Write-Output "[OK] instrumented subject: $SubjectBaselineSha"
+if ($RequiresDiagnosticLineage) {
+    Write-Output "[OK] diagnostic subject: $SubjectBaselineSha"
 } else {
     Write-Output "[OK] subject production baseline: $SubjectBaselineSha"
 }
 Write-Output "[OK] repository HEAD: $RepositoryHeadSha"
 Write-Output "[OK] source tree verified; only benchmark-only paths differ from subject."
-if ($PipelineStageTiming) {
+if ($RequiresDiagnosticLineage) {
     Write-Output "[OK] production candidate: $ProductionCandidateSha"
     Write-Output "[OK] instrumentation lineage verified; only diagnostic paths differ."
 }
@@ -186,8 +193,13 @@ if ($PipelineProfile) {
     $BenchmarkArguments += "--pipeline-profile"
 }
 if ($PipelineStageTiming) {
+    $BenchmarkArguments += "--pipeline-stage-timing"
+}
+if ($PipelineReadAttribution) {
+    $BenchmarkArguments += "--pipeline-read-attribution"
+}
+if ($RequiresDiagnosticLineage) {
     $BenchmarkArguments += @(
-        "--pipeline-stage-timing",
         "--production-candidate-sha", $ProductionCandidateSha,
         "--production-candidate-is-ancestor",
         "--diagnostic-source-tree-verified"

@@ -19,6 +19,7 @@ from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import rasterio
 from rasterio.windows import Window
 from rasterio.windows import bounds as window_bounds
@@ -63,6 +64,16 @@ PIPELINE_STAGES = (
     "weighted_accumulation",
     "result_finalization",
 )
+RASTER_READ_ATTRIBUTION_SIZE = COMPUTE_SIZES["large"]
+RASTER_READ_MODES = (
+    "open_only",
+    "masked_read_new_handle",
+    "masked_reread_same_handle",
+    "data_read",
+    "mask_read",
+    "data_plus_mask",
+)
+RASTER_READ_CACHE_SEMANTICS = "warm_process_and_os_cache_not_explicitly_flushed"
 SOURCE_TREE_VERIFICATION_METHOD = "host_git_diff_and_untracked_allowlist_v1"
 ALLOWED_BENCHMARK_PATHS = (
     "backend/app/gis/risk_benchmark.py",
@@ -269,23 +280,8 @@ def _scenario_geometry(
     size: int,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     with rasterio.open(reference_path) as reference:
-        col_edge = round((CENTER[0] - reference.transform.c) / reference.transform.a)
-        row_edge = round((CENTER[1] - reference.transform.f) / reference.transform.e)
-        window = Window(
-            col_off=col_edge - size // 2,
-            row_off=row_edge - size // 2,
-            width=size,
-            height=size,
-        )
-        if (
-            window.col_off < 0
-            or window.row_off < 0
-            or window.col_off + window.width > reference.width
-            or window.row_off + window.height > reference.height
-        ):
-            raise ValueError(f"AOI {size}x{size} 超出参考栅格范围")
+        window, center = _scenario_window(reference, size)
         left, bottom, right, top = window_bounds(window, reference.transform)
-        center = reference.transform * (col_edge, row_edge)
     # 各向内移动一个浮点单位，避免 geometry_window 因 Affine 舍入多取一行/列；
     # 这个 ULP 级调整不会改变 AOI 覆盖的任何像元中心。
     geometry_bounds = (
@@ -301,6 +297,49 @@ def _scenario_geometry(
         "target_rows": size,
         "target_cols": size,
         "target_window_cells": size * size,
+    }
+
+
+def _scenario_window(reference: Any, size: int) -> tuple[Window, tuple[float, float]]:
+    col_edge = round((CENTER[0] - reference.transform.c) / reference.transform.a)
+    row_edge = round((CENTER[1] - reference.transform.f) / reference.transform.e)
+    window = Window(
+        col_off=col_edge - size // 2,
+        row_off=row_edge - size // 2,
+        width=size,
+        height=size,
+    )
+    if (
+        window.col_off < 0
+        or window.row_off < 0
+        or window.col_off + window.width > reference.width
+        or window.row_off + window.height > reference.height
+    ):
+        raise ValueError(f"AOI {size}x{size} 超出参考栅格范围")
+    center = reference.transform * (col_edge, row_edge)
+    return window, (float(center[0]), float(center[1]))
+
+
+def _window_block_metrics(
+    window: Window,
+    block_shape: tuple[int, int],
+    dtype: str,
+) -> dict[str, int | float]:
+    block_rows, block_cols = block_shape
+    first_block_row = math.floor(window.row_off / block_rows)
+    last_block_row = math.ceil((window.row_off + window.height) / block_rows)
+    first_block_col = math.floor(window.col_off / block_cols)
+    last_block_col = math.ceil((window.col_off + window.width) / block_cols)
+    block_count = (last_block_row - first_block_row) * (
+        last_block_col - first_block_col
+    )
+    decoded_cells = block_count * block_rows * block_cols
+    window_cells = int(window.width * window.height)
+    return {
+        "touched_block_count": block_count,
+        "estimated_decoded_cells": decoded_cells,
+        "estimated_uncompressed_bytes": decoded_cells * np.dtype(dtype).itemsize,
+        "read_amplification_ratio": decoded_cells / window_cells,
     }
 
 
@@ -1159,6 +1198,377 @@ def run_pipeline_stage_timing(
     return result, paths
 
 
+def _time_raster_read_mode(
+    path: Path,
+    window: Window,
+    mode: str,
+    *,
+    same_handle: Any | None = None,
+) -> int:
+    if mode == "open_only":
+        started = time.perf_counter_ns()
+        dataset = rasterio.open(path)
+        elapsed_ns = time.perf_counter_ns() - started
+        dataset.close()
+        return elapsed_ns
+
+    owns_handle = same_handle is None
+    dataset = rasterio.open(path) if owns_handle else same_handle
+    try:
+        started = time.perf_counter_ns()
+        if mode in {"masked_read_new_handle", "masked_reread_same_handle"}:
+            dataset.read(1, window=window, masked=True)
+        elif mode == "data_read":
+            dataset.read(1, window=window, masked=False)
+        elif mode == "mask_read":
+            dataset.read_masks(1, window=window)
+        elif mode == "data_plus_mask":
+            dataset.read(1, window=window, masked=False)
+            dataset.read_masks(1, window=window)
+        else:
+            raise ValueError(f"不支持的 raster read attribution mode: {mode}")
+        return time.perf_counter_ns() - started
+    finally:
+        if owns_handle:
+            dataset.close()
+
+
+def _verify_raster_read_equivalence(path: Path, window: Window) -> dict[str, Any]:
+    with rasterio.open(path) as dataset:
+        masked = dataset.read(1, window=window, masked=True)
+    with rasterio.open(path) as dataset:
+        data = dataset.read(1, window=window, masked=False)
+        valid_mask = dataset.read_masks(1, window=window)
+
+    expected_mask = valid_mask == 0
+    if masked.shape != data.shape or masked.dtype != data.dtype:
+        raise RuntimeError(f"{path.name} masked/data shape 或 dtype 不一致")
+    if not np.array_equal(masked.data, data, equal_nan=True):
+        raise RuntimeError(f"{path.name} masked/data 像元值不一致")
+    if not np.array_equal(np.ma.getmaskarray(masked), expected_mask):
+        raise RuntimeError(f"{path.name} masked/read_masks 有效像元不一致")
+    return {
+        "rows": int(data.shape[0]),
+        "cols": int(data.shape[1]),
+        "dtype": str(data.dtype),
+        "valid_cells": int(np.count_nonzero(valid_mask)),
+        "equivalent": True,
+    }
+
+
+def _raster_read_summaries(
+    samples: Sequence[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    summaries: list[dict[str, Any]] = []
+    for indicator in INDICATORS:
+        modes: dict[str, dict[str, float]] = {}
+        for mode in RASTER_READ_MODES:
+            values = [
+                sample["elapsed_ns"] / 1_000_000
+                for sample in samples
+                if sample["indicator_code"] == indicator.code and sample["mode"] == mode
+            ]
+            modes[mode] = _numeric_summary(values)
+        masked = modes["masked_read_new_handle"]["median"]
+        data = modes["data_read"]["median"]
+        combined = modes["data_plus_mask"]["median"]
+        same_handle = modes["masked_reread_same_handle"]["median"]
+        summaries.append(
+            {
+                "indicator_code": indicator.code,
+                "modes": modes,
+                "median_ratios": {
+                    "masked_read_over_data_read": masked / data,
+                    "masked_read_over_data_plus_mask": masked / combined,
+                    "same_handle_reread_over_new_handle_read": same_handle / masked,
+                },
+                "estimated_open_plus_masked_read_ms": (
+                    modes["open_only"]["median"] + masked
+                ),
+            }
+        )
+    return summaries
+
+
+def _raster_read_markdown(result: dict[str, Any]) -> str:
+    source = result["source_provenance"]
+    lineage = result["instrumentation_lineage"]
+    scenarios = {
+        item["indicator_code"]: item
+        for item in result["raster_read_attribution"]["scenarios"]
+    }
+    lines = [
+        "# Risk Raster Read Attribution",
+        "",
+        f"- Production candidate: `{lineage['production_candidate_sha']}`",
+        f"- Diagnostic subject: `{lineage['instrumented_subject_sha']}`",
+        f"- Repository HEAD: `{source['repository_head_sha']}`",
+        "- Source tree and diagnostic lineage verified: `true`",
+        f"- Benchmark elapsed: `{result['benchmark_elapsed_seconds']:.3f}s`",
+        (
+            "- Repetition: warm-up "
+            f"{result['configuration']['warmups_per_mode']} + measured "
+            f"{result['configuration']['measured_runs_per_mode']} per TIF/mode"
+        ),
+        "",
+        "## Cache and timing semantics",
+        "",
+        f"- Cache state: `{result['timing_semantics']['cache_state']}`.",
+        "- Windows OS cache is not flushed; these are not physical cold-disk timings.",
+        "- Open/close are outside read timings except for `open_only`, which times open only.",
+        "- Result equivalence checks run outside timed regions.",
+        "",
+        "## Raster layout",
+        "",
+        "| TIF | Compression | Tiled | Block | Blocks touched | Amplification | File bytes |",
+        "|---|---|---|---:|---:|---:|---:|",
+    ]
+    for indicator in INDICATORS:
+        scenario = scenarios[indicator.code]
+        lines.append(
+            f"| {indicator.code} | {scenario['compression']} | "
+            f"{str(scenario['tiled']).lower()} | "
+            f"{scenario['block_rows']}×{scenario['block_cols']} | "
+            f"{scenario['touched_block_count']} | "
+            f"{scenario['read_amplification_ratio']:.3f} | "
+            f"{scenario['file_size_bytes']} |"
+        )
+    lines.extend(
+        [
+            "",
+            "## Median timing by TIF",
+            "",
+            "All values are milliseconds after one warm-up per mode.",
+            "",
+            (
+                "| TIF | Open | Masked/new | Masked/same | Data | Mask | "
+                "Data+mask |"
+            ),
+            "|---|---:|---:|---:|---:|---:|---:|",
+        ]
+    )
+    for summary in result["raster_read_attribution"]["summaries"]:
+        modes = summary["modes"]
+        lines.append(
+            f"| {summary['indicator_code']} | {modes['open_only']['median']:.3f} | "
+            f"{modes['masked_read_new_handle']['median']:.3f} | "
+            f"{modes['masked_reread_same_handle']['median']:.3f} | "
+            f"{modes['data_read']['median']:.3f} | "
+            f"{modes['mask_read']['median']:.3f} | "
+            f"{modes['data_plus_mask']['median']:.3f} |"
+        )
+    lines.extend(
+        [
+            "",
+            "## Median ratios",
+            "",
+            "| TIF | Masked/data | Masked/(data+mask) | Same/new handle |",
+            "|---|---:|---:|---:|",
+        ]
+    )
+    for summary in result["raster_read_attribution"]["summaries"]:
+        ratios = summary["median_ratios"]
+        lines.append(
+            f"| {summary['indicator_code']} | "
+            f"{ratios['masked_read_over_data_read']:.3f} | "
+            f"{ratios['masked_read_over_data_plus_mask']:.3f} | "
+            f"{ratios['same_handle_reread_over_new_handle_read']:.3f} |"
+        )
+    lines.extend(
+        [
+            "",
+            "Raw nanosecond samples, min/median/max summaries, GDAL configuration, "
+            "environment metadata and TIF SHA-256 values are retained in JSON/CSV.",
+            "",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def _write_raster_read_csv(path: Path, samples: Sequence[dict[str, Any]]) -> None:
+    fields = [
+        "indicator_code",
+        "filename",
+        "mode",
+        "sample_index",
+        "rows",
+        "cols",
+        "window_cells",
+        "elapsed_ns",
+    ]
+    with path.open("w", encoding="utf-8", newline="") as stream:
+        writer = csv.DictWriter(stream, fieldnames=fields, extrasaction="ignore")
+        writer.writeheader()
+        writer.writerows(samples)
+
+
+def run_raster_read_attribution(
+    *,
+    raster_dir: Path,
+    output_dir: Path,
+    repository_head_sha: str,
+    source_tree_verified: bool,
+    baseline_is_ancestor: bool,
+    production_candidate_is_ancestor: bool,
+    diagnostic_source_tree_verified: bool,
+    subject_baseline_sha: str,
+    production_candidate_sha: str = PRODUCTION_CANDIDATE_SHA,
+    verification_method: str = SOURCE_TREE_VERIFICATION_METHOD,
+    allowed_benchmark_paths: Sequence[str] = ALLOWED_BENCHMARK_PATHS,
+    tracked_differences: Sequence[str] = (),
+    untracked_paths: Sequence[str] = (),
+    allowed_diagnostic_paths: Sequence[str] = ALLOWED_PIPELINE_DIAGNOSTIC_PATHS,
+    diagnostic_differences: Sequence[str] = (),
+    warmups: int = DEFAULT_WARMUPS,
+    runs: int = DEFAULT_RUNS,
+    size: int = RASTER_READ_ATTRIBUTION_SIZE,
+) -> tuple[dict[str, Any], dict[str, Path]]:
+    raster_dir = raster_dir.expanduser().resolve()
+    provenance = _verified_provenance(
+        subject_baseline_sha,
+        repository_head_sha,
+        verification_method,
+        source_tree_verified,
+        baseline_is_ancestor,
+        allowed_benchmark_paths,
+        tracked_differences,
+        untracked_paths,
+    )
+    lineage = _verified_instrumentation_lineage(
+        production_candidate_sha,
+        subject_baseline_sha,
+        production_candidate_is_ancestor,
+        diagnostic_source_tree_verified,
+        allowed_diagnostic_paths,
+        diagnostic_differences,
+    )
+    if warmups < 0 or runs < 1 or size < 1:
+        raise ValueError("warmups 必须 >= 0，runs/size 必须 >= 1")
+
+    started = time.perf_counter_ns()
+    output_dir.mkdir(parents=True, exist_ok=True)
+    samples: list[dict[str, Any]] = []
+    scenarios: list[dict[str, Any]] = []
+    for indicator in INDICATORS:
+        path = raster_dir / indicator.filename
+        with rasterio.open(path) as dataset:
+            window, grid_center = _scenario_window(dataset, size)
+            block_shape = dataset.block_shapes[0]
+            scenario = {
+                "indicator_code": indicator.code,
+                "filename": indicator.filename,
+                "file_size_bytes": path.stat().st_size,
+                "compression": str(dataset.compression),
+                "tiled": bool(dataset.profile.get("tiled", False)),
+                "block_rows": block_shape[0],
+                "block_cols": block_shape[1],
+                "window": {
+                    "row_off": int(window.row_off),
+                    "col_off": int(window.col_off),
+                    "height": int(window.height),
+                    "width": int(window.width),
+                },
+                "grid_aligned_center": list(grid_center),
+                **_window_block_metrics(window, block_shape, dataset.dtypes[0]),
+            }
+        scenario["read_equivalence"] = _verify_raster_read_equivalence(path, window)
+        scenarios.append(scenario)
+
+        same_handle = rasterio.open(path)
+        try:
+            for mode in RASTER_READ_MODES:
+                for _ in range(warmups):
+                    _time_raster_read_mode(
+                        path,
+                        window,
+                        mode,
+                        same_handle=(
+                            same_handle if mode == "masked_reread_same_handle" else None
+                        ),
+                    )
+
+            modes = list(RASTER_READ_MODES)
+            for sample_index in range(runs):
+                offset = sample_index % len(modes)
+                for mode in modes[offset:] + modes[:offset]:
+                    elapsed_ns = _time_raster_read_mode(
+                        path,
+                        window,
+                        mode,
+                        same_handle=(
+                            same_handle if mode == "masked_reread_same_handle" else None
+                        ),
+                    )
+                    samples.append(
+                        {
+                            "indicator_code": indicator.code,
+                            "filename": indicator.filename,
+                            "mode": mode,
+                            "sample_index": sample_index,
+                            "rows": int(window.height),
+                            "cols": int(window.width),
+                            "window_cells": int(window.width * window.height),
+                            "elapsed_ns": elapsed_ns,
+                        }
+                    )
+        finally:
+            same_handle.close()
+
+    result = {
+        "schema_version": 1,
+        "benchmark": "risk-raster-read-attribution",
+        "production_candidate_sha": lineage["production_candidate_sha"],
+        "diagnostic_subject_sha": lineage["instrumented_subject_sha"],
+        "source_provenance": provenance,
+        "instrumentation_lineage": lineage,
+        "benchmark_elapsed_seconds": _elapsed_ms(started) / 1000.0,
+        "configuration": {
+            "warmups_per_mode": warmups,
+            "measured_runs_per_mode": runs,
+            "window_size": size,
+            "indicator_codes": [indicator.code for indicator in INDICATORS],
+            "modes": list(RASTER_READ_MODES),
+            "measured_sample_count": len(samples),
+        },
+        "timing_semantics": {
+            "clock": "time.perf_counter_ns",
+            "raw_sample_unit": "nanoseconds",
+            "cache_state": RASTER_READ_CACHE_SEMANTICS,
+            "mode_order": "measured modes rotate once per sample round",
+            "open_close_outside_read_timing": True,
+            "result_equivalence_outside_timing": True,
+            "physical_cold_disk_claimed": False,
+        },
+        "gdal_runtime": {
+            "version": rasterio.__gdal_version__,
+            "GDAL_CACHEMAX": rasterio.env.get_gdal_config("GDAL_CACHEMAX"),
+            "GDAL_NUM_THREADS": rasterio.env.get_gdal_config("GDAL_NUM_THREADS"),
+            "VSI_CACHE": rasterio.env.get_gdal_config("VSI_CACHE"),
+        },
+        "environment": _environment_metadata(),
+        "raster_dataset": {
+            "directory": str(raster_dir),
+            "files": _raster_metadata(raster_dir),
+        },
+        "raster_read_attribution": {
+            "scenarios": scenarios,
+            "raw_samples": samples,
+            "summaries": _raster_read_summaries(samples),
+        },
+    }
+    paths = {
+        "json": output_dir / "risk-raster-read-attribution.json",
+        "csv": output_dir / "risk-raster-read-attribution.csv",
+        "markdown": output_dir / "risk-raster-read-attribution.md",
+    }
+    paths["json"].write_text(
+        json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    _write_raster_read_csv(paths["csv"], samples)
+    paths["markdown"].write_text(_raster_read_markdown(result), encoding="utf-8")
+    return result, paths
+
+
 def run_benchmark(
     *,
     raster_dir: Path,
@@ -1430,6 +1840,7 @@ def _parse_args() -> argparse.Namespace:
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--pipeline-profile", action="store_true")
     mode.add_argument("--pipeline-stage-timing", action="store_true")
+    mode.add_argument("--pipeline-read-attribution", action="store_true")
     parser.add_argument("--production-candidate-sha")
     parser.add_argument("--production-candidate-is-ancestor", action="store_true")
     parser.add_argument("--diagnostic-source-tree-verified", action="store_true")
@@ -1440,6 +1851,35 @@ def _parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = _parse_args()
+    if args.pipeline_read_attribution:
+        if args.production_candidate_sha is None or args.allowed_diagnostic_path is None:
+            raise ValueError(
+                "raster read attribution 需要 production candidate 和 diagnostic allowlist"
+            )
+        result, paths = run_raster_read_attribution(
+            raster_dir=args.raster_dir,
+            output_dir=args.output_dir,
+            subject_baseline_sha=args.subject_baseline_sha,
+            repository_head_sha=args.repository_head_sha,
+            verification_method=args.source_tree_verification_method,
+            source_tree_verified=args.source_tree_verified,
+            baseline_is_ancestor=args.baseline_is_ancestor,
+            allowed_benchmark_paths=args.allowed_benchmark_path,
+            tracked_differences=args.tracked_difference,
+            untracked_paths=args.untracked_path,
+            production_candidate_sha=args.production_candidate_sha,
+            production_candidate_is_ancestor=args.production_candidate_is_ancestor,
+            diagnostic_source_tree_verified=args.diagnostic_source_tree_verified,
+            allowed_diagnostic_paths=args.allowed_diagnostic_path,
+            diagnostic_differences=args.diagnostic_difference,
+        )
+        for kind, path in paths.items():
+            print(f"[OK] {kind}: {path}")
+        print(
+            "[INFO] raster read attribution elapsed: "
+            f"{result['benchmark_elapsed_seconds']:.3f}s"
+        )
+        return 0
     if args.pipeline_stage_timing:
         if args.production_candidate_sha is None or args.allowed_diagnostic_path is None:
             raise ValueError(
