@@ -1,0 +1,12 @@
+esr.example.com {
+	encode zstd gzip
+
+	# Compose 默认只在宿主机 loopback 的 8080 端口暴露 Frontend Nginx。
+	reverse_proxy 127.0.0.1:8080
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+	}
+}

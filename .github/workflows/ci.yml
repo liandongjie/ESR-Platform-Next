@@ -69,3 +69,6 @@ jobs:
           ./frontend
       - name: Validate production Compose configuration
         run: docker compose -f compose.production.yml config --quiet
+      - name: Run isolated PostGIS migration and readiness gate
+        shell: pwsh
+        run: ./scripts/release-gate.ps1 -BackendImage esr-platform-backend:ci
