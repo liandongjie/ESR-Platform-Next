@@ -10,7 +10,7 @@ import type {
   PolygonGeometry,
   SourceGeometry,
 } from '@/types/analysisArea'
-import type { RiskAnalysisSpatialResult } from '@/types/riskAnalysis'
+import type { RiskAnalysisPreview, RiskAnalysisSpatialResult } from '@/types/riskAnalysis'
 import type { PoiDto } from '@/types/poi'
 import { parseSourceGeometry } from '@/validation/sourceGeometry'
 
@@ -20,6 +20,7 @@ interface Props {
   sourceGeometry?: SourceGeometry | null
   bufferGeometry?: BufferGeometry | null
   riskSpatialResult?: RiskAnalysisSpatialResult | null
+  riskPreview?: RiskAnalysisPreview | null
   poiItems?: PoiDto[]
   readOnly?: boolean
   selectionDisabled?: boolean
@@ -61,9 +62,14 @@ interface MapInstance {
   addControl: (control: MapControlInstance) => void
   removeControl: (control: MapControlInstance) => void
   setFitView: (overlays?: OverlayInstance[]) => void
+  setBounds: (bounds: unknown) => void
+  add: (layer: ImageLayerInstance) => void
+  remove: (layer: ImageLayerInstance) => void
   setLayers: (layers: TileLayerInstance[]) => void
   destroy: () => void
 }
+
+type ImageLayerInstance = object
 
 interface AMapNamespace {
   plugin: (name: string, callback: () => void) => void
@@ -94,6 +100,13 @@ interface AMapNamespace {
     fillOpacity: number
     zIndex: number
   }) => OverlayInstance
+  Bounds: new (southWest: Coordinate, northEast: Coordinate) => unknown
+  ImageLayer: new (options: {
+    url: string
+    bounds: unknown
+    opacity: number
+    zIndex: number
+  }) => ImageLayerInstance
   TileLayer: {
     Satellite: new () => TileLayerInstance
     RoadNet: new () => TileLayerInstance
@@ -116,6 +129,7 @@ const props = withDefaults(defineProps<Props>(), {
   sourceGeometry: null,
   bufferGeometry: null,
   riskSpatialResult: null,
+  riskPreview: null,
   poiItems: () => [],
   readOnly: false,
   selectionDisabled: false,
@@ -142,6 +156,7 @@ let roadNetLayer: TileLayerInstance | null = null
 let sourceOverlays: OverlayInstance[] = []
 let bufferOverlays: OverlayInstance[] = []
 let riskCellOverlays: OverlayInstance[] = []
+let riskPreviewLayer: ImageLayerInstance | null = null
 let poiMarkers: OverlayInstance[] = []
 const fittedRiskTaskIds = new Set<string>()
 let mouseTool: MouseToolInstance | null = null
@@ -200,6 +215,11 @@ function removeBufferOverlays() {
 function removeRiskCellOverlays() {
   riskCellOverlays.forEach((overlay) => overlay.setMap(null))
   riskCellOverlays = []
+}
+
+function removeRiskPreviewLayer() {
+  if (map && riskPreviewLayer) map.remove(riskPreviewLayer)
+  riskPreviewLayer = null
 }
 
 function removePoiMarkers() {
@@ -318,15 +338,40 @@ function renderBufferGeometry() {
 
   if (
     bufferOverlays.length > 0 &&
+    !props.riskPreview &&
     !props.riskSpatialResult?.feature_collection.features.length
   ) {
     map.setFitView(bufferOverlays)
   }
 }
 
-function renderRiskCells() {
+function renderRiskVisualization() {
+  removeRiskPreviewLayer()
   removeRiskCellOverlays()
-  if (!map || !amap || !props.riskSpatialResult) return
+  if (!map || !amap) return
+
+  if (props.riskPreview) {
+    const [minLng, minLat, maxLng, maxLat] = props.riskPreview.bounds
+    // Preview bounds 与业务栅格保持 WGS84；只在高德图层构造边界转换为 GCJ-02。
+    const bounds = new amap.Bounds(
+      wgs84ToGcj02([minLng, minLat]),
+      wgs84ToGcj02([maxLng, maxLat]),
+    )
+    riskPreviewLayer = new amap.ImageLayer({
+      url: props.riskPreview.url,
+      bounds,
+      opacity: 1,
+      zIndex: 20,
+    })
+    map.add(riskPreviewLayer)
+    if (!fittedRiskTaskIds.has(props.riskPreview.task_id)) {
+      map.setBounds(bounds)
+      fittedRiskTaskIds.add(props.riskPreview.task_id)
+    }
+    return
+  }
+
+  if (!props.riskSpatialResult) return
 
   for (const feature of props.riskSpatialResult.feature_collection.features) {
     const color = riskColorForValue(feature.properties.value)
@@ -599,7 +644,11 @@ defineExpose({ startDrawing, cancelDrawing })
 
 watch(() => props.sourceGeometry, renderSourceGeometry, { deep: true })
 watch(() => props.bufferGeometry, renderBufferGeometry, { deep: true })
-watch(() => props.riskSpatialResult, renderRiskCells, { deep: true })
+watch(
+  [() => props.riskPreview, () => props.riskSpatialResult],
+  renderRiskVisualization,
+  { deep: true },
+)
 watch(() => props.poiItems, renderPoiMarkers, { deep: true })
 watch(
   () => props.selectionDisabled,
@@ -642,7 +691,7 @@ onMounted(async () => {
     state.value = 'ready'
     renderSourceGeometry()
     renderBufferGeometry()
-    renderRiskCells()
+    renderRiskVisualization()
     renderPoiMarkers()
   } catch (error: unknown) {
     state.value = 'error'
@@ -665,6 +714,7 @@ onBeforeUnmount(() => {
   }
   removeSourceOverlays()
   removeBufferOverlays()
+  removeRiskPreviewLayer()
   removeRiskCellOverlays()
   removePoiMarkers()
   map?.destroy()
@@ -729,7 +779,10 @@ onBeforeUnmount(() => {
         </label>
       </div>
     </details>
-    <div v-if="state === 'ready' && props.riskSpatialResult" class="risk-legend">
+    <div
+      v-if="state === 'ready' && (props.riskPreview || props.riskSpatialResult)"
+      class="risk-legend"
+    >
       <strong>综合风险值</strong>
       <div v-for="bin in RISK_VALUE_COLOR_BINS" :key="bin.label" class="risk-legend-row">
         <span class="risk-legend-swatch" :style="{ backgroundColor: bin.color }" />

@@ -29,6 +29,8 @@ data/runtime/*
 logs/
 tmp/
 temp/
+scripts/load-test/*.local.json
+scripts/load-test/results/
 
 # Geospatial data and generated exports
 *.tif
@@ -69,6 +71,7 @@ temp/
 # IDE / OS
 .vscode/
 .idea/
+.playwright-cli/
 .DS_Store
 Thumbs.db
 

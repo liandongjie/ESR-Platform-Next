@@ -1,0 +1,21 @@
+
+[2026-08-20T08:40:32.0795127Z]
+esr-platform-next-rc-backend-1|557.56%|343.6MiB / 7.625GiB
+esr-platform-next-rc-worker-1|0.29%|243.4MiB / 7.625GiB
+esr-platform-next-rc-db-1|15.80%|78.87MiB / 7.625GiB
+esr-platform-next-rc-redis-1|0.59%|9.867MiB / 7.625GiB
+[2026-08-20T08:40:42.1193836Z]
+esr-platform-next-rc-backend-1|616.43%|292.6MiB / 7.625GiB
+esr-platform-next-rc-worker-1|0.15%|243.4MiB / 7.625GiB
+esr-platform-next-rc-db-1|20.69%|78.87MiB / 7.625GiB
+esr-platform-next-rc-redis-1|0.52%|9.852MiB / 7.625GiB
+[2026-08-20T08:40:52.0527649Z]
+esr-platform-next-rc-backend-1|537.68%|396.4MiB / 7.625GiB
+esr-platform-next-rc-worker-1|0.11%|243.4MiB / 7.625GiB
+esr-platform-next-rc-db-1|17.33%|78.88MiB / 7.625GiB
+esr-platform-next-rc-redis-1|0.48%|9.848MiB / 7.625GiB
+[2026-08-20T08:41:01.7253496Z]
+esr-platform-next-rc-backend-1|1.50%|278MiB / 7.625GiB
+esr-platform-next-rc-worker-1|0.05%|243.4MiB / 7.625GiB
+esr-platform-next-rc-db-1|0.01%|78.88MiB / 7.625GiB
+esr-platform-next-rc-redis-1|0.51%|9.848MiB / 7.625GiB

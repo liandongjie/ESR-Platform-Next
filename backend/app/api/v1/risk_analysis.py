@@ -1,17 +1,31 @@
 from __future__ import annotations
 
+import time
+from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
 
 from flask import Blueprint, current_app, jsonify, request, send_file, url_for
+from flask_jwt_extended import get_jwt_identity, jwt_required
 from pydantic import ValidationError
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import selectinload
 
 from app.api.validation import validation_details
 from app.extensions import celery as celery_app
+from app.extensions import db
+from app.gis.analysis_area import AnalysisAreaValidationError, metric_area_m2
+from app.gis.geojson import parse_geojson_geometry
+from app.models import AnalysisJob, User
+from app.repositories.analysis_jobs import (
+    cancel_queued_job,
+    get_owned_job,
+    mark_job_dispatched,
+    mark_job_failed,
+)
 from app.repositories.risk_analysis_job_store import RiskAnalysisJobStore
 from app.schemas.risk_analysis import (
     RiskAnalysisJobRequest,
-    RiskAnalysisSubmissionRecord,
     RiskAnalysisSuccessResult,
 )
 from app.services.risk_analysis_jobs import (
@@ -23,10 +37,61 @@ from app.services.risk_analysis_jobs import (
 
 risk_analysis_bp = Blueprint("risk_analysis", __name__)
 _RISK_ANALYSIS_TASK_NAME = "app.tasks.risk_analysis.run"
+_ACTIVE_STATUSES = ("QUEUED", "RUNNING")
+_FIXED_WINDOW_SCRIPT = """
+local current = redis.call('INCR', KEYS[1])
+if current == 1 then redis.call('EXPIRE', KEYS[1], ARGV[1]) end
+return {current, redis.call('TTL', KEYS[1])}
+"""
 
 
-class TaskStatusBackendUnavailable(RuntimeError):
-    """Celery result backend 暂时无法提供任务状态。"""
+class RiskAnalysisManifestError(ValueError):
+    """A succeeded database job has no consumable result manifest."""
+
+
+def _idempotency_key():
+    value = request.headers.get("Idempotency-Key", "")
+    if not value or value != value.strip() or len(value) > 128:
+        return None, (
+            jsonify(
+                {
+                    "code": "INVALID_IDEMPOTENCY_KEY",
+                    "message": "Idempotency-Key 必填且长度不能超过 128",
+                }
+            ),
+            422,
+        )
+    return value, None
+
+
+def _rate_limit_submission(owner_id: int):
+    limit = current_app.config["SUBMISSION_RATE_LIMIT_PER_MINUTE"]
+    window = int(time.time()) // 60
+    key = f"rate:risk-analysis:{owner_id}:{window}"
+    try:
+        count, ttl = current_app.extensions["redis_auth"].eval(
+            _FIXED_WINDOW_SCRIPT, 1, key, 60
+        )
+    except Exception:
+        current_app.logger.exception("Risk-analysis submission rate limiter unavailable")
+        return _no_store_json(
+            {
+                "code": "RATE_LIMIT_UNAVAILABLE",
+                "message": "提交限流服务暂时不可用",
+            },
+            503,
+        )
+    if int(count) <= limit:
+        return None
+    response, status = _no_store_json(
+        {
+            "code": "SUBMISSION_RATE_LIMITED",
+            "message": "提交过于频繁，请稍后重试",
+        },
+        429,
+    )
+    response.headers["Retry-After"] = str(max(1, int(ttl)))
+    return response, status
 
 
 def _job_store() -> RiskAnalysisJobStore:
@@ -45,104 +110,333 @@ def _status_urls(task_id: str) -> tuple[str, str]:
     return status_url, result_url
 
 
-def _final_status_payload(
-    *,
-    task_id: str,
-    submission: dict[str, Any] | None,
-    result: dict[str, Any],
-) -> dict[str, Any]:
-    status = str(result.get("status", "FAILED"))
-    invalid_result_error: dict[str, str] | None = None
+def _success_manifest(
+    store: RiskAnalysisJobStore, job: AnalysisJob
+) -> RiskAnalysisSuccessResult:
+    try:
+        result = store.read_result(job.id)
+    except (OSError, ValueError) as exc:
+        raise RiskAnalysisManifestError("风险分析结果文件格式不完整或已损坏") from exc
+    if result is None:
+        raise RiskAnalysisManifestError("成功任务缺少结果文件")
+    try:
+        manifest = RiskAnalysisSuccessResult.model_validate(result)
+    except ValidationError as exc:
+        raise RiskAnalysisManifestError("风险分析结果文件格式不完整或已损坏") from exc
+    if manifest.task_id != job.id:
+        raise RiskAnalysisManifestError("风险分析结果文件与任务不匹配")
+    return manifest
 
-    if status == "SUCCEEDED":
-        try:
-            RiskAnalysisSuccessResult.model_validate(result)
-        except ValidationError as exc:
-            # 文件虽然声称成功，但缺少结果 Contract 必需字段时业务上已经不可消费。
-            current_app.logger.warning(
-                "Invalid risk-analysis result manifest for task %s: %s",
-                task_id,
-                exc,
-            )
-            status = "FAILED"
-            invalid_result_error = {
-                "code": "INVALID_RESULT_MANIFEST",
-                "message": "风险分析结果文件格式不完整或已损坏",
-            }
+
+def _elapsed_seconds(start: datetime | None, end: datetime | None) -> float | None:
+    if start is None or end is None:
+        return None
+    if start.tzinfo is None:
+        start = start.replace(tzinfo=UTC)
+    if end.tzinfo is None:
+        end = end.replace(tzinfo=UTC)
+    return round(max(0.0, (end - start).total_seconds()), 3)
+
+
+def _job_status_payload(
+    job: AnalysisJob,
+    manifest: RiskAnalysisSuccessResult | None = None,
+    manifest_error: str | None = None,
+    result_available: bool | None = None,
+) -> dict[str, Any]:
 
     payload: dict[str, Any] = {
-        "task_id": task_id,
-        "status": status,
-        "stage": "COMPLETED" if status == "SUCCEEDED" else "FAILED",
-        "progress": 100,
-        "result_available": status == "SUCCEEDED",
-        "submitted_at": submission.get("submitted_at") if submission else None,
+        "task_id": job.id,
+        "status": job.status,
+        "stage": job.stage,
+        "progress": job.progress,
+        "result_available": (
+            result_available
+            if result_available is not None
+            else job.status == "SUCCEEDED" and manifest is not None
+        ),
+        "submitted_at": job.queued_at.isoformat(),
+        "queued_at": job.queued_at.isoformat(),
+        "started_at": job.started_at.isoformat() if job.started_at else None,
+        "completed_at": job.completed_at.isoformat() if job.completed_at else None,
+        "expires_at": job.expires_at.isoformat() if job.expires_at else None,
+        "parent_job_id": job.parent_job_id,
+        "timing": {
+            "queue_seconds": _elapsed_seconds(job.queued_at, job.started_at),
+            "execution_seconds": _elapsed_seconds(job.started_at, job.completed_at),
+            "total_seconds": _elapsed_seconds(job.queued_at, job.completed_at),
+        },
     }
-    if invalid_result_error is not None:
-        payload["error"] = invalid_result_error
-    elif status == "FAILED":
-        payload["error"] = result.get("error")
+    if manifest_error is not None:
+        payload["error"] = {
+            "code": "INVALID_RESULT_MANIFEST",
+            "message": manifest_error,
+        }
+    elif job.status == "FAILED":
+        payload["error"] = {
+            "code": job.error_code or "INTERNAL_ERROR",
+            "message": job.error_message or "风险分析任务执行失败",
+        }
     return payload
 
 
-def _transient_status_payload(
+def _no_store_json(payload: dict[str, Any], status_code: int):
+    response = jsonify(payload)
+    response.headers["Cache-Control"] = "no-store"
+    return response, status_code
+
+
+def _terminal_conflict(job: AnalysisJob):
+    if job.status not in {"FAILED", "CANCELED"}:
+        return None
+    return _no_store_json(_job_status_payload(job), 409)
+
+
+def _expired_result(job: AnalysisJob):
+    if job.status != "EXPIRED":
+        return None
+    return _no_store_json(
+        {
+            "code": "RESULT_EXPIRED",
+            "message": "风险分析成果已过期并清理",
+            "task_id": job.id,
+            "status": job.status,
+        },
+        410,
+    )
+
+
+def _result_not_ready(job: AnalysisJob):
+    response = jsonify(
+        {
+            "code": "RESULT_NOT_READY",
+            "message": "风险分析任务尚未产生最终结果",
+            "task_id": job.id,
+            "status": job.status,
+        }
+    )
+    response.headers["Retry-After"] = "2"
+    response.headers["Cache-Control"] = "no-store"
+    return response, 202
+
+
+def _invalid_manifest(job: AnalysisJob, error: RiskAnalysisManifestError):
+    current_app.logger.warning("Invalid result manifest for task %s: %s", job.id, error)
+    return _no_store_json(
+        {
+            "code": "INVALID_RESULT_MANIFEST",
+            "message": str(error),
+            "task_id": job.id,
+            "status": job.status,
+        },
+        409,
+    )
+
+
+def _job_created_response(
     *,
     task_id: str,
-    submission: dict[str, Any] | None,
-) -> dict[str, Any]:
-    """把 Celery 的内部状态映射成前端稳定的业务状态。"""
+    status: str,
+    queued_at: datetime,
+    replayed: bool,
+    status_code: int,
+):
+    status_url, result_url = _status_urls(task_id)
+    response = jsonify(
+        {
+            "task_id": task_id,
+            "status": status,
+            "submitted_at": queued_at.isoformat(),
+            "status_url": status_url,
+            "result_url": result_url,
+            "replayed": replayed,
+        }
+    )
+    response.status_code = status_code
+    response.headers["Location"] = status_url
+    response.headers["Retry-After"] = "2"
+    response.headers["Idempotency-Replayed"] = "true" if replayed else "false"
+    return response
+
+
+def _idempotent_replay(
+    job: AnalysisJob,
+    request_payload: dict[str, Any],
+    parent_job_id: str | None,
+):
+    if (
+        job.request_payload != request_payload
+        or job.parent_job_id != parent_job_id
+    ):
+        return _no_store_json(
+            {
+                "code": "IDEMPOTENCY_CONFLICT",
+                "message": "Idempotency-Key 已用于不同的任务请求",
+            },
+            409,
+        )
+    return _job_created_response(
+        task_id=job.id,
+        status=job.status,
+        queued_at=job.queued_at,
+        replayed=True,
+        status_code=200,
+    )
+
+
+def _create_and_dispatch_job(
+    *,
+    owner_id: int,
+    request_payload: dict[str, Any],
+    idempotency_key: str,
+    parent_job_id: str | None = None,
+):
+    existing = db.session.scalar(
+        db.select(AnalysisJob).where(
+            AnalysisJob.owner_id == owner_id,
+            AnalysisJob.idempotency_key == idempotency_key,
+        )
+    )
+    if existing is not None:
+        response = _idempotent_replay(existing, request_payload, parent_job_id)
+        db.session.rollback()
+        return response
+    db.session.rollback()
+
+    # PostgreSQL serializes submissions per user here; the unique constraint is
+    # still the final guard for concurrent requests and SQLite tests.
+    db.session.scalar(
+        db.select(User).where(User.id == owner_id).with_for_update()
+    )
+    existing = db.session.scalar(
+        db.select(AnalysisJob).where(
+            AnalysisJob.owner_id == owner_id,
+            AnalysisJob.idempotency_key == idempotency_key,
+        )
+    )
+    if existing is not None:
+        response = _idempotent_replay(existing, request_payload, parent_job_id)
+        db.session.rollback()
+        return response
+
+    rate_limited = _rate_limit_submission(owner_id)
+    if rate_limited is not None:
+        db.session.rollback()
+        return rate_limited
+
+    active_count = db.session.scalar(
+        db.select(db.func.count())
+        .select_from(AnalysisJob)
+        .where(
+            AnalysisJob.owner_id == owner_id,
+            AnalysisJob.status.in_(_ACTIVE_STATUSES),
+        )
+    )
+    if (active_count or 0) >= current_app.config["MAX_ACTIVE_JOBS_PER_USER"]:
+        db.session.rollback()
+        response, status = _no_store_json(
+            {
+                "code": "ACTIVE_JOB_LIMIT_REACHED",
+                "message": "当前活动任务数已达到上限",
+            },
+            429,
+        )
+        response.headers["Retry-After"] = "2"
+        return response, status
+
+    task_id = str(uuid4())
+    job = AnalysisJob(
+        id=task_id,
+        owner_id=owner_id,
+        idempotency_key=idempotency_key,
+        parent_job_id=parent_job_id,
+        status="QUEUED",
+        stage="QUEUED",
+        progress=0,
+        request_payload=request_payload,
+        geometry=request_payload["geometry"],
+    )
+    db.session.add(job)
+    try:
+        db.session.commit()
+    except IntegrityError:
+        db.session.rollback()
+        existing = db.session.scalar(
+            db.select(AnalysisJob).where(
+                AnalysisJob.owner_id == owner_id,
+                AnalysisJob.idempotency_key == idempotency_key,
+            )
+        )
+        if existing is None:
+            raise
+        response = _idempotent_replay(existing, request_payload, parent_job_id)
+        db.session.rollback()
+        return response
+
+    queued_at = db.session.scalar(
+        db.select(AnalysisJob.queued_at).where(AnalysisJob.id == task_id)
+    )
+    if queued_at is None:  # pragma: no cover - committed row invariant
+        raise RuntimeError("Committed analysis job could not be reloaded")
 
     try:
-        async_result = celery_app.AsyncResult(task_id)
-        celery_state = str(async_result.state)
-        info = async_result.info if isinstance(async_result.info, dict) else {}
-    except Exception as exc:
-        raise TaskStatusBackendUnavailable("任务状态服务暂时不可用") from exc
+        celery_app.send_task(
+            _RISK_ANALYSIS_TASK_NAME,
+            kwargs={"payload": request_payload},
+            task_id=task_id,
+        )
+    except Exception:
+        db.session.rollback()
+        current_app.logger.exception("Failed to enqueue risk-analysis task %s", task_id)
+        message = "风险分析任务队列暂时不可用"
+        transitioned = mark_job_failed(
+            task_id, "QUEUE_UNAVAILABLE", message, dispatch_failed=True
+        )
+        if transitioned:
+            try:
+                write_failure_manifest(
+                    runtime_dir=current_app.config["RUNTIME_DATA_DIR"],
+                    task_id=task_id,
+                    error_code="QUEUE_UNAVAILABLE",
+                    message=message,
+                )
+            except Exception:
+                current_app.logger.exception(
+                    "Failed to persist queue failure manifest for task %s", task_id
+                )
+        return _no_store_json(
+            {
+                "code": "TASK_QUEUE_UNAVAILABLE",
+                "message": message,
+                "task_id": task_id,
+            },
+            503,
+        )
 
-    if celery_state in {"PENDING", "RECEIVED"}:
-        status, stage, progress = "QUEUED", "QUEUED", 0
-    elif celery_state == "PROGRESS":
-        status = "RUNNING"
-        stage = str(info.get("stage") or "RUNNING")
-        raw_progress = info.get("progress")
-        progress = raw_progress if isinstance(raw_progress, int) else None
-    elif celery_state == "STARTED":
-        status, stage, progress = "RUNNING", "STARTED", None
-    elif celery_state == "RETRY":
-        status, stage, progress = "RETRYING", "RETRYING", None
-    elif celery_state == "REVOKED":
-        status, stage, progress = "CANCELED", "CANCELED", None
-    elif celery_state == "SUCCESS":
-        # 正常情况下 result.json 会先于 Celery SUCCESS 产生；这里保留异常状态可观测性。
-        status, stage, progress = "SUCCEEDED", "COMPLETED", 100
-    elif celery_state == "FAILURE":
-        status, stage, progress = "FAILED", "FAILED", 100
-    else:
-        status, stage, progress = "RUNNING", celery_state, None
-
-    return {
-        "task_id": task_id,
-        "status": status,
-        "stage": stage,
-        "progress": progress,
-        "result_available": False,
-        "submitted_at": submission.get("submitted_at") if submission else None,
-    }
-
-
-def _job_status_payload(store: RiskAnalysisJobStore, task_id: str) -> dict[str, Any] | None:
-    submission = store.read_submission(task_id)
-    result = store.read_result(task_id)
-    if submission is None and result is None:
-        return None
-    if result is not None:
-        return _final_status_payload(task_id=task_id, submission=submission, result=result)
-    return _transient_status_payload(task_id=task_id, submission=submission)
+    try:
+        mark_job_dispatched(task_id)
+    except Exception:
+        db.session.rollback()
+        current_app.logger.exception(
+            "Task %s was sent but dispatch state could not be persisted", task_id
+        )
+    return _job_created_response(
+        task_id=task_id,
+        status="QUEUED",
+        queued_at=queued_at,
+        replayed=False,
+        status_code=202,
+    )
 
 
 @risk_analysis_bp.post("/jobs")
+@jwt_required()
 def create_risk_analysis_job():
     """创建异步风险分析任务；HTTP 请求线程不执行任何栅格计算。"""
+
+    idempotency_key, error = _idempotency_key()
+    if error is not None:
+        return error
 
     raw_payload = request.get_json(silent=True)
     if not isinstance(raw_payload, dict):
@@ -162,57 +456,123 @@ def create_risk_analysis_job():
             422,
         )
 
-    task_id = str(uuid4())
-    store = _job_store()
-    submission = store.record_submission(
-        task_id=task_id,
-        request_payload=job_request.model_dump(mode="json"),
-    )
-
     try:
-        # 只按稳定任务名投递 JSON 数据，避免 API 层 import Worker 任务造成 Flask/Celery 循环初始化。
-        celery_app.send_task(
-            _RISK_ANALYSIS_TASK_NAME,
-            kwargs={"payload": job_request.model_dump(mode="json")},
-            task_id=task_id,
-        )
-    except Exception:
-        current_app.logger.exception("Failed to enqueue risk-analysis task %s", task_id)
-        message = "风险分析任务队列暂时不可用"
-        write_failure_manifest(
-            runtime_dir=current_app.config["RUNTIME_DATA_DIR"],
-            task_id=task_id,
-            error_code="QUEUE_UNAVAILABLE",
-            message=message,
-        )
+        area_km2 = metric_area_m2(parse_geojson_geometry(job_request.geometry)) / 1_000_000
+    except AnalysisAreaValidationError as exc:
+        return jsonify({"code": "INVALID_REQUEST", "message": str(exc)}), 422
+    max_area_km2 = current_app.config["MAX_ANALYSIS_AREA_KM2"]
+    if area_km2 > max_area_km2:
         return (
             jsonify(
                 {
-                    "code": "TASK_QUEUE_UNAVAILABLE",
-                    "message": message,
-                    "task_id": task_id,
+                    "code": "ANALYSIS_AREA_TOO_LARGE",
+                    "message": f"研究区面积不能超过 {max_area_km2:g} km²",
+                    "details": {"area_km2": area_km2, "max_area_km2": max_area_km2},
                 }
             ),
-            503,
+            422,
         )
 
-    status_url, result_url = _status_urls(task_id)
-    response = jsonify(
-        {
-            "task_id": task_id,
-            "status": "QUEUED",
-            "submitted_at": submission["submitted_at"],
-            "status_url": status_url,
-            "result_url": result_url,
-        }
+    request_payload = job_request.model_dump(mode="json")
+    return _create_and_dispatch_job(
+        owner_id=int(get_jwt_identity()),
+        request_payload=request_payload,
+        idempotency_key=idempotency_key,
     )
-    response.status_code = 202
-    response.headers["Location"] = status_url
-    response.headers["Retry-After"] = "2"
-    return response
+
+
+@risk_analysis_bp.post("/jobs/<task_id>/retry")
+@jwt_required()
+def retry_risk_analysis_job(task_id: str):
+    idempotency_key, error = _idempotency_key()
+    if error is not None:
+        return error
+    owner_id = int(get_jwt_identity())
+    job = get_owned_job(task_id, owner_id)
+    if job is None:
+        return jsonify({"code": "JOB_NOT_FOUND", "message": "风险分析任务不存在"}), 404
+    if job.status != "FAILED":
+        return _no_store_json(
+            {
+                "code": "JOB_NOT_RETRYABLE",
+                "message": "只有失败任务可以重试",
+                "task_id": task_id,
+                "status": job.status,
+            },
+            409,
+        )
+    if idempotency_key == job.idempotency_key:
+        return _no_store_json(
+            {
+                "code": "INVALID_IDEMPOTENCY_KEY",
+                "message": "重试任务必须使用新的 Idempotency-Key",
+            },
+            422,
+        )
+    try:
+        job_request = RiskAnalysisJobRequest.model_validate(job.request_payload)
+    except ValidationError:
+        return _no_store_json(
+            {
+                "code": "INVALID_SUBMISSION_RECORD",
+                "message": "原任务提交参数已损坏，无法重试",
+            },
+            409,
+        )
+    return _create_and_dispatch_job(
+        owner_id=owner_id,
+        request_payload=job_request.model_dump(mode="json"),
+        idempotency_key=idempotency_key,
+        parent_job_id=job.id,
+    )
+
+
+@risk_analysis_bp.post("/jobs/<task_id>/cancel")
+@jwt_required()
+def cancel_risk_analysis_job(task_id: str):
+    owner_id = int(get_jwt_identity())
+    job = get_owned_job(task_id, owner_id)
+    if job is None:
+        return jsonify({"code": "JOB_NOT_FOUND", "message": "风险分析任务不存在"}), 404
+    if job.status == "RUNNING":
+        return _no_store_json(
+            {
+                "code": "RUNNING_CANCEL_UNSUPPORTED",
+                "message": "运行中任务暂不支持强制终止",
+                "task_id": task_id,
+                "status": job.status,
+            },
+            409,
+        )
+    if job.status != "QUEUED":
+        return _no_store_json(
+            {
+                "code": "JOB_NOT_CANCELABLE",
+                "message": "只有排队中的任务可以取消",
+                "task_id": task_id,
+                "status": job.status,
+            },
+            409,
+        )
+
+    if not cancel_queued_job(task_id, owner_id):
+        job = get_owned_job(task_id, owner_id)
+        code = "RUNNING_CANCEL_UNSUPPORTED" if job.status == "RUNNING" else "JOB_NOT_CANCELABLE"
+        return _no_store_json(
+            {
+                "code": code,
+                "message": "任务状态已变化，无法取消",
+                "task_id": task_id,
+                "status": job.status,
+            },
+            409,
+        )
+    job = get_owned_job(task_id, owner_id)
+    return _no_store_json(_job_status_payload(job), 200)
 
 
 @risk_analysis_bp.get("/jobs")
+@jwt_required()
 def list_risk_analysis_jobs():
     """按提交时间倒序返回最近风险分析任务，不在列表接口返回完整研究区 geometry。"""
 
@@ -248,33 +608,26 @@ def list_risk_analysis_jobs():
             422,
         )
 
-    store = _job_store()
-    records: list[tuple[str, str, dict[str, Any] | None]] = []
-    for task_id in store.list_task_ids():
-        submission = store.read_submission(task_id)
-        submitted_at = ""
-        if submission is not None:
-            raw_submitted_at = submission.get("submitted_at")
-            if isinstance(raw_submitted_at, str):
-                submitted_at = raw_submitted_at
-        records.append((submitted_at, task_id, submission))
-
-    # submitted_at 由服务端统一写成 UTC ISO 8601，可直接按字典序排序；缺失时间的旧任务排在末尾。
-    records.sort(key=lambda item: (item[0], item[1]), reverse=True)
-
+    owner_id = int(get_jwt_identity())
+    total = db.session.scalar(
+        db.select(db.func.count()).select_from(AnalysisJob).where(AnalysisJob.owner_id == owner_id)
+    )
+    jobs = db.session.scalars(
+        db.select(AnalysisJob)
+        .where(AnalysisJob.owner_id == owner_id)
+        .options(selectinload(AnalysisJob.artifacts))
+        .order_by(AnalysisJob.queued_at.desc(), AnalysisJob.id.desc())
+        .offset(offset)
+        .limit(limit)
+    ).all()
     items: list[dict[str, Any]] = []
-    # offset/limit 只负责列表窗口切片，total 始终表示完整任务数，前端据此计算总页数。
-    for _, task_id, submission in records[offset : offset + limit]:
-        try:
-            status = _job_status_payload(store, task_id)
-        except TaskStatusBackendUnavailable as exc:
-            current_app.logger.warning("Risk-analysis history status unavailable: %s", exc)
-            return jsonify({"code": "STATUS_UNAVAILABLE", "message": str(exc)}), 503
-
-        if status is None:  # pragma: no cover - 目录扫描与读取之间的极小竞态保护
-            continue
-
-        request_payload = submission.get("request") if submission else None
+    for job in jobs:
+        result_available = job.status == "SUCCEEDED" and any(
+            artifact.kind == "manifest" and artifact.deleted_at is None
+            for artifact in job.artifacts
+        )
+        status = _job_status_payload(job, result_available=result_available)
+        request_payload = job.request_payload
         geometry_type = None
         weights: list[dict[str, Any]] = []
         if isinstance(request_payload, dict):
@@ -297,7 +650,7 @@ def list_risk_analysis_jobs():
             "items": items,
             "limit": limit,
             "offset": offset,
-            "total": len(records),
+            "total": total or 0,
         }
     )
     response.headers["Cache-Control"] = "no-store"
@@ -305,49 +658,44 @@ def list_risk_analysis_jobs():
 
 
 @risk_analysis_bp.get("/jobs/<task_id>")
+@jwt_required()
 def get_risk_analysis_job(task_id: str):
     """查询稳定业务状态；未知 task_id 返回 404，而不是误报为 Celery PENDING。"""
 
     store = _job_store()
-    if not store.task_exists(task_id):
+    job = get_owned_job(task_id, int(get_jwt_identity()))
+    if job is None:
         return jsonify({"code": "JOB_NOT_FOUND", "message": "风险分析任务不存在"}), 404
 
-    try:
-        payload = _job_status_payload(store, task_id)
-    except TaskStatusBackendUnavailable as exc:
-        current_app.logger.warning("Risk-analysis status backend unavailable: %s", exc)
-        return jsonify({"code": "STATUS_UNAVAILABLE", "message": str(exc)}), 503
-
-    if payload is None:  # pragma: no cover - task_exists 与读取之间的极小竞态保护
-        return jsonify({"code": "JOB_NOT_FOUND", "message": "风险分析任务不存在"}), 404
-
+    manifest = None
+    if job.status == "SUCCEEDED":
+        try:
+            manifest = _success_manifest(store, job)
+        except RiskAnalysisManifestError as exc:
+            current_app.logger.warning(
+                "Invalid result manifest for task %s: %s", job.id, exc
+            )
+            return _no_store_json(
+                _job_status_payload(job, manifest_error=str(exc)), 409
+            )
+    payload = _job_status_payload(job, manifest)
     response = jsonify(payload)
     response.headers["Cache-Control"] = "no-store"
     return response
 
 
 @risk_analysis_bp.get("/jobs/<task_id>/submission")
+@jwt_required()
 def get_risk_analysis_submission(task_id: str):
     """Return the immutable request persisted before enqueueing the task."""
 
-    store = _job_store()
-    if not store.task_exists(task_id):
+    job = get_owned_job(task_id, int(get_jwt_identity()))
+    if job is None:
         return jsonify({"code": "JOB_NOT_FOUND", "message": "风险分析任务不存在"}), 404
 
     try:
-        raw_submission = store.read_submission(task_id)
-        if raw_submission is None:
-            return (
-                jsonify(
-                    {
-                        "code": "SUBMISSION_NOT_FOUND",
-                        "message": "该任务没有可恢复的提交上下文",
-                    }
-                ),
-                404,
-            )
-        submission = RiskAnalysisSubmissionRecord.model_validate(raw_submission)
-    except (OSError, ValueError, ValidationError) as exc:
+        job_request = RiskAnalysisJobRequest.model_validate(job.request_payload)
+    except ValidationError as exc:
         current_app.logger.warning(
             "Invalid risk-analysis submission manifest for task %s: %s",
             task_id,
@@ -363,28 +711,11 @@ def get_risk_analysis_submission(task_id: str):
             409,
         )
 
-    if submission.task_id != task_id:
-        current_app.logger.warning(
-            "Risk-analysis submission task id mismatch: route=%s persisted=%s",
-            task_id,
-            submission.task_id,
-        )
-        return (
-            jsonify(
-                {
-                    "code": "INVALID_SUBMISSION_MANIFEST",
-                    "message": "风险分析提交记录与任务不匹配",
-                }
-            ),
-            409,
-        )
-
     response = jsonify(
         {
-            "task_id": submission.task_id,
-            "submitted_at": submission.submitted_at,
-            # 初始 QUEUED 只是持久化 envelope，不是当前状态；当前状态仍由 /jobs/{id} 提供。
-            "request": submission.request.model_dump(mode="json"),
+            "task_id": job.id,
+            "submitted_at": job.queued_at.isoformat(),
+            "request": job_request.model_dump(mode="json"),
         }
     )
     response.headers["Cache-Control"] = "no-store"
@@ -392,151 +723,65 @@ def get_risk_analysis_submission(task_id: str):
 
 
 @risk_analysis_bp.get("/jobs/<task_id>/result")
+@jwt_required()
 def get_risk_analysis_result(task_id: str):
     """只在最终结果已经落盘后返回结果；运行中的任务继续使用 202。"""
 
     store = _job_store()
-    if not store.task_exists(task_id):
+    job = get_owned_job(task_id, int(get_jwt_identity()))
+    if job is None:
         return jsonify({"code": "JOB_NOT_FOUND", "message": "风险分析任务不存在"}), 404
 
-    result = store.read_result(task_id)
-    if result is not None:
-        if result.get("status") == "SUCCEEDED":
-            try:
-                # API 边界必须验证磁盘上的持久化 Contract，不能把 status=SUCCEEDED 等同于结果完整。
-                success_result = RiskAnalysisSuccessResult.model_validate(result)
-            except ValidationError as exc:
-                current_app.logger.warning(
-                    "Invalid risk-analysis result manifest for task %s: %s",
-                    task_id,
-                    exc,
-                )
-                response = jsonify(
-                    {
-                        "code": "INVALID_RESULT_MANIFEST",
-                        "message": "风险分析结果文件格式不完整或已损坏",
-                        "task_id": task_id,
-                        "status": "FAILED",
-                    }
-                )
-                response.headers["Cache-Control"] = "no-store"
-                return response, 409
-
-            # 旧的完整结果即使没有 schema_version，也统一规范成当前 v1 响应。
-            response = jsonify(success_result.model_dump(mode="json"))
-            response.headers["Cache-Control"] = "no-store"
-            return response, 200
-
-        response = jsonify(result)
-        response.headers["Cache-Control"] = "no-store"
-        return response, 409
+    terminal_response = _terminal_conflict(job)
+    if terminal_response is not None:
+        return terminal_response
+    expired_response = _expired_result(job)
+    if expired_response is not None:
+        return expired_response
+    if job.status != "SUCCEEDED":
+        return _result_not_ready(job)
 
     try:
-        status_payload = _job_status_payload(store, task_id)
-    except TaskStatusBackendUnavailable as exc:
-        current_app.logger.warning("Risk-analysis status backend unavailable: %s", exc)
-        return jsonify({"code": "STATUS_UNAVAILABLE", "message": str(exc)}), 503
+        manifest = _success_manifest(store, job)
+    except RiskAnalysisManifestError as exc:
+        return _invalid_manifest(job, exc)
 
-    response = jsonify(
-        {
-            "task_id": task_id,
-            "status": status_payload["status"] if status_payload else "QUEUED",
-            "message": "风险分析任务尚未产生最终结果",
-        }
-    )
-    response.status_code = 202
-    response.headers["Retry-After"] = "2"
+    response = jsonify(manifest.model_dump(mode="json"))
     response.headers["Cache-Control"] = "no-store"
-    return response
+    return response, 200
 
 
 @risk_analysis_bp.get("/jobs/<task_id>/result/artifacts/<artifact_kind>")
+@jwt_required()
 def download_risk_analysis_artifact(task_id: str, artifact_kind: str):
     """Download a validated persisted result artifact without regenerating it."""
 
     artifact_responses = {
         "manifest": ("application/json", f"risk-analysis-{task_id}-result.json"),
         "raster": ("image/tiff", f"risk-analysis-{task_id}-risk.tif"),
+        "preview": ("image/png", f"risk-analysis-{task_id}-preview.png"),
     }
     if artifact_kind not in artifact_responses:
         return jsonify({"code": "ARTIFACT_NOT_FOUND", "message": "结果文件不存在"}), 404
 
     store = _job_store()
-    if not store.task_exists(task_id):
+    job = get_owned_job(task_id, int(get_jwt_identity()))
+    if job is None:
         return jsonify({"code": "JOB_NOT_FOUND", "message": "风险分析任务不存在"}), 404
 
-    try:
-        result = store.read_result(task_id)
-    except (OSError, ValueError) as exc:
-        current_app.logger.warning(
-            "Invalid risk-analysis result manifest for artifact task %s: %s",
-            task_id,
-            exc,
-        )
-        response = jsonify(
-            {
-                "code": "INVALID_RESULT_MANIFEST",
-                "message": "风险分析结果文件格式不完整或已损坏",
-            }
-        )
-        response.headers["Cache-Control"] = "no-store"
-        return response, 409
-
-    if result is None:
-        try:
-            status = _job_status_payload(store, task_id)
-        except TaskStatusBackendUnavailable as exc:
-            current_app.logger.warning("Risk-analysis status backend unavailable: %s", exc)
-            return jsonify({"code": "STATUS_UNAVAILABLE", "message": str(exc)}), 503
-
-        if status and status["status"] in {"FAILED", "CANCELED"}:
-            response = jsonify(status)
-            response.headers["Cache-Control"] = "no-store"
-            return response, 409
-        if status and status["status"] == "SUCCEEDED":
-            response = jsonify(
-                {
-                    "code": "INVALID_RESULT_ARTIFACT",
-                    "message": "成功任务缺少结果文件",
-                    "task_id": task_id,
-                }
-            )
-            response.headers["Cache-Control"] = "no-store"
-            return response, 409
-
-        response = jsonify(
-            {
-                "code": "RESULT_NOT_READY",
-                "message": "风险分析任务尚未产生最终结果",
-                "task_id": task_id,
-                "status": status["status"] if status else "QUEUED",
-            }
-        )
-        response.headers["Retry-After"] = "2"
-        response.headers["Cache-Control"] = "no-store"
-        return response, 202
-
-    if result.get("status") != "SUCCEEDED":
-        response = jsonify(result)
-        response.headers["Cache-Control"] = "no-store"
-        return response, 409
+    terminal_response = _terminal_conflict(job)
+    if terminal_response is not None:
+        return terminal_response
+    expired_response = _expired_result(job)
+    if expired_response is not None:
+        return expired_response
+    if job.status != "SUCCEEDED":
+        return _result_not_ready(job)
 
     try:
-        manifest = RiskAnalysisSuccessResult.model_validate(result)
-    except ValidationError as exc:
-        current_app.logger.warning(
-            "Invalid risk-analysis result manifest for artifact task %s: %s",
-            task_id,
-            exc,
-        )
-        response = jsonify(
-            {
-                "code": "INVALID_RESULT_MANIFEST",
-                "message": "风险分析结果文件格式不完整或已损坏",
-            }
-        )
-        response.headers["Cache-Control"] = "no-store"
-        return response, 409
+        manifest = _success_manifest(store, job)
+    except RiskAnalysisManifestError as exc:
+        return _invalid_manifest(job, exc)
 
     try:
         artifact_path = resolve_risk_analysis_artifact(
@@ -563,7 +808,7 @@ def download_risk_analysis_artifact(task_id: str, artifact_kind: str):
     response = send_file(
         artifact_path,
         mimetype=mimetype,
-        as_attachment=True,
+        as_attachment=artifact_kind != "preview",
         download_name=download_name,
     )
     response.headers["Cache-Control"] = "no-store"
@@ -571,79 +816,34 @@ def download_risk_analysis_artifact(task_id: str, artifact_kind: str):
 
 
 @risk_analysis_bp.get("/jobs/<task_id>/result/spatial")
+@jwt_required()
 def get_risk_analysis_spatial_result(task_id: str):
     """Return valid risk raster cells as WGS84 GeoJSON polygons."""
 
     store = _job_store()
-    if not store.task_exists(task_id):
+    job = get_owned_job(task_id, int(get_jwt_identity()))
+    if job is None:
         return jsonify({"code": "JOB_NOT_FOUND", "message": "风险分析任务不存在"}), 404
 
+    terminal_response = _terminal_conflict(job)
+    if terminal_response is not None:
+        return terminal_response
+    expired_response = _expired_result(job)
+    if expired_response is not None:
+        return expired_response
+    if job.status != "SUCCEEDED":
+        return _result_not_ready(job)
     try:
-        result = store.read_result(task_id)
-    except (OSError, ValueError) as exc:
-        current_app.logger.warning(
-            "Invalid risk-analysis result manifest for spatial task %s: %s",
-            task_id,
-            exc,
-        )
-        response = jsonify(
-            {
-                "code": "INVALID_RESULT_MANIFEST",
-                "message": "风险分析结果文件格式不完整或已损坏",
-            }
-        )
-        response.headers["Cache-Control"] = "no-store"
-        return response, 409
-    if result is None:
-        try:
-            status = _job_status_payload(store, task_id)
-        except TaskStatusBackendUnavailable as exc:
-            current_app.logger.warning("Risk-analysis status backend unavailable: %s", exc)
-            return jsonify({"code": "STATUS_UNAVAILABLE", "message": str(exc)}), 503
-
-        if status and status["status"] in {"FAILED", "CANCELED"}:
-            response = jsonify(status)
-            response.headers["Cache-Control"] = "no-store"
-            return response, 409
-
-        response = jsonify(
-            {
-                "code": "RESULT_NOT_READY",
-                "message": "风险分析任务尚未产生最终结果",
-                "task_id": task_id,
-                "status": status["status"] if status else "QUEUED",
-            }
-        )
-        response.headers["Retry-After"] = "2"
-        response.headers["Cache-Control"] = "no-store"
-        return response, 202
-
-    if result.get("status") != "SUCCEEDED":
-        response = jsonify(result)
-        response.headers["Cache-Control"] = "no-store"
-        return response, 409
+        manifest = _success_manifest(store, job)
+    except RiskAnalysisManifestError as exc:
+        return _invalid_manifest(job, exc)
 
     try:
-        manifest = RiskAnalysisSuccessResult.model_validate(result)
         spatial = build_risk_analysis_spatial_result(
             runtime_dir=current_app.config["RUNTIME_DATA_DIR"],
             task_id=task_id,
             manifest=manifest,
         )
-    except ValidationError as exc:
-        current_app.logger.warning(
-            "Invalid risk-analysis result manifest for spatial task %s: %s",
-            task_id,
-            exc,
-        )
-        response = jsonify(
-            {
-                "code": "INVALID_RESULT_MANIFEST",
-                "message": "风险分析结果文件格式不完整或已损坏",
-            }
-        )
-        response.headers["Cache-Control"] = "no-store"
-        return response, 409
     except RiskAnalysisArtifactError as exc:
         current_app.logger.warning(
             "Invalid risk-analysis spatial artifact for task %s: %s", task_id, exc

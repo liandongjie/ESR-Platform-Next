@@ -20,7 +20,7 @@ import type {
 
 const DEFAULT_RETRY_AFTER_MS = 2000
 
-export type RiskAnalysisArtifactKind = 'raster' | 'manifest'
+export type RiskAnalysisArtifactKind = 'raster' | 'manifest' | 'preview'
 
 export interface DownloadedRiskAnalysisArtifact {
   blob: Blob
@@ -30,6 +30,7 @@ export interface DownloadedRiskAnalysisArtifact {
 const ARTIFACT_FILENAME_SUFFIXES: Record<RiskAnalysisArtifactKind, string> = {
   raster: 'risk.tif',
   manifest: 'result.json',
+  preview: 'preview.png',
 }
 
 export interface CreatedRiskAnalysisJob {
@@ -74,7 +75,10 @@ async function restoreBlobErrorPayload(error: unknown): Promise<void> {
 export async function createRiskAnalysisJob(
   payload: RiskAnalysisJobRequest,
 ): Promise<CreatedRiskAnalysisJob> {
-  const response = await http.post<RiskAnalysisJobCreated>('/risk-analysis/jobs', payload)
+  // 幂等键在单次用户提交边界生成；Axios 的认证重放复用同一 request config，不会更换键。
+  const response = await http.post<RiskAnalysisJobCreated>('/risk-analysis/jobs', payload, {
+    headers: { 'Idempotency-Key': crypto.randomUUID() },
+  })
   return {
     job: response.data,
     // 后端通过标准 Retry-After 告诉客户端建议轮询间隔；缺失时才使用前端保守默认值。
@@ -116,7 +120,7 @@ export async function getRiskAnalysisResult(taskId: string): Promise<RiskAnalysi
     throw new Error('风险分析结果尚未就绪')
   }
   // TypeScript 泛型不会校验运行时 JSON；只有通过结构检查的数据才能进入 Pinia 和模板。
-  return parseRiskAnalysisResult(response.data)
+  return parseRiskAnalysisResult(response.data, taskId)
 }
 
 export async function getRiskAnalysisSpatialResult(
@@ -152,4 +156,21 @@ export async function downloadRiskAnalysisArtifact(
     await restoreBlobErrorPayload(error)
     throw error
   }
+}
+
+export async function downloadRiskAnalysisPreview(
+  taskId: string,
+): Promise<DownloadedRiskAnalysisArtifact> {
+  const artifact = await downloadRiskAnalysisArtifact(taskId, 'preview')
+  if (artifact.blob.size === 0 || artifact.blob.type.toLowerCase() !== 'image/png') {
+    throw new Error('风险预览文件格式无效')
+  }
+  return artifact
+}
+
+export function isRiskAnalysisPreviewUnavailable(error: unknown): boolean {
+  return (
+    axios.isAxiosError(error) &&
+    (error.response?.status === 404 || error.response?.status === 410)
+  )
 }

@@ -121,6 +121,7 @@ export interface RiskAnalysisResult {
   task_id: string
   status: 'SUCCEEDED'
   algorithm_version: string
+  palette_version?: 'risk-viridis-5-v1'
   model_contract?: RiskModelContract | null
   geometry: {
     type: string
@@ -130,13 +131,21 @@ export interface RiskAnalysisResult {
     crs: string
     shape: [number, number]
     nodata: number
+    bounds?: [number, number, number, number]
   }
   statistics: RasterStatistics
   indicators: RiskIndicatorResult[]
   artifacts: {
     raster: string
     manifest: string
+    preview?: string
   }
+}
+
+export interface RiskAnalysisPreview {
+  task_id: string
+  url: string
+  bounds: [number, number, number, number]
 }
 
 export interface RiskAnalysisSpatialFeature {

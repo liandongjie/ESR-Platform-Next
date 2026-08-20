@@ -1,0 +1,89 @@
+{
+  "schema_version": 1,
+  "recorded_at": "2026-08-20T08:07:45.306346+00:00",
+  "scope": "server-side deterministic PNG encoding microbenchmark",
+  "limitations": {
+    "browser_first_display_p95_ms": null,
+    "note": "该基准不测量网络、浏览器解码、ImageLayer 首次显示或交互帧率。"
+  },
+  "environment": {
+    "python": "3.12.7",
+    "numpy": "2.5.2",
+    "rasterio": "1.5.1",
+    "platform": "Windows-11-10.0.26200-SP0"
+  },
+  "input": {
+    "shape": [
+      128,
+      128
+    ],
+    "valid_pixel_count": 16139,
+    "seed": 20260820,
+    "iterations": 30,
+    "warmup_iterations": 3
+  },
+  "baseline": {
+    "source_path": "docs/performance/risk-analysis-baseline.json",
+    "source_sha256": "f0554ed2f62d4d7474ece2ce1550c1de714fe731253873b1dd21eec0955e275c",
+    "subject_baseline_sha": "5810240e14d1d5a86562d73d6b85f2cdd2083cc4",
+    "transport": "flask_test_client_no_network",
+    "sample_count": 5,
+    "aoi": "large",
+    "indicator_count": 12,
+    "rows": 128,
+    "cols": 128,
+    "valid_pixel_count": 16139,
+    "geojson_bytes": 4966037,
+    "polygon_count": 16139
+  },
+  "preview": {
+    "palette_version": "risk-viridis-5-v1",
+    "png_bytes": 15111,
+    "overlay_count": 1,
+    "generation_ms": {
+      "p50": 4.979,
+      "p95": 5.348,
+      "p95_method": "nearest-rank",
+      "samples": [
+        4.894,
+        5.224,
+        4.9,
+        4.965,
+        4.934,
+        5.088,
+        4.968,
+        5.47,
+        5.076,
+        5.097,
+        5.348,
+        5.122,
+        5.093,
+        5.079,
+        5.126,
+        4.99,
+        4.752,
+        4.501,
+        4.467,
+        4.767,
+        4.458,
+        4.692,
+        4.526,
+        4.655,
+        4.613,
+        4.656,
+        5.329,
+        5.291,
+        5.07,
+        5.348
+      ]
+    }
+  },
+  "comparison": {
+    "payload_compression_ratio": 328.637,
+    "payload_reduction_percent": 99.696,
+    "overlay_reduction_percent": 99.994,
+    "method": "recorded_baseline_vs_deterministic_representative_png",
+    "indicative": true,
+    "controlled_same_artifact_ab": false
+  }
+}

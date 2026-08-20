@@ -20,7 +20,8 @@ def prepare_healthy_dependencies(app, monkeypatch):
     for indicator in INDICATORS:
         (source_dir / indicator.filename).touch()
 
-    monkeypatch.setattr(health.db.session, "execute", lambda statement: None)
+    monkeypatch.setattr(health, "_expected_alembic_heads", lambda: ("head",))
+    monkeypatch.setattr(health, "_current_database_heads", lambda: ("head",))
     monkeypatch.setattr(health, "create_redis_client", lambda url: HealthyRedis())
 
 
@@ -31,11 +32,27 @@ def test_live_health(client):
     assert response.get_json()["status"] == "ok"
 
 
+def test_http_redis_client_fails_fast_without_library_retries():
+    client = health.create_redis_client("redis://localhost:6379/0")
+    try:
+        connection_options = client.connection_pool.connection_kwargs
+        assert connection_options["socket_connect_timeout"] == 2
+        assert connection_options["socket_timeout"] == 2
+        assert connection_options["retry"].get_retries() == 0
+    finally:
+        client.close()
+
+
+def test_readiness_resolves_repository_alembic_head(app):
+    assert health._expected_alembic_heads() == ("20260820_03",)
+
+
 def test_live_does_not_check_dependencies(client, monkeypatch):
     def fail(*args, **kwargs):
         raise AssertionError("dependency check must not run")
 
-    monkeypatch.setattr(health.db.session, "execute", fail)
+    monkeypatch.setattr(health, "_expected_alembic_heads", fail)
+    monkeypatch.setattr(health, "_current_database_heads", fail)
     monkeypatch.setattr(health, "create_redis_client", fail)
     monkeypatch.setattr(health.os, "scandir", fail)
     monkeypatch.setattr(health.tempfile, "TemporaryFile", fail)
@@ -83,10 +100,10 @@ def test_ready_checks_each_distinct_redis_endpoint_once(app, client, monkeypatch
 def test_ready_returns_503_when_database_is_unavailable(app, client, monkeypatch):
     prepare_healthy_dependencies(app, monkeypatch)
 
-    def fail(statement):
+    def fail():
         raise RuntimeError("raw database exception with secret")
 
-    monkeypatch.setattr(health.db.session, "execute", fail)
+    monkeypatch.setattr(health, "_current_database_heads", fail)
 
     response = client.get("/api/v1/health/ready")
 
@@ -127,8 +144,44 @@ def test_ready_returns_503_when_redis_endpoint_is_unavailable(
     assert "raw redis exception" not in response_text
 
 
+def test_ready_returns_503_when_database_migration_is_not_at_head(
+    app, client, monkeypatch
+):
+    prepare_healthy_dependencies(app, monkeypatch)
+    monkeypatch.setattr(health, "_current_database_heads", lambda: ("previous",))
+
+    response = client.get("/api/v1/health/ready")
+
+    assert response.status_code == 503
+    assert response.get_json()["checks"]["database"] == {
+        "status": "unavailable",
+        "reason": "migration_not_at_head",
+    }
+
+
+def test_ready_returns_503_when_migration_metadata_cannot_be_loaded(
+    app, client, monkeypatch
+):
+    prepare_healthy_dependencies(app, monkeypatch)
+    monkeypatch.setattr(
+        health,
+        "_expected_alembic_heads",
+        lambda: (_ for _ in ()).throw(RuntimeError("sensitive migration path")),
+    )
+
+    response = client.get("/api/v1/health/ready")
+
+    assert response.status_code == 503
+    assert response.get_json()["checks"]["database"] == {
+        "status": "unavailable",
+        "reason": "migration_metadata_failed",
+    }
+    assert "sensitive migration path" not in response.get_data(as_text=True)
+
+
 def test_ready_returns_503_when_source_directory_is_missing(app, client, monkeypatch):
-    monkeypatch.setattr(health.db.session, "execute", lambda statement: None)
+    monkeypatch.setattr(health, "_expected_alembic_heads", lambda: ("head",))
+    monkeypatch.setattr(health, "_current_database_heads", lambda: ("head",))
     monkeypatch.setattr(health, "create_redis_client", lambda url: HealthyRedis())
 
     response = client.get("/api/v1/health/ready")
@@ -210,13 +263,14 @@ def test_ready_returns_503_when_runtime_directory_is_unwritable(app, client, mon
     assert "raw runtime exception" not in response.get_data(as_text=True)
 
 
-def test_capabilities_exposes_framework_stage(client):
+def test_capabilities_exposes_current_stage(client):
     response = client.get("/api/v1/meta/capabilities")
 
     assert response.status_code == 200
     payload = response.get_json()
     assert payload["project"] == "ESR-Platform-Next"
-    assert payload["stage"] == "framework"
+    assert payload["stage"] == "multi_user_mvp"
+    assert payload["registration_enabled"] is True
     assert payload["coordinate_system"] == "EPSG:4326"
 
 

@@ -1,0 +1,61 @@
+
+         /\      Grafana   /‾‾/
+    /\  /  \     |\  __   /  /
+   /  \/    \    | |/ /  /   ‾‾\
+  /          \   |   (  |  (‾)  |
+ / __________ \  |_|\_\  \_____/
+
+     execution: local
+        script: /scripts/esr-load-test.js
+        output: -
+
+     scenarios: (100.00%) 1 scenario, 50 max VUs, 4m30s max duration (incl. graceful stop):
+              * submit_and_poll: 1 iterations for each of 50 VUs (maxDuration: 4m0s, exec: scenarioB, gracefulStop: 30s)
+
+
+running (0m01.0s), 47/50 VUs, 3 complete and 0 interrupted iterations
+submit_and_poll   [   6% ] 50 VUs  0m01.0s/4m0s  03/50 iters, 1 per VU
+
+running (0m02.0s), 30/50 VUs, 20 complete and 0 interrupted iterations
+submit_and_poll   [  40% ] 50 VUs  0m02.0s/4m0s  20/50 iters, 1 per VU
+
+running (0m03.0s), 20/50 VUs, 30 complete and 0 interrupted iterations
+submit_and_poll   [  60% ] 50 VUs  0m03.0s/4m0s  30/50 iters, 1 per VU
+
+running (0m04.0s), 04/50 VUs, 46 complete and 0 interrupted iterations
+submit_and_poll   [  92% ] 50 VUs  0m04.0s/4m0s  46/50 iters, 1 per VU
+
+     ✓ login status is 200
+     ✓ login returns access token
+     ✓ enqueue status is 200 or 202
+     ✓ enqueue returns task id
+     ✓ poll status is 200
+     ✓ job reaches a terminal status
+
+   ✓ checks............................: 100.00% 618 out of 618
+     data_received.....................: 346 kB  84 kB/s
+     data_sent.........................: 238 kB  58 kB/s
+     esr_enqueue_request_duration_ms...: min=104.53ms p(50)=474.22ms p(95)=665.91ms p(99)=695.11ms max=708.59ms
+   ✓ esr_enqueued_jobs_terminal........: 100.00% 50 out of 50
+     esr_server_execution_ms...........: min=86ms     p(50)=118.5ms  p(95)=139.19ms p(99)=167.57ms max=171ms
+     esr_server_queue_wait_ms..........: min=24ms     p(50)=1.34s    p(95)=2.64s    p(99)=2.75s    max=2.75s
+     esr_terminal_jobs.................: 50      12.194386/s
+     http_req_blocked..................: min=2.82µs   p(50)=5.78µs   p(95)=14.13ms  p(99)=19.58ms  max=20.27ms
+     http_req_connecting...............: min=0s       p(50)=0s       p(95)=12.41ms  p(99)=17.58ms  max=18.31ms
+     http_req_duration.................: min=4.89ms   p(50)=6.48ms   p(95)=551.19ms p(99)=688.19ms max=771.37ms
+     ✓ { endpoint:status }.............: min=4.89ms   p(50)=6.18ms   p(95)=8.41ms   p(99)=93.6ms   max=428.28ms
+       { expected_response:true }......: min=4.89ms   p(50)=6.48ms   p(95)=551.19ms p(99)=688.19ms max=771.37ms
+   ✓ http_req_failed...................: 0.00%   0 out of 468
+     http_req_receiving................: min=22.43µs  p(50)=86.35µs  p(95)=211.29µs p(99)=366.59µs max=892.95µs
+     http_req_sending..................: min=9.02µs   p(50)=30.1µs   p(95)=61.8µs   p(99)=95.29µs  max=133.94µs
+     http_req_tls_handshaking..........: min=0s       p(50)=0s       p(95)=0s       p(99)=0s       max=0s
+     http_req_waiting..................: min=4.78ms   p(50)=6.33ms   p(95)=551.05ms p(99)=687.91ms max=771.18ms
+     http_reqs.........................: 468     114.139452/s
+     iteration_duration................: min=854.06ms p(50)=2.41s    p(95)=4.07s    p(99)=4.09s    max=4.09s
+     iterations........................: 50      12.194386/s
+     vus...............................: 4       min=4          max=47
+     vus_max...........................: 50      min=50         max=50
+
+
+running (0m04.1s), 00/50 VUs, 50 complete and 0 interrupted iterations
+submit_and_poll ✓ [ 100% ] 50 VUs  0m04.1s/4m0s  50/50 iters, 1 per VU

@@ -27,6 +27,7 @@ const mocks = vi.hoisted(() => ({
     selectedTaskId: null,
     selectedTask: null,
     selectedResult: null,
+    selectedRiskPreview: null,
     selectedSpatialResult: null,
     detailError: null,
     spatialError: null,
@@ -47,6 +48,7 @@ describe('TasksView shell', () => {
   beforeEach(() => {
     mocks.store.initialize.mockReset()
     mocks.store.stopAutoRefresh.mockReset()
+    mocks.store.closeDetail.mockReset()
   })
 
   it('uses concise Chinese labels and flat summary/table structures', async () => {
@@ -73,5 +75,6 @@ describe('TasksView shell', () => {
 
     wrapper.unmount()
     expect(mocks.store.stopAutoRefresh).toHaveBeenCalledOnce()
+    expect(mocks.store.closeDetail).toHaveBeenCalledOnce()
   })
 })

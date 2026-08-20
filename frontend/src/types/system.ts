@@ -7,6 +7,7 @@ export interface LiveHealth {
 export interface Capabilities {
   project: string
   stage: string
+  registration_enabled: boolean
   coordinate_system: string
   result_ttl_hours: number
   limits: {

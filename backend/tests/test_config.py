@@ -31,6 +31,13 @@ def test_valid_production_config_creates_app_without_connecting(valid_production
     app = create_app("production")
 
     assert app.config["SQLALCHEMY_DATABASE_URI"].startswith("postgresql+psycopg://")
+    assert app.config["SQLALCHEMY_ENGINE_OPTIONS"] == {
+        "pool_pre_ping": True,
+        "pool_size": 5,
+        "max_overflow": 0,
+        "pool_timeout": 10,
+        "pool_recycle": 1800,
+    }
 
 
 @pytest.mark.parametrize(
@@ -113,8 +120,62 @@ def test_non_production_config_keeps_sqlite_defaults(
     tmp_path, monkeypatch, config_class, config_name
 ):
     monkeypatch.setattr(config_class, "SQLALCHEMY_DATABASE_URI", "sqlite:///:memory:")
+    monkeypatch.setattr(
+        config_class, "SQLALCHEMY_ENGINE_OPTIONS", {"pool_pre_ping": True}
+    )
     monkeypatch.setattr(config_class, "RUNTIME_DATA_DIR", tmp_path / config_name)
 
     app = create_app(config_name)
 
     assert app.config["SQLALCHEMY_DATABASE_URI"] == "sqlite:///:memory:"
+
+
+def test_testing_sqlite_does_not_receive_queue_pool_capacity_options(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(TestingConfig, "SQLALCHEMY_DATABASE_URI", "sqlite:///:memory:")
+    monkeypatch.setattr(TestingConfig, "RUNTIME_DATA_DIR", tmp_path / "testing-pool")
+
+    app = create_app("testing")
+
+    assert app.config["SQLALCHEMY_ENGINE_OPTIONS"] == {"pool_pre_ping": True}
+
+
+@pytest.mark.parametrize(
+    ("key", "value"),
+    [
+        ("DB_POOL_SIZE", 0),
+        ("DB_MAX_OVERFLOW", -1),
+        ("DB_POOL_TIMEOUT_SECONDS", 0),
+        ("DB_POOL_RECYCLE_SECONDS", 0),
+    ],
+)
+def test_production_rejects_invalid_database_pool_limits(
+    valid_production_config, monkeypatch, key, value
+):
+    monkeypatch.setattr(ProductionConfig, key, value)
+
+    with pytest.raises(ValueError, match=key):
+        create_app("production")
+
+
+def test_production_rejects_pool_capacity_above_single_host_budget(
+    valid_production_config, monkeypatch
+):
+    monkeypatch.setattr(ProductionConfig, "DB_POOL_SIZE", 6)
+    monkeypatch.setattr(ProductionConfig, "DB_MAX_OVERFLOW", 5)
+
+    with pytest.raises(ValueError, match="per-process budget of 10"):
+        create_app("production")
+
+
+def test_production_rejects_visibility_timeout_not_above_hard_limit(
+    valid_production_config, monkeypatch
+):
+    monkeypatch.setattr(
+        ProductionConfig, "CELERY_VISIBILITY_TIMEOUT_SECONDS", 360
+    )
+    monkeypatch.setattr(ProductionConfig, "CELERY_TASK_TIME_LIMIT_SECONDS", 360)
+
+    with pytest.raises(ValueError, match="CELERY_VISIBILITY_TIMEOUT_SECONDS"):
+        create_app("production")

@@ -1,0 +1,74 @@
+name: esr-release-gate
+
+x-backend-environment: &backend-environment
+  APP_ENV: production
+  SECRET_KEY: release-gate-only-secret
+  JWT_SECRET_KEY: release-gate-only-jwt-secret
+  DATABASE_URL: postgresql+psycopg://esr:release-gate-password@db:5432/esr_release_gate
+  REDIS_URL: redis://redis:6379/0
+  CELERY_BROKER_URL: redis://redis:6379/0
+  CELERY_RESULT_BACKEND: redis://redis:6379/1
+  ESR_SOURCE_RASTER_DIR: /data/source
+  ESR_RUNTIME_DATA_DIR: /data/runtime
+  ESR_REGISTRATION_ENABLED: "false"
+
+services:
+  db:
+    image: postgis/postgis:16-3.4
+    environment:
+      POSTGRES_DB: esr_release_gate
+      POSTGRES_USER: esr
+      POSTGRES_PASSWORD: release-gate-password
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U esr -d esr_release_gate"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7.4-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
+  source-init:
+    image: ${ESR_RELEASE_GATE_BACKEND_IMAGE:-esr-platform-backend:release-gate}
+    command:
+      - python
+      - -c
+      - >-
+        from pathlib import Path;
+        from app.gis.indicators import INDICATORS;
+        root = Path('/data/source');
+        root.mkdir(parents=True, exist_ok=True);
+        [(root / item.filename).touch() for item in INDICATORS]
+    volumes:
+      - source_data:/data/source
+
+  backend:
+    image: ${ESR_RELEASE_GATE_BACKEND_IMAGE:-esr-platform-backend:release-gate}
+    environment: *backend-environment
+    volumes:
+      - source_data:/data/source:ro
+      - runtime_data:/data/runtime
+    ports:
+      - "127.0.0.1:${ESR_RELEASE_GATE_HTTP_PORT:-15080}:5000"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5000/api/v1/health/ready')"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+volumes:
+  postgres_data:
+  source_data:
+  runtime_data:

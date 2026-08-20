@@ -1,0 +1,180 @@
+{
+    "metrics": {
+        "http_req_failed": {
+            "passes": 0,
+            "fails": 3952,
+            "thresholds": {
+                "rate<0.01": false
+            },
+            "value": 0
+        },
+        "http_req_connecting": {
+            "min": 0,
+            "p(50)": 0,
+            "p(95)": 0,
+            "p(99)": 5.440884469999986,
+            "max": 16.041663
+        },
+        "http_req_waiting": {
+            "min": 4.601281,
+            "p(50)": 186.7389335,
+            "p(95)": 460.91007069999995,
+            "p(99)": 723.5014712199996,
+            "max": 1133.310996
+        },
+        "http_req_duration{endpoint:status}": {
+            "min": 4.808934,
+            "p(50)": 153.3898855,
+            "p(95)": 405.80340355,
+            "p(99)": 679.0162782799998,
+            "max": 900.550393,
+            "thresholds": {
+                "p(95)<500": false
+            }
+        },
+        "data_sent": {
+            "count": 1719292,
+            "rate": 83948.80225354059
+        },
+        "vus_max": {
+            "min": 50,
+            "max": 50,
+            "value": 50
+        },
+        "esr_artifact_candidate_available": {
+            "passes": 988,
+            "fails": 0,
+            "thresholds": {
+                "rate==1": false
+            },
+            "value": 1
+        },
+        "http_req_duration{endpoint:list}": {
+            "p(99)": 683.45284182,
+            "max": 994.074296,
+            "min": 8.427546,
+            "p(50)": 222.65667100000002,
+            "p(95)": 449.76929075,
+            "thresholds": {
+                "p(95)<500": false
+            }
+        },
+        "vus": {
+            "value": 50,
+            "min": 50,
+            "max": 50
+        },
+        "iteration_duration": {
+            "min": 378.118125,
+            "p(50)": 1028.158815,
+            "p(95)": 1385.8007043999999,
+            "p(99)": 1714.0567769,
+            "max": 2067.199601
+        },
+        "http_req_sending": {
+            "min": 0.00507,
+            "p(50)": 0.0306955,
+            "p(95)": 0.09053974999999993,
+            "p(99)": 0.14030912999999992,
+            "max": 1.836362
+        },
+        "http_req_tls_handshaking": {
+            "min": 0,
+            "p(50)": 0,
+            "p(95)": 0,
+            "p(99)": 0,
+            "max": 0
+        },
+        "checks": {
+            "fails": 0,
+            "passes": 4940,
+            "thresholds": {
+                "rate>0.99": false
+            },
+            "value": 1
+        },
+        "http_req_blocked": {
+            "min": 0.001406,
+            "p(50)": 0.0058615,
+            "p(95)": 0.01954889999999999,
+            "p(99)": 7.503426949999956,
+            "max": 17.827583
+        },
+        "http_req_receiving": {
+            "max": 1.014823,
+            "min": 0.015328,
+            "p(50)": 0.11833250000000001,
+            "p(95)": 0.29298894999999986,
+            "p(99)": 0.38938055999999993
+        },
+        "data_received": {
+            "count": 6871388,
+            "rate": 335512.98582169396
+        },
+        "http_req_duration{expected_response:true}": {
+            "p(99)": 723.6518418199996,
+            "max": 1133.439071,
+            "min": 4.808934,
+            "p(50)": 186.866904,
+            "p(95)": 461.02147429999997
+        },
+        "iterations": {
+            "rate": 48.24161144616395,
+            "count": 988
+        },
+        "http_reqs": {
+            "count": 3952,
+            "rate": 192.9664457846558
+        },
+        "http_req_duration": {
+            "p(95)": 461.02147429999997,
+            "p(99)": 723.6518418199996,
+            "max": 1133.439071,
+            "min": 4.808934,
+            "p(50)": 186.866904
+        }
+    },
+    "root_group": {
+        "name": "",
+        "path": "",
+        "id": "d41d8cd98f00b204e9800998ecf8427e",
+        "groups": {},
+        "checks": {
+                "login status is 200": {
+                    "passes": 988,
+                    "fails": 0,
+                    "name": "login status is 200",
+                    "path": "::login status is 200",
+                    "id": "baba87e761865dc93085ee0c1fe25f4c"
+                },
+                "login returns access token": {
+                    "path": "::login returns access token",
+                    "id": "6293b1160fa705bac3d194d14543619f",
+                    "passes": 988,
+                    "fails": 0,
+                    "name": "login returns access token"
+                },
+                "list status is 200": {
+                    "name": "list status is 200",
+                    "path": "::list status is 200",
+                    "id": "2d2932709be6e87d06b36654594050ea",
+                    "passes": 988,
+                    "fails": 0
+                },
+                "status response is 200": {
+                    "name": "status response is 200",
+                    "path": "::status response is 200",
+                    "id": "19310b32680111eed183f89e56f61de7",
+                    "passes": 988,
+                    "fails": 0
+                },
+                "artifact status is 200": {
+                    "fails": 0,
+                    "name": "artifact status is 200",
+                    "path": "::artifact status is 200",
+                    "id": "6e0841970376374d0be525781233e21d",
+                    "passes": 988
+                }
+            }
+    }
+}

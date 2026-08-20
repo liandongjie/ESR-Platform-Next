@@ -2,8 +2,10 @@ import { createPinia, setActivePinia } from 'pinia'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import {
+  downloadRiskAnalysisPreview,
   getRiskAnalysisResult,
   getRiskAnalysisSpatialResult,
+  isRiskAnalysisPreviewUnavailable,
   listRiskAnalysisJobs,
 } from '@/api/riskAnalysis'
 import { useTaskHistoryStore } from '@/stores/taskHistory'
@@ -14,14 +16,18 @@ import type {
 } from '@/types/riskAnalysis'
 
 vi.mock('@/api/riskAnalysis', () => ({
+  downloadRiskAnalysisPreview: vi.fn(),
   getRiskAnalysisResult: vi.fn(),
   getRiskAnalysisSpatialResult: vi.fn(),
+  isRiskAnalysisPreviewUnavailable: vi.fn(),
   listRiskAnalysisJobs: vi.fn(),
 }))
 
 const mockedListJobs = vi.mocked(listRiskAnalysisJobs)
+const mockedDownloadPreview = vi.mocked(downloadRiskAnalysisPreview)
 const mockedGetResult = vi.mocked(getRiskAnalysisResult)
 const mockedGetSpatialResult = vi.mocked(getRiskAnalysisSpatialResult)
+const mockedPreviewUnavailable = vi.mocked(isRiskAnalysisPreviewUnavailable)
 
 function historyResponse(
   status: 'QUEUED' | 'RUNNING' | 'SUCCEEDED' = 'SUCCEEDED',
@@ -82,6 +88,13 @@ function riskResult(taskId = 'task-1'): RiskAnalysisResult {
   }
 }
 
+function previewRiskResult(taskId = 'task-1'): RiskAnalysisResult {
+  const result = riskResult(taskId)
+  result.grid.bounds = [118.86, 32.07, 118.94, 32.13]
+  result.artifacts.preview = `risk-analysis/${taskId}/preview.png`
+  return result
+}
+
 function spatialResult(taskId = 'task-1', value = 0.5): RiskAnalysisSpatialResult {
   return {
     schema_version: 1,
@@ -126,12 +139,18 @@ describe('task history store', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
     mockedListJobs.mockReset()
+    mockedDownloadPreview.mockReset()
     mockedGetResult.mockReset()
     mockedGetSpatialResult.mockReset()
+    mockedPreviewUnavailable.mockReset()
+    mockedPreviewUnavailable.mockReturnValue(false)
+    vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:task-preview')
+    vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => undefined)
   })
 
   afterEach(() => {
     vi.useRealTimers()
+    vi.restoreAllMocks()
   })
 
   it('loads server-side task history instead of relying on previous Pinia memory', async () => {
@@ -143,6 +162,27 @@ describe('task history store', () => {
     expect(mockedListJobs).toHaveBeenCalledWith(20, 0)
     expect(store.items[0]?.task_id).toBe('task-1')
     expect(store.total).toBe(1)
+  })
+
+  it('clears user-bound list and detail state while invalidating polling', () => {
+    const store = useTaskHistoryStore()
+    store.items = historyResponse().items
+    store.total = 1
+    store.polling = true
+    store.selectedTaskId = 'task-1'
+    store.selectedResult = riskResult()
+    const refreshRevision = store.refreshRevision
+    const detailRevision = store.detailRevision
+
+    store.resetForUserBoundary()
+
+    expect(store.items).toEqual([])
+    expect(store.total).toBe(0)
+    expect(store.polling).toBe(false)
+    expect(store.selectedTaskId).toBeNull()
+    expect(store.selectedResult).toBeNull()
+    expect(store.refreshRevision).toBeGreaterThan(refreshRevision)
+    expect(store.detailRevision).toBeGreaterThan(detailRevision)
   })
 
   it('loads the second page with an offset and reuses the same history API', async () => {
@@ -173,6 +213,51 @@ describe('task history store', () => {
     expect(store.page).toBe(2)
     expect(store.offset).toBe(20)
     expect(store.items[0]?.task_id).toBe('task-page-2')
+  })
+
+  it('ignores an older page response without clearing the newer loading state', async () => {
+    const firstPage = deferred<RiskAnalysisJobHistoryResponse>()
+    const secondPage = deferred<RiskAnalysisJobHistoryResponse>()
+    mockedListJobs.mockReturnValueOnce(firstPage.promise).mockReturnValueOnce(secondPage.promise)
+    const store = useTaskHistoryStore()
+    store.total = 40
+
+    const firstLoad = store.loadJobs(true)
+    store.page = 2
+    const secondLoad = store.loadJobs(false)
+    firstPage.resolve(historyResponse('SUCCEEDED', true, 'task-page-1'))
+    await firstLoad
+
+    expect(store.items).toEqual([])
+    expect(store.refreshing).toBe(true)
+
+    secondPage.resolve({
+      ...historyResponse('SUCCEEDED', true, 'task-page-2'),
+      offset: 20,
+      total: 40,
+    })
+    await secondLoad
+
+    expect(store.items[0]?.task_id).toBe('task-page-2')
+    expect(store.refreshing).toBe(false)
+  })
+
+  it('ignores a previous user response after the user boundary resets', async () => {
+    const userA = deferred<RiskAnalysisJobHistoryResponse>()
+    const userB = deferred<RiskAnalysisJobHistoryResponse>()
+    mockedListJobs.mockReturnValueOnce(userA.promise).mockReturnValueOnce(userB.promise)
+    const store = useTaskHistoryStore()
+
+    const loadA = store.loadJobs(true)
+    store.resetForUserBoundary()
+    const loadB = store.loadJobs(true)
+    userB.resolve(historyResponse('SUCCEEDED', true, 'task-user-b'))
+    await loadB
+    userA.resolve(historyResponse('SUCCEEDED', true, 'task-user-a'))
+    await loadA
+
+    expect(store.items[0]?.task_id).toBe('task-user-b')
+    expect(store.loading).toBe(false)
   })
 
   it('keeps refreshing while a task is active and stops after it reaches a terminal state', async () => {
@@ -231,6 +316,53 @@ describe('task history store', () => {
     expect(store.selectedSpatialResult?.task_id).toBe('task-1')
   })
 
+  it('prefers a preview Blob and revokes it when the detail closes', async () => {
+    const store = useTaskHistoryStore()
+    const task = historyResponse().items[0]!
+    const blob = new Blob(['png'], { type: 'image/png' })
+    mockedGetResult.mockResolvedValueOnce(previewRiskResult())
+    mockedDownloadPreview.mockResolvedValueOnce({ blob, filename: 'preview.png' })
+
+    await store.openTask(task)
+
+    expect(mockedDownloadPreview).toHaveBeenCalledWith('task-1')
+    expect(mockedGetSpatialResult).not.toHaveBeenCalled()
+    expect(store.selectedRiskPreview?.url).toBe('blob:task-preview')
+
+    store.closeDetail()
+
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:task-preview')
+    expect(store.selectedRiskPreview).toBeNull()
+  })
+
+  it('falls back to spatial data only when the preview is explicitly unavailable', async () => {
+    const store = useTaskHistoryStore()
+    const task = historyResponse().items[0]!
+    mockedGetResult.mockResolvedValueOnce(previewRiskResult())
+    mockedDownloadPreview.mockRejectedValueOnce(new Error('gone'))
+    mockedPreviewUnavailable.mockReturnValueOnce(true)
+    mockedGetSpatialResult.mockResolvedValueOnce(spatialResult())
+
+    await store.openTask(task)
+
+    expect(mockedGetSpatialResult).toHaveBeenCalledWith('task-1')
+    expect(store.selectedSpatialResult?.task_id).toBe('task-1')
+    expect(store.spatialError).toBe('轻量风险预览不可用，已回退到兼容图层')
+  })
+
+  it('does not hide a preview service failure behind the spatial fallback', async () => {
+    const store = useTaskHistoryStore()
+    const task = historyResponse().items[0]!
+    mockedGetResult.mockResolvedValueOnce(previewRiskResult())
+    mockedDownloadPreview.mockRejectedValueOnce(new Error('preview service failed'))
+
+    await store.openTask(task)
+
+    expect(mockedGetSpatialResult).not.toHaveBeenCalled()
+    expect(store.selectedSpatialResult).toBeNull()
+    expect(store.spatialError).toBe('preview service failed')
+  })
+
   it('reuses in-flight and loaded requests in the same detail session', async () => {
     const store = useTaskHistoryStore()
     const task = historyResponse().items[0]!
@@ -245,12 +377,13 @@ describe('task history store', () => {
 
     expect(store.detailRevision).toBe(revision)
     expect(mockedGetResult).toHaveBeenCalledTimes(1)
-    expect(mockedGetSpatialResult).toHaveBeenCalledTimes(1)
+    expect(mockedGetSpatialResult).not.toHaveBeenCalled()
 
     resultRequest.resolve(riskResult())
     spatialRequest.resolve(spatialResult())
     await opening
     await Promise.resolve()
+    expect(mockedGetSpatialResult).toHaveBeenCalledTimes(1)
     await store.openTask(task)
 
     expect(store.detailRevision).toBe(revision)

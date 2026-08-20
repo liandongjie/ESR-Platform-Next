@@ -6,7 +6,7 @@ import { loadAmap } from '../src/map/amap'
 import { gcj02ToWgs84, wgs84ToGcj02 } from '../src/map/coordinates'
 import { RISK_VALUE_COLOR_BINS, riskColorForValue } from '../src/map/riskSpatial'
 import type { MultiPolygonGeometry, PolygonGeometry } from '../src/types/analysisArea'
-import type { RiskAnalysisSpatialResult } from '../src/types/riskAnalysis'
+import type { RiskAnalysisPreview, RiskAnalysisSpatialResult } from '../src/types/riskAnalysis'
 
 type DrawingMode = 'point' | 'polyline' | 'rectangle' | 'polygon'
 
@@ -21,6 +21,8 @@ const maps: FakeMap[] = []
 const standardLayers: FakeStandardLayer[] = []
 const satelliteLayers: FakeSatelliteLayer[] = []
 const roadNetLayers: FakeRoadNetLayer[] = []
+const imageLayers: FakeImageLayer[] = []
+const imageLayerOptions: Array<Record<string, unknown>> = []
 const toolBars: FakeToolBar[] = []
 let mapClickHandler: ((event: unknown) => void) | undefined
 let mapMouseMoveHandler: ((event: unknown) => void) | undefined
@@ -42,6 +44,9 @@ class FakeMap {
   removeControl = vi.fn()
   destroy = vi.fn()
   setFitView = vi.fn()
+  setBounds = vi.fn()
+  add = vi.fn()
+  remove = vi.fn()
   setLayers = vi.fn((layers: object[]) => {
     this.layers = layers
   })
@@ -89,6 +94,20 @@ class FakeRoadNetLayer {
 class FakeToolBar {
   constructor() {
     toolBars.push(this)
+  }
+}
+
+class FakeBounds {
+  constructor(
+    readonly southWest: [number, number],
+    readonly northEast: [number, number],
+  ) {}
+}
+
+class FakeImageLayer {
+  constructor(options: Record<string, unknown>) {
+    imageLayerOptions.push(options)
+    imageLayers.push(this)
   }
 }
 
@@ -156,6 +175,8 @@ interface TestAmapNamespace {
   Marker: typeof FakeMarker
   Polygon: typeof FakePolygon
   Polyline: typeof FakePolyline
+  Bounds: typeof FakeBounds
+  ImageLayer: typeof FakeImageLayer
   createDefaultLayer: ReturnType<typeof vi.fn>
   TileLayer: {
     Satellite: typeof FakeSatelliteLayer
@@ -219,6 +240,14 @@ function riskSpatialResult(taskId = 'task-1', values = [0.8]): RiskAnalysisSpati
   }
 }
 
+function riskPreview(taskId = 'task-1'): RiskAnalysisPreview {
+  return {
+    task_id: taskId,
+    url: 'blob:risk-preview',
+    bounds: [116.397, 39.908, 116.407, 39.918],
+  }
+}
+
 async function mountReady(props: Record<string, unknown> = {}) {
   const wrapper = mount(MapCanvas, {
     props: {
@@ -252,6 +281,8 @@ beforeEach(() => {
   standardLayers.length = 0
   satelliteLayers.length = 0
   roadNetLayers.length = 0
+  imageLayers.length = 0
+  imageLayerOptions.length = 0
   toolBars.length = 0
   mapClickHandler = undefined
   mapMouseMoveHandler = undefined
@@ -267,6 +298,8 @@ beforeEach(() => {
     Marker: FakeMarker,
     Polygon: FakePolygon,
     Polyline: FakePolyline,
+    Bounds: FakeBounds,
+    ImageLayer: FakeImageLayer,
     createDefaultLayer: vi.fn(() => new FakeStandardLayer()),
     TileLayer,
     ToolBar: FakeToolBar,
@@ -289,6 +322,30 @@ describe('risk spatial color scale', () => {
 })
 
 describe('MapCanvas source and spatial overlays', () => {
+  it('prefers one ImageLayer and skips cell polygons when a preview is present', async () => {
+    const preview = riskPreview()
+    const wrapper = await mountReady({
+      riskPreview: preview,
+      riskSpatialResult: riskSpatialResult('task-1', [0.2, 0.8]),
+    })
+
+    expect(imageLayers).toHaveLength(1)
+    expect(polygonOptions.filter((options) => options.zIndex === 20)).toHaveLength(0)
+    expect(imageLayerOptions[0]).toMatchObject({ url: preview.url, opacity: 1, zIndex: 20 })
+    const bounds = imageLayerOptions[0]?.bounds as FakeBounds
+    expect(bounds.southWest).toEqual(wgs84ToGcj02([116.397, 39.908]))
+    expect(bounds.northEast).toEqual(wgs84ToGcj02([116.407, 39.918]))
+    expect(maps[0]?.add).toHaveBeenCalledOnce()
+
+    const firstLayer = imageLayers[0]
+    await wrapper.setProps({ riskPreview: { ...preview, task_id: 'task-2', url: 'blob:next' } })
+
+    expect(imageLayers).toHaveLength(2)
+    expect(maps[0]?.remove).toHaveBeenCalledWith(firstLayer)
+    wrapper.unmount()
+    expect(maps[0]?.remove).toHaveBeenCalledWith(imageLayers[1])
+  })
+
   it('converts WGS84 source coordinates to GCJ-02 without mutating the source geometry', async () => {
     const sourceGeometry = {
       type: 'Point' as const,

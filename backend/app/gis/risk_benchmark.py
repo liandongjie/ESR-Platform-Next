@@ -22,15 +22,18 @@ from typing import Any
 
 import numpy as np
 import rasterio
+from flask_jwt_extended import create_access_token
 from rasterio.windows import Window
 from rasterio.windows import bounds as window_bounds
 from shapely.geometry import box, mapping
 
 from app import create_app
+from app.extensions import db
 from app.gis.geojson import parse_geojson_geometry
 from app.gis.indicators import INDICATOR_BY_CODE, INDICATORS
 from app.gis.risk_models import IndicatorWeight
 from app.gis.risk_pipeline import RiskAnalysisPipeline
+from app.models import AnalysisJob, User
 from app.schemas.risk_analysis import RiskAnalysisJobRequest, RiskAnalysisSuccessResult
 from app.services.risk_analysis_jobs import (
     RiskAnalysisJobService,
@@ -548,57 +551,86 @@ def _run_spatial(
     runs: int,
     sizes: dict[str, int],
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    app = create_app("testing")
-    app.config.update(RUNTIME_DATA_DIR=runtime_dir, TESTING=True)
+    app = create_app(
+        "testing",
+        {
+            "SQLALCHEMY_DATABASE_URI": "sqlite:///:memory:",
+            "RUNTIME_DATA_DIR": runtime_dir,
+            "TESTING": True,
+        },
+    )
     client = app.test_client()
     codes = INDICATOR_GROUPS[12]
     reference_path = raster_dir / INDICATOR_BY_CODE["PM25"].filename
     scenarios: list[dict[str, Any]] = []
     samples: list[dict[str, Any]] = []
-    for aoi_name, size in sizes.items():
-        request, aoi = _request(reference_path, size, codes)
-        task_id = f"spatial-12-{aoi_name}"
-        payload = RiskAnalysisJobService(raster_dir, runtime_dir).execute(
-            task_id=task_id,
-            request=request,
+    with app.app_context():
+        db.create_all()
+        user = User(username="benchmark-user")
+        user.set_password("benchmark-only-password")
+        db.session.add(user)
+        db.session.flush()
+        client.environ_base["HTTP_AUTHORIZATION"] = (
+            f"Bearer {create_access_token(identity=str(user.id))}"
         )
-        rows, cols = payload["grid"]["shape"]
-        scenarios.append(
-            {
-                "aoi": aoi_name,
-                "indicator_count": 12,
-                "indicator_codes": list(codes),
-                "weights": request.model_dump(mode="json")["weights"],
-                "output_rows": rows,
-                "output_cols": cols,
-                "output_window_cells": rows * cols,
-                "output_valid_cells": payload["statistics"]["valid_pixel_count"],
-                **aoi,
-            }
-        )
-        for _ in range(warmups):
-            _spatial_response(client, task_id)
-        for sample_index in range(runs):
-            elapsed_ms, response = _spatial_response(client, task_id)
-            body = response.get_json()
-            feature_count = len(body["feature_collection"]["features"])
-            samples.append(
+
+        for aoi_name, size in sizes.items():
+            request, aoi = _request(reference_path, size, codes)
+            task_id = f"spatial-12-{aoi_name}"
+            payload = RiskAnalysisJobService(raster_dir, runtime_dir).execute(
+                task_id=task_id,
+                request=request,
+            )
+            db.session.add(
+                AnalysisJob(
+                    id=task_id,
+                    owner_id=user.id,
+                    idempotency_key=f"benchmark:{task_id}",
+                    status="SUCCEEDED",
+                    stage="COMPLETED",
+                    progress=100,
+                    request_payload=request.model_dump(mode="json"),
+                    geometry=request.geometry,
+                )
+            )
+            db.session.commit()
+            rows, cols = payload["grid"]["shape"]
+            scenarios.append(
                 {
-                    "family": "spatial",
                     "aoi": aoi_name,
                     "indicator_count": 12,
                     "indicator_codes": list(codes),
-                    "sample_index": sample_index,
-                    "rows": rows,
-                    "cols": cols,
-                    "window_cells": rows * cols,
-                    "valid_cells": payload["statistics"]["valid_pixel_count"],
-                    "spatial_elapsed_ms": elapsed_ms,
-                    "feature_count": feature_count,
-                    "response_bytes": len(response.get_data()),
-                    "transport": "flask_test_client_no_network",
+                    "weights": request.model_dump(mode="json")["weights"],
+                    "output_rows": rows,
+                    "output_cols": cols,
+                    "output_window_cells": rows * cols,
+                    "output_valid_cells": payload["statistics"]["valid_pixel_count"],
+                    **aoi,
                 }
             )
+            for _ in range(warmups):
+                _spatial_response(client, task_id)
+            for sample_index in range(runs):
+                elapsed_ms, response = _spatial_response(client, task_id)
+                body = response.get_json()
+                feature_count = len(body["feature_collection"]["features"])
+                samples.append(
+                    {
+                        "family": "spatial",
+                        "aoi": aoi_name,
+                        "indicator_count": 12,
+                        "indicator_codes": list(codes),
+                        "sample_index": sample_index,
+                        "rows": rows,
+                        "cols": cols,
+                        "window_cells": rows * cols,
+                        "valid_cells": payload["statistics"]["valid_pixel_count"],
+                        "spatial_elapsed_ms": elapsed_ms,
+                        "feature_count": feature_count,
+                        "response_bytes": len(response.get_data()),
+                        "transport": "flask_test_client_no_network",
+                    }
+                )
     return scenarios, samples
 
 

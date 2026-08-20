@@ -36,6 +36,10 @@ services:
       - .env
     environment:
       DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://esr:esr_dev_password@db:5432/esr_platform}
+      ESR_DB_POOL_SIZE: ${ESR_DB_POOL_SIZE:-5}
+      ESR_DB_MAX_OVERFLOW: ${ESR_DB_MAX_OVERFLOW:-0}
+      ESR_DB_POOL_TIMEOUT_SECONDS: ${ESR_DB_POOL_TIMEOUT_SECONDS:-10}
+      ESR_DB_POOL_RECYCLE_SECONDS: ${ESR_DB_POOL_RECYCLE_SECONDS:-1800}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
       CELERY_BROKER_URL: ${CELERY_BROKER_URL:-redis://redis:6379/0}
       CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND:-redis://redis:6379/1}
@@ -72,6 +76,10 @@ services:
       - .env
     environment:
       DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://esr:esr_dev_password@db:5432/esr_platform}
+      ESR_DB_POOL_SIZE: ${ESR_DB_POOL_SIZE:-5}
+      ESR_DB_MAX_OVERFLOW: ${ESR_DB_MAX_OVERFLOW:-0}
+      ESR_DB_POOL_TIMEOUT_SECONDS: ${ESR_DB_POOL_TIMEOUT_SECONDS:-10}
+      ESR_DB_POOL_RECYCLE_SECONDS: ${ESR_DB_POOL_RECYCLE_SECONDS:-1800}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
       CELERY_BROKER_URL: ${CELERY_BROKER_URL:-redis://redis:6379/0}
       CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND:-redis://redis:6379/1}
@@ -83,6 +91,33 @@ services:
         source: ${ESR_SOURCE_RASTER_HOST_DIR:-./data/source}
         target: /data/source
         read_only: true
+      - runtime_data:/data/runtime
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  beat:
+    build:
+      context: ./backend
+      target: development
+    command: ["celery", "-A", "app.celery_app:celery_app", "beat", "--loglevel=INFO"]
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://esr:esr_dev_password@db:5432/esr_platform}
+      ESR_DB_POOL_SIZE: ${ESR_DB_POOL_SIZE:-5}
+      ESR_DB_MAX_OVERFLOW: ${ESR_DB_MAX_OVERFLOW:-0}
+      ESR_DB_POOL_TIMEOUT_SECONDS: ${ESR_DB_POOL_TIMEOUT_SECONDS:-10}
+      ESR_DB_POOL_RECYCLE_SECONDS: ${ESR_DB_POOL_RECYCLE_SECONDS:-1800}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      CELERY_BROKER_URL: ${CELERY_BROKER_URL:-redis://redis:6379/0}
+      CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND:-redis://redis:6379/1}
+      ESR_RUNTIME_DATA_DIR: /data/runtime
+    volumes:
+      - ./backend:/app
       - runtime_data:/data/runtime
     depends_on:
       db:

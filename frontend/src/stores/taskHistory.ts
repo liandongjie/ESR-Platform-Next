@@ -2,13 +2,16 @@ import { defineStore } from 'pinia'
 
 import { getApiErrorMessage } from '@/api/errors'
 import {
+  downloadRiskAnalysisPreview,
   getRiskAnalysisResult,
   getRiskAnalysisSpatialResult,
   listRiskAnalysisJobs,
+  isRiskAnalysisPreviewUnavailable,
 } from '@/api/riskAnalysis'
 import type {
   RiskAnalysisJobHistoryItem,
   RiskAnalysisResult,
+  RiskAnalysisPreview,
   RiskAnalysisSpatialResult,
   RiskJobStatus,
 } from '@/types/riskAnalysis'
@@ -26,12 +29,15 @@ interface TaskHistoryState {
   error: string | null
   polling: boolean
   refreshRevision: number
+  loadRevision: number
+  userBoundaryRevision: number
   selectedTaskId: string | null
   detailRevision: number
   selectedResult: RiskAnalysisResult | null
   detailLoading: boolean
   detailError: string | null
   selectedSpatialResult: RiskAnalysisSpatialResult | null
+  selectedRiskPreview: RiskAnalysisPreview | null
   spatialLoadingTaskId: string | null
   spatialError: string | null
 }
@@ -57,12 +63,15 @@ export const useTaskHistoryStore = defineStore('taskHistory', {
     error: null,
     polling: false,
     refreshRevision: 0,
+    loadRevision: 0,
+    userBoundaryRevision: 0,
     selectedTaskId: null,
     detailRevision: 0,
     selectedResult: null,
     detailLoading: false,
     detailError: null,
     selectedSpatialResult: null,
+    selectedRiskPreview: null,
     spatialLoadingTaskId: null,
     spatialError: null,
   }),
@@ -75,25 +84,62 @@ export const useTaskHistoryStore = defineStore('taskHistory', {
     spatialLoading: (state): boolean => state.spatialLoadingTaskId !== null,
   },
   actions: {
+    resetForUserBoundary() {
+      const refreshRevision = this.refreshRevision + 1
+      const loadRevision = this.loadRevision + 1
+      const userBoundaryRevision = this.userBoundaryRevision + 1
+      const detailRevision = this.detailRevision + 1
+      this.releaseRiskPreview()
+      this.$reset()
+      this.refreshRevision = refreshRevision
+      this.loadRevision = loadRevision
+      this.userBoundaryRevision = userBoundaryRevision
+      this.detailRevision = detailRevision
+    },
+    releaseRiskPreview() {
+      if (this.selectedRiskPreview) URL.revokeObjectURL(this.selectedRiskPreview.url)
+      this.selectedRiskPreview = null
+    },
     async loadJobs(initial = false): Promise<boolean> {
-      if (initial) {
-        this.loading = true
-      } else {
-        this.refreshing = true
-      }
+      const revision = ++this.loadRevision
+      const userBoundaryRevision = this.userBoundaryRevision
+      const limit = this.limit
+      const offset = this.offset
+      this.loading = initial
+      this.refreshing = !initial
       this.error = null
 
       try {
-        const history = await listRiskAnalysisJobs(this.limit, this.offset)
+        const history = await listRiskAnalysisJobs(limit, offset)
+        if (
+          revision !== this.loadRevision ||
+          userBoundaryRevision !== this.userBoundaryRevision ||
+          offset !== this.offset
+        ) {
+          return false
+        }
         this.items = history.items
         this.total = history.total
         return true
       } catch (error: unknown) {
+        if (
+          revision !== this.loadRevision ||
+          userBoundaryRevision !== this.userBoundaryRevision ||
+          offset !== this.offset
+        ) {
+          return false
+        }
         this.error = getApiErrorMessage(error, '查询历史任务失败')
         return false
       } finally {
-        this.loading = false
-        this.refreshing = false
+        if (
+          revision === this.loadRevision &&
+          userBoundaryRevision === this.userBoundaryRevision &&
+          offset === this.offset
+        ) {
+          this.loading = false
+          this.refreshing = false
+        }
       }
     },
     async initialize() {
@@ -169,6 +215,7 @@ export const useTaskHistoryStore = defineStore('taskHistory', {
           this.detailLoading ||
           this.selectedResult ||
           this.spatialLoadingTaskId === task.task_id ||
+          this.selectedRiskPreview ||
           this.selectedSpatialResult
         ) {
           return
@@ -179,6 +226,7 @@ export const useTaskHistoryStore = defineStore('taskHistory', {
         this.selectedResult = null
         this.detailLoading = false
         this.detailError = null
+        this.releaseRiskPreview()
         this.selectedSpatialResult = null
         this.spatialLoadingTaskId = null
         this.spatialError = null
@@ -189,11 +237,11 @@ export const useTaskHistoryStore = defineStore('taskHistory', {
       const revision = this.detailRevision
       this.detailError = null
       this.detailLoading = true
-      void this.loadSpatialResult(task.task_id, revision)
       try {
         const result = await getRiskAnalysisResult(task.task_id)
         if (this.selectedTaskId !== task.task_id || this.detailRevision !== revision) return
         this.selectedResult = result
+        void this.loadSpatialResult(task.task_id, revision)
       } catch (error: unknown) {
         if (this.selectedTaskId !== task.task_id || this.detailRevision !== revision) return
         this.detailError = getApiErrorMessage(error, '读取任务结果失败')
@@ -207,6 +255,7 @@ export const useTaskHistoryStore = defineStore('taskHistory', {
       if (
         this.selectedTaskId !== taskId ||
         this.detailRevision !== revision ||
+        this.selectedRiskPreview?.task_id === taskId ||
         this.selectedSpatialResult?.task_id === taskId ||
         this.spatialLoadingTaskId === taskId
       ) {
@@ -216,9 +265,34 @@ export const useTaskHistoryStore = defineStore('taskHistory', {
       this.spatialLoadingTaskId = taskId
       this.spatialError = null
       try {
-        const spatialResult = await getRiskAnalysisSpatialResult(taskId)
+        const result = this.selectedResult
+        if (!result) return
+        const hasPreview = Boolean(result.artifacts.preview && result.grid.bounds)
+        let previewArtifact = null
+        let spatialResult = null
+        if (hasPreview) {
+          try {
+            previewArtifact = await downloadRiskAnalysisPreview(taskId)
+          } catch (error: unknown) {
+            if (!isRiskAnalysisPreviewUnavailable(error)) throw error
+            spatialResult = await getRiskAnalysisSpatialResult(taskId)
+          }
+        } else {
+          spatialResult = await getRiskAnalysisSpatialResult(taskId)
+        }
         if (this.selectedTaskId !== taskId || this.detailRevision !== revision) return
-        this.selectedSpatialResult = spatialResult
+        if (previewArtifact && result.grid.bounds) {
+          this.releaseRiskPreview()
+          this.selectedRiskPreview = {
+            task_id: taskId,
+            url: URL.createObjectURL(previewArtifact.blob),
+            bounds: result.grid.bounds,
+          }
+          this.selectedSpatialResult = null
+        } else {
+          this.selectedSpatialResult = spatialResult
+          if (hasPreview) this.spatialError = '轻量风险预览不可用，已回退到兼容图层'
+        }
       } catch (error: unknown) {
         if (this.selectedTaskId !== taskId || this.detailRevision !== revision) return
         this.spatialError = getApiErrorMessage(error, '读取空间风险结果失败')
@@ -238,6 +312,7 @@ export const useTaskHistoryStore = defineStore('taskHistory', {
       this.selectedResult = null
       this.detailLoading = false
       this.detailError = null
+      this.releaseRiskPreview()
       this.selectedSpatialResult = null
       this.spatialLoadingTaskId = null
       this.spatialError = null

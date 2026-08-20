@@ -72,6 +72,23 @@ select {
   color: #fff;
 }
 
+.account-nav {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-left: auto;
+  font-size: 13px;
+}
+
+.account-nav button {
+  padding: 4px 9px;
+  border: 1px solid rgba(255, 255, 255, 0.5);
+  border-radius: 4px;
+  background: transparent;
+  color: #fff;
+  cursor: pointer;
+}
+
 .wordmark {
   display: flex;
   flex-direction: column;
@@ -386,4 +403,57 @@ select {
 
 .tasks-page {
   min-height: 500px;
+}
+
+.auth-page {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: #eef1f2;
+}
+
+.auth-card {
+  width: min(400px, 100%);
+  padding: 32px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.auth-brand {
+  color: var(--brand-navy);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.auth-card h1 {
+  margin: 12px 0 6px;
+  font-size: 26px;
+}
+
+.auth-subtitle,
+.auth-hint {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.auth-form {
+  display: grid;
+  gap: 10px;
+  margin: 20px 0 16px;
+}
+
+.auth-form label {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.auth-form .el-button {
+  width: 100%;
+  margin-top: 8px;
+}
+
+.auth-card .el-alert + .el-alert,
+.auth-card .auth-subtitle + .el-alert {
+  margin-top: 12px;
 }
