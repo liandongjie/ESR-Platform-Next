@@ -3,40 +3,61 @@ from __future__ import annotations
 import csv
 import inspect
 import json
+import pstats
+import sys
 from pathlib import Path
 
 import numpy as np
 import pytest
 import rasterio
 from rasterio.transform import from_origin
+from rasterio.windows import Window
 
 from app.gis.indicators import INDICATORS
 from app.gis.risk_benchmark import (
     ALLOWED_BENCHMARK_PATHS,
+    ALLOWED_PIPELINE_DIAGNOSTIC_PATHS,
     BASELINE_SHA,
     COMPUTE_SIZES,
     DEFAULT_RUNS,
     DEFAULT_WARMUPS,
+    HANDLE_REUSE_APPLICABILITY_SIZE,
+    HANDLE_REUSE_MIN_SPEEDUP,
+    HANDLE_REUSE_MODES,
+    HANDLE_REUSE_WINDOW_SHIFTS,
     INDICATOR_GROUPS,
+    PIPELINE_PROFILE_SIZE,
+    PIPELINE_PROFILE_TOP_N,
+    PRODUCTION_CANDIDATE_SHA,
+    RASTER_READ_ATTRIBUTION_SIZE,
+    RASTER_READ_CACHE_SEMANTICS,
+    RASTER_READ_MODES,
     SOURCE_TREE_VERIFICATION_METHOD,
     SPATIAL_SIZES,
     VALIDATION_INCLUDED_IN_TOTAL_SERVICE,
     VALIDATION_TIMING,
+    _parse_args,
+    _verified_instrumentation_lineage,
     _verified_provenance,
+    _window_block_metrics,
+    _window_overlap_metrics,
     run_benchmark,
+    run_handle_reuse_applicability,
+    run_pipeline_profile,
+    run_raster_read_attribution,
     write_reports,
 )
 
 
-def _write_catalog_rasters(raster_dir: Path) -> None:
+def _write_catalog_rasters(raster_dir: Path, *, width: int = 4) -> None:
     raster_dir.mkdir()
-    values = np.full((4, 4), 0.5, dtype="float32")
+    values = np.full((4, width), 0.5, dtype="float32")
     for indicator in INDICATORS:
         with rasterio.open(
             raster_dir / indicator.filename,
             "w",
             driver="GTiff",
-            width=4,
+            width=width,
             height=4,
             count=1,
             dtype="float32",
@@ -112,6 +133,7 @@ def test_benchmark_keeps_raw_samples_and_writes_all_reports(tmp_path: Path):
 
 def test_formal_p3a_benchmark_contract_is_locked():
     assert BASELINE_SHA == "5810240e14d1d5a86562d73d6b85f2cdd2083cc4"
+    assert PRODUCTION_CANDIDATE_SHA == "8f85c420dcc07edbcbf03674478b973c108e6746"
     assert COMPUTE_SIZES == {"small": 128, "medium": 384, "large": 1024}
     assert SPATIAL_SIZES == {"small": 32, "medium": 64, "large": 128}
     assert INDICATOR_GROUPS == {
@@ -125,12 +147,363 @@ def test_formal_p3a_benchmark_contract_is_locked():
     assert inspect.signature(run_benchmark).parameters["runs"].default == 5
     assert VALIDATION_TIMING == "standalone_post_execute_warm_cache"
     assert VALIDATION_INCLUDED_IN_TOTAL_SERVICE is False
+    assert PIPELINE_PROFILE_SIZE == 1024
+    assert PIPELINE_PROFILE_TOP_N == 30
+    assert inspect.signature(run_pipeline_profile).parameters["warmups"].default == 1
+    assert inspect.signature(run_pipeline_profile).parameters["runs"].default == 5
+    assert inspect.signature(run_pipeline_profile).parameters["size"].default == 1024
+    assert RASTER_READ_ATTRIBUTION_SIZE == 1024
+    assert inspect.signature(run_raster_read_attribution).parameters["warmups"].default == 1
+    assert inspect.signature(run_raster_read_attribution).parameters["runs"].default == 5
+    assert inspect.signature(run_raster_read_attribution).parameters["size"].default == 1024
+    assert RASTER_READ_MODES == (
+        "open_only",
+        "masked_read_new_handle",
+        "masked_reread_same_handle",
+        "data_read",
+        "mask_read",
+        "data_plus_mask",
+    )
+    assert RASTER_READ_CACHE_SEMANTICS == (
+        "warm_process_and_os_cache_not_explicitly_flushed"
+    )
+    assert HANDLE_REUSE_APPLICABILITY_SIZE == 1024
+    assert HANDLE_REUSE_WINDOW_SHIFTS == {
+        "same_window": 0,
+        "half_overlap": 512,
+        "zero_block_overlap": 1152,
+    }
+    assert HANDLE_REUSE_MODES == (
+        "reopen_between_requests",
+        "reuse_same_process_handles",
+    )
+    assert HANDLE_REUSE_MIN_SPEEDUP == 1.5
+    assert inspect.signature(run_handle_reuse_applicability).parameters[
+        "warmups"
+    ].default == 1
+    assert inspect.signature(run_handle_reuse_applicability).parameters[
+        "runs"
+    ].default == 5
+    assert inspect.signature(run_handle_reuse_applicability).parameters[
+        "size"
+    ].default == 1024
     assert ALLOWED_BENCHMARK_PATHS == (
         "backend/app/gis/risk_benchmark.py",
         "backend/tests/test_risk_benchmark.py",
         "scripts/benchmark-risk-analysis.ps1",
         "docs/performance/",
     )
+    assert ALLOWED_PIPELINE_DIAGNOSTIC_PATHS == ALLOWED_BENCHMARK_PATHS
+
+
+def test_window_block_metrics_cover_aligned_and_unaligned_windows():
+    aligned = _window_block_metrics(Window(128, 128, 256, 256), (128, 128), "float32")
+    assert aligned == {
+        "touched_block_count": 4,
+        "estimated_decoded_cells": 65536,
+        "estimated_uncompressed_bytes": 262144,
+        "read_amplification_ratio": 1.0,
+    }
+    unaligned = _window_block_metrics(Window(1, 1, 128, 128), (128, 128), "float32")
+    assert unaligned == {
+        "touched_block_count": 4,
+        "estimated_decoded_cells": 65536,
+        "estimated_uncompressed_bytes": 262144,
+        "read_amplification_ratio": 4.0,
+    }
+
+
+def test_window_overlap_metrics_cover_aligned_and_unaligned_windows():
+    aligned_base = Window(128, 128, 256, 256)
+    aligned_half = _window_overlap_metrics(
+        aligned_base, Window(256, 128, 256, 256), (128, 128)
+    )
+    assert aligned_half == {
+        "pixel_overlap_cells": 32768,
+        "pixel_overlap_ratio": 0.5,
+        "base_touched_block_count": 4,
+        "target_touched_block_count": 4,
+        "shared_block_count": 2,
+        "target_block_cache_coverage_ratio": 0.5,
+    }
+
+    unaligned_base = Window(5378, 2331, 1024, 1024)
+    unaligned_half = _window_overlap_metrics(
+        unaligned_base, Window(5890, 2331, 1024, 1024), (128, 128)
+    )
+    assert unaligned_half["pixel_overlap_ratio"] == 0.5
+    assert unaligned_half["shared_block_count"] == 45
+    assert unaligned_half["target_block_cache_coverage_ratio"] == pytest.approx(5 / 9)
+
+    unaligned_zero = _window_overlap_metrics(
+        unaligned_base, Window(6530, 2331, 1024, 1024), (128, 128)
+    )
+    assert unaligned_zero["pixel_overlap_cells"] == 0
+    assert unaligned_zero["shared_block_count"] == 0
+    assert unaligned_zero["target_block_cache_coverage_ratio"] == 0.0
+
+
+def test_raster_read_attribution_keeps_raw_samples_and_reports(tmp_path: Path):
+    raster_dir = tmp_path / "rasters"
+    _write_catalog_rasters(raster_dir)
+    diagnostic_sha = "2" * 40
+
+    result, paths = run_raster_read_attribution(
+        raster_dir=raster_dir,
+        output_dir=tmp_path / "read-attribution",
+        subject_baseline_sha=diagnostic_sha,
+        repository_head_sha=diagnostic_sha,
+        source_tree_verified=True,
+        baseline_is_ancestor=True,
+        production_candidate_is_ancestor=True,
+        diagnostic_source_tree_verified=True,
+        diagnostic_differences=("M:backend/app/gis/risk_benchmark.py",),
+        warmups=0,
+        runs=1,
+        size=2,
+    )
+
+    assert result["benchmark"] == "risk-raster-read-attribution"
+    assert result["production_candidate_sha"] == PRODUCTION_CANDIDATE_SHA
+    assert result["diagnostic_subject_sha"] == diagnostic_sha
+    assert result["configuration"] == {
+        "warmups_per_mode": 0,
+        "measured_runs_per_mode": 1,
+        "window_size": 2,
+        "indicator_codes": [indicator.code for indicator in INDICATORS],
+        "modes": list(RASTER_READ_MODES),
+        "measured_sample_count": 72,
+    }
+    assert result["timing_semantics"]["cache_state"] == RASTER_READ_CACHE_SEMANTICS
+    assert result["timing_semantics"]["physical_cold_disk_claimed"] is False
+    assert result["gdal_runtime"]["version"]
+    scenarios = result["raster_read_attribution"]["scenarios"]
+    samples = result["raster_read_attribution"]["raw_samples"]
+    assert len(scenarios) == 12
+    assert len(samples) == 72
+    assert len(result["raster_read_attribution"]["summaries"]) == 12
+    assert all(scenario["read_equivalence"]["equivalent"] for scenario in scenarios)
+    assert all(
+        sample["rows"] == 2
+        and sample["cols"] == 2
+        and sample["window_cells"] == 4
+        and isinstance(sample["elapsed_ns"], int)
+        and sample["elapsed_ns"] >= 0
+        for sample in samples
+    )
+    assert {(sample["indicator_code"], sample["mode"]) for sample in samples} == {
+        (indicator.code, mode) for indicator in INDICATORS for mode in RASTER_READ_MODES
+    }
+    persisted = json.loads(paths["json"].read_text(encoding="utf-8"))
+    assert persisted["raster_read_attribution"]["raw_samples"] == samples
+    with paths["csv"].open(encoding="utf-8", newline="") as stream:
+        assert len(list(csv.DictReader(stream))) == 72
+    markdown = paths["markdown"].read_text(encoding="utf-8")
+    assert "Windows OS cache is not flushed" in markdown
+    assert "Masked/new" in markdown
+    assert "Raw nanosecond samples" in markdown
+
+
+def test_handle_reuse_applicability_keeps_raw_samples_and_reports(tmp_path: Path):
+    raster_dir = tmp_path / "rasters"
+    _write_catalog_rasters(raster_dir, width=8)
+    diagnostic_sha = "2" * 40
+    test_shifts = {
+        "same_window": 0,
+        "half_overlap": 1,
+        "zero_block_overlap": 2,
+    }
+
+    result, paths = run_handle_reuse_applicability(
+        raster_dir=raster_dir,
+        output_dir=tmp_path / "handle-reuse",
+        subject_baseline_sha=diagnostic_sha,
+        repository_head_sha=diagnostic_sha,
+        source_tree_verified=True,
+        baseline_is_ancestor=True,
+        production_candidate_is_ancestor=True,
+        diagnostic_source_tree_verified=True,
+        diagnostic_differences=("M:backend/app/gis/risk_benchmark.py",),
+        warmups=0,
+        runs=1,
+        size=2,
+        window_shifts=test_shifts,
+    )
+
+    assert result["benchmark"] == "risk-datasetreader-handle-reuse-applicability"
+    assert result["production_candidate_sha"] == PRODUCTION_CANDIDATE_SHA
+    assert result["diagnostic_subject_sha"] == diagnostic_sha
+    assert result["configuration"] == {
+        "warmups_per_relationship_and_mode": 0,
+        "measured_runs_per_relationship_and_mode": 1,
+        "window_size": 2,
+        "indicator_codes": [indicator.code for indicator in INDICATORS],
+        "window_shifts": test_shifts,
+        "modes": list(HANDLE_REUSE_MODES),
+        "measured_sequence_sample_count": 6,
+        "measured_indicator_event_count": 72,
+        "minimum_decision_speedup": 1.5,
+    }
+    assert result["timing_semantics"]["cache_state"] == RASTER_READ_CACHE_SEMANTICS
+    assert result["timing_semantics"]["target_read_only_timed"] is True
+    assert result["timing_semantics"]["physical_cold_disk_claimed"] is False
+    scenarios = result["handle_reuse_applicability"]["scenarios"]
+    samples = result["handle_reuse_applicability"]["raw_sequence_samples"]
+    assert len(scenarios) == 3
+    assert [scenario["pixel_overlap_ratio"] for scenario in scenarios] == [1.0, 0.5, 0.0]
+    assert all(
+        all(item["equivalent"] for item in scenario["read_equivalence"])
+        for scenario in scenarios
+    )
+    assert len(samples) == 6
+    assert all(
+        sample["sequence_elapsed_ns"] >= 0
+        and len(sample["indicator_events"]) == 12
+        and all(event["elapsed_ns"] >= 0 for event in sample["indicator_events"])
+        for sample in samples
+    )
+    assert len(result["handle_reuse_applicability"]["summaries"]) == 3
+    persisted = json.loads(paths["json"].read_text(encoding="utf-8"))
+    assert persisted["handle_reuse_applicability"]["raw_sequence_samples"] == samples
+    with paths["csv"].open(encoding="utf-8", newline="") as stream:
+        assert len(list(csv.DictReader(stream))) == 72
+    markdown = paths["markdown"].read_text(encoding="utf-8")
+    assert "Windows OS cache is not flushed" in markdown
+    assert "single-process, single-thread diagnostic" in markdown
+    assert "Median speedup" in markdown
+
+
+def test_pipeline_diagnostic_lineage_contract():
+    instrumented_sha = "2" * 40
+    lineage = _verified_instrumentation_lineage(
+        PRODUCTION_CANDIDATE_SHA,
+        instrumented_sha,
+        True,
+        True,
+        ALLOWED_PIPELINE_DIAGNOSTIC_PATHS,
+        (
+            "M:backend/app/gis/risk_benchmark.py",
+            "M:backend/tests/test_risk_benchmark.py",
+            "A:docs/performance/p3b-pipeline-stage-timing/result.json",
+        ),
+    )
+    assert lineage["production_candidate_sha"] == PRODUCTION_CANDIDATE_SHA
+    assert lineage["instrumented_subject_sha"] == instrumented_sha
+    assert lineage["diagnostic_source_tree_verified"] is True
+
+    with pytest.raises(ValueError, match="ancestor"):
+        _verified_instrumentation_lineage(
+            PRODUCTION_CANDIDATE_SHA,
+            instrumented_sha,
+            False,
+            True,
+            ALLOWED_PIPELINE_DIAGNOSTIC_PATHS,
+            (),
+        )
+    with pytest.raises(ValueError, match="非 diagnostic"):
+        _verified_instrumentation_lineage(
+            PRODUCTION_CANDIDATE_SHA,
+            instrumented_sha,
+            True,
+            True,
+            ALLOWED_PIPELINE_DIAGNOSTIC_PATHS,
+            ("M:backend/app/services/risk_analysis_jobs.py",),
+        )
+
+
+@pytest.mark.parametrize(
+    "modes",
+    [
+        ("--pipeline-profile", "--pipeline-read-attribution"),
+        ("--pipeline-profile", "--pipeline-handle-reuse-applicability"),
+        ("--pipeline-read-attribution", "--pipeline-handle-reuse-applicability"),
+    ],
+)
+def test_pipeline_profile_modes_are_mutually_exclusive(
+    monkeypatch: pytest.MonkeyPatch,
+    modes: tuple[str, str],
+):
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "risk-benchmark",
+            "--raster-dir",
+            "rasters",
+            "--output-dir",
+            "reports",
+            "--repository-head-sha",
+            BASELINE_SHA,
+            "--source-tree-verification-method",
+            SOURCE_TREE_VERIFICATION_METHOD,
+            "--source-tree-verified",
+            "--baseline-is-ancestor",
+            "--allowed-benchmark-path",
+            ALLOWED_BENCHMARK_PATHS[0],
+            *modes,
+        ],
+    )
+    with pytest.raises(SystemExit):
+        _parse_args()
+
+
+def test_pipeline_profile_keeps_raw_samples_and_writes_loadable_profiles(tmp_path: Path):
+    raster_dir = tmp_path / "rasters"
+    _write_catalog_rasters(raster_dir)
+
+    result, paths = run_pipeline_profile(
+        raster_dir=raster_dir,
+        output_dir=tmp_path / "profiles",
+        repository_head_sha=BASELINE_SHA,
+        source_tree_verified=True,
+        baseline_is_ancestor=True,
+        warmups=0,
+        runs=1,
+        size=2,
+        top_n=5,
+    )
+
+    assert result["benchmark"] == "risk-analysis-pipeline-cprofile"
+    assert result["configuration"] == {
+        "warmups_per_scenario": 0,
+        "measured_runs_per_scenario": 1,
+        "profile_size": 2,
+        "indicator_groups": {
+            "3": ["PM25", "AQI", "NDVI"],
+            "6": ["PM25", "AQI", "NDVI", "rkmd", "gyfb", "fmyl"],
+            "12": [indicator.code for indicator in INDICATORS],
+        },
+        "top_entries_per_sort": 5,
+    }
+    assert result["profiling_semantics"]["wall_time_includes_profiler_overhead"] is True
+    assert result["profiling_semantics"]["wall_time_comparable_to_unprofiled_benchmark"] is False
+    assert len(result["pipeline_profile"]["raw_samples"]) == 3
+    assert all(
+        sample["rows"] == 2
+        and sample["cols"] == 2
+        and sample["valid_cells"] == 4
+        and sample["profiled_pipeline_elapsed_ms"] >= 0
+        for sample in result["pipeline_profile"]["raw_samples"]
+    )
+    assert len(result["raster_dataset"]["files"]) == 12
+    for count in (3, 6, 12):
+        profile_path = paths[f"profile_{count}"]
+        stats = pstats.Stats(str(profile_path))
+        assert stats.total_calls > 0
+        scenario = next(
+            item
+            for item in result["pipeline_profile"]["scenarios"]
+            if item["indicator_count"] == count
+        )
+        assert any(entry["function"] == "run" for entry in scenario["top_cumulative"])
+        assert all(entry["self_seconds"] >= 0 for entry in scenario["top_self"])
+    persisted = json.loads(paths["json"].read_text(encoding="utf-8"))
+    assert persisted["pipeline_profile"]["raw_samples"] == result["pipeline_profile"][
+        "raw_samples"
+    ]
+    markdown = paths["markdown"].read_text(encoding="utf-8")
+    assert "cProfile overhead" in markdown
+    assert "must not be compared with baseline latency" in markdown
 
 
 @pytest.mark.parametrize(

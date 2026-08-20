@@ -2,7 +2,12 @@ param(
     [string]$OutputDir = "/workspace/docs/performance",
     [ValidatePattern("^[0-9a-fA-F]{40}$")]
     [string]$SubjectBaselineSha = "5810240e14d1d5a86562d73d6b85f2cdd2083cc4",
-    [switch]$VerifySourceTreeOnly
+    [ValidatePattern("^[0-9a-fA-F]{40}$")]
+    [string]$ProductionCandidateSha = "8f85c420dcc07edbcbf03674478b973c108e6746",
+    [switch]$VerifySourceTreeOnly,
+    [switch]$PipelineProfile,
+    [switch]$PipelineReadAttribution,
+    [switch]$PipelineHandleReuseApplicability
 )
 
 $ErrorActionPreference = "Stop"
@@ -15,8 +20,23 @@ $AllowedBenchmarkPaths = @(
     "scripts/benchmark-risk-analysis.ps1",
     "docs/performance/"
 )
+$AllowedPipelineDiagnosticPaths = $AllowedBenchmarkPaths
+
+$SelectedDiagnosticModes = @(
+    $PipelineProfile,
+    $PipelineReadAttribution,
+    $PipelineHandleReuseApplicability
+) | Where-Object { $_ }
+if ($SelectedDiagnosticModes.Count -gt 1) {
+    throw "Pipeline diagnostic modes 不能同时启用。benchmark 未运行。"
+}
+$RequiresDiagnosticLineage = (
+    $PipelineReadAttribution -or
+    $PipelineHandleReuseApplicability
+)
 
 $SubjectBaselineSha = $SubjectBaselineSha.ToLowerInvariant()
+$ProductionCandidateSha = $ProductionCandidateSha.ToLowerInvariant()
 git cat-file -e "$SubjectBaselineSha`^{commit}" 2>$null
 if ($LASTEXITCODE -ne 0) {
     throw "Subject production baseline commit 不存在：$SubjectBaselineSha。benchmark 未运行。"
@@ -31,6 +51,52 @@ $RepositoryHeadSha = $RepositoryHeadSha.Trim().ToLowerInvariant()
 git merge-base --is-ancestor $SubjectBaselineSha $RepositoryHeadSha
 if ($LASTEXITCODE -ne 0) {
     throw "Subject production baseline 不是 repository HEAD 的 ancestor：subject=$SubjectBaselineSha, head=$RepositoryHeadSha。benchmark 未运行。"
+}
+
+$DiagnosticDifferences = @()
+if ($RequiresDiagnosticLineage) {
+    git cat-file -e "$ProductionCandidateSha`^{commit}" 2>$null
+    if ($LASTEXITCODE -ne 0) {
+        throw "Production candidate commit 不存在：$ProductionCandidateSha。benchmark 未运行。"
+    }
+
+    git merge-base --is-ancestor $ProductionCandidateSha $SubjectBaselineSha
+    if ($LASTEXITCODE -ne 0) {
+        throw "Production candidate 不是 instrumented subject 的 ancestor：candidate=$ProductionCandidateSha, subject=$SubjectBaselineSha。benchmark 未运行。"
+    }
+
+    function Test-PipelineDiagnosticPathAllowed([string]$Path) {
+        $Normalized = $Path.Replace("\", "/")
+        return (
+            $Normalized -eq "backend/app/gis/risk_benchmark.py" -or
+            $Normalized -eq "backend/tests/test_risk_benchmark.py" -or
+            $Normalized -eq "scripts/benchmark-risk-analysis.ps1" -or
+            $Normalized.StartsWith("docs/performance/", [System.StringComparison]::Ordinal)
+        )
+    }
+
+    $ForbiddenDiagnosticDifferences = @()
+    $DiagnosticLines = @(git -c core.quotepath=false diff --name-status --no-renames $ProductionCandidateSha $SubjectBaselineSha --)
+    if ($LASTEXITCODE -ne 0) {
+        throw "无法比较 production candidate 与 instrumented subject。benchmark 未运行。"
+    }
+    foreach ($Line in $DiagnosticLines) {
+        $Parts = $Line -split "`t", 2
+        if ($Parts.Count -ne 2) {
+            throw "无法解析 diagnostic difference：$Line。benchmark 未运行。"
+        }
+        $Status = $Parts[0]
+        $Path = $Parts[1].Replace("\", "/")
+        if (Test-PipelineDiagnosticPathAllowed $Path) {
+            $DiagnosticDifferences += "${Status}:$Path"
+        } else {
+            $ForbiddenDiagnosticDifferences += "${Status}:$Path"
+        }
+    }
+    if ($ForbiddenDiagnosticDifferences.Count -gt 0) {
+        $Details = $ForbiddenDiagnosticDifferences -join ", "
+        throw "Instrumentation lineage 验证失败；非 diagnostic 差异：$Details。benchmark 未运行。"
+    }
 }
 
 function Test-BenchmarkPathAllowed([string]$Path) {
@@ -82,9 +148,17 @@ if ($ForbiddenDifferences.Count -gt 0) {
     throw "Source tree verification 失败；非 benchmark-only 差异：$Details。benchmark 未运行。"
 }
 
-Write-Output "[OK] subject production baseline: $SubjectBaselineSha"
+if ($RequiresDiagnosticLineage) {
+    Write-Output "[OK] diagnostic subject: $SubjectBaselineSha"
+} else {
+    Write-Output "[OK] subject production baseline: $SubjectBaselineSha"
+}
 Write-Output "[OK] repository HEAD: $RepositoryHeadSha"
-Write-Output "[OK] source tree verified; only benchmark-only paths differ from baseline."
+Write-Output "[OK] source tree verified; only benchmark-only paths differ from subject."
+if ($RequiresDiagnosticLineage) {
+    Write-Output "[OK] production candidate: $ProductionCandidateSha"
+    Write-Output "[OK] instrumentation lineage verified; only diagnostic paths differ."
+}
 if ($VerifySourceTreeOnly) {
     return
 }
@@ -112,6 +186,28 @@ foreach ($Difference in $TrackedDifferences) {
 }
 foreach ($Path in $AllowedUntrackedPaths) {
     $BenchmarkArguments += @("--untracked-path", $Path)
+}
+if ($PipelineProfile) {
+    $BenchmarkArguments += "--pipeline-profile"
+}
+if ($PipelineReadAttribution) {
+    $BenchmarkArguments += "--pipeline-read-attribution"
+}
+if ($PipelineHandleReuseApplicability) {
+    $BenchmarkArguments += "--pipeline-handle-reuse-applicability"
+}
+if ($RequiresDiagnosticLineage) {
+    $BenchmarkArguments += @(
+        "--production-candidate-sha", $ProductionCandidateSha,
+        "--production-candidate-is-ancestor",
+        "--diagnostic-source-tree-verified"
+    )
+    foreach ($Path in $AllowedPipelineDiagnosticPaths) {
+        $BenchmarkArguments += @("--allowed-diagnostic-path", $Path)
+    }
+    foreach ($Difference in $DiagnosticDifferences) {
+        $BenchmarkArguments += @("--diagnostic-difference", $Difference)
+    }
 }
 
 docker @BenchmarkArguments
