@@ -1,9 +1,8 @@
 from __future__ import annotations
 
 import math
-import time
-from collections.abc import Callable, Iterator, Sequence
-from contextlib import ExitStack, contextmanager
+from collections.abc import Sequence
+from contextlib import ExitStack
 from pathlib import Path
 
 import numpy as np
@@ -30,23 +29,6 @@ _WEIGHT_SUM_PERCENT = 100.0
 _WEIGHT_SUM_ATOL = 1e-6
 _GRID_ATOL = 1e-10
 _OUTPUT_NODATA = -9999.0
-
-type _StageTimingCallback = Callable[[str, str | None, int], None]
-
-
-@contextmanager
-def _measure_stage(
-    callback: _StageTimingCallback | None,
-    stage: str,
-    indicator_code: str | None = None,
-) -> Iterator[None]:
-    if callback is None:
-        yield
-        return
-
-    started = time.perf_counter_ns()
-    yield
-    callback(stage, indicator_code, time.perf_counter_ns() - started)
 
 
 def _validate_geometry(geometry: BaseGeometry) -> None:
@@ -219,14 +201,12 @@ class RiskAnalysisPipeline:
         *,
         geometry: BaseGeometry,
         weights: Sequence[IndicatorWeight],
-        _stage_timing_callback: _StageTimingCallback | None = None,
     ) -> RiskAnalysisResult:
-        with _measure_stage(_stage_timing_callback, "input_validation"):
-            _validate_geometry(geometry)
-            active_weights = _validate_weights(weights, self.indicator_by_code)
+        _validate_geometry(geometry)
+        active_weights = _validate_weights(weights, self.indicator_by_code)
 
-            if not self.raster_dir.is_dir():
-                raise RasterCompatibilityError(f"栅格目录不存在: {self.raster_dir}")
+        if not self.raster_dir.is_dir():
+            raise RasterCompatibilityError(f"栅格目录不存在: {self.raster_dir}")
 
         with ExitStack() as stack:
             opened: list[tuple[IndicatorDefinition, IndicatorWeight, DatasetReader]] = (
@@ -234,135 +214,114 @@ class RiskAnalysisPipeline:
             )
             for item in active_weights:
                 definition = self.indicator_by_code[item.code]
-                with _measure_stage(
-                    _stage_timing_callback, "source_open", definition.code
-                ):
-                    path = self.raster_dir / definition.filename
-                    if not path.is_file():
-                        raise RasterCompatibilityError(
-                            f"指标 {definition.code} 对应的栅格文件不存在: {path}"
-                        )
-
-                    try:
-                        dataset = stack.enter_context(rasterio.open(path))
-                    except Exception as exc:
-                        raise RasterCompatibilityError(
-                            f"指标 {definition.code} 的栅格无法读取: {path}"
-                        ) from exc
-
-                    if dataset.count != 1:
-                        raise RasterCompatibilityError(
-                            f"指标 {definition.code} 必须是单波段栅格，实际为 {dataset.count} 波段"
-                        )
-                    opened.append((definition, item, dataset))
-
-            with _measure_stage(_stage_timing_callback, "grid_validation"):
-                reference = opened[0][2]
-                for _, _, dataset in opened[1:]:
-                    _assert_compatible_grid(dataset, reference)
-
-            with _measure_stage(_stage_timing_callback, "window_geometry_setup"):
-                window = _analysis_window(reference, geometry)
-                out_transform = window_transform(window, reference.transform)
-                out_shape = (int(window.height), int(window.width))
-
-                # Geometry masking is computed once on the reference grid and reused for
-                # all aligned rasters. ``all_touched=False`` matches Rasterio's default:
-                # a pixel participates when its centre is inside the polygon.
-                inside_geometry = geometry_mask(
-                    [mapping(geometry)],
-                    out_shape=out_shape,
-                    transform=out_transform,
-                    invert=True,
-                    all_touched=False,
-                )
-                if not inside_geometry.any():
-                    raise RasterCompatibilityError("研究区没有覆盖任何栅格像元中心")
-
-                weighted_sum = np.zeros(out_shape, dtype=np.float64)
-                common_valid_mask = inside_geometry.copy()
-                indicator_results: list[IndicatorAnalysis] = []
-
-            for definition, item, dataset in opened:
-                with _measure_stage(
-                    _stage_timing_callback, "raster_read", definition.code
-                ):
-                    band = dataset.read(1, window=window, masked=True)
-
-                with _measure_stage(
-                    _stage_timing_callback, "mask_preparation", definition.code
-                ):
-                    data = np.asarray(band.filled(np.nan), dtype=np.float64)
-                    source_mask = np.ma.getmaskarray(band)
-                    finite_mask = np.isfinite(data)
-                    valid_mask = inside_geometry & ~source_mask & finite_mask
-
-                    # NaN/Inf that are not explicitly masked are treated as corrupted
-                    # normalized data, not as ordinary NoData.
-                    invalid_finite = inside_geometry & ~source_mask & ~finite_mask
-                    if invalid_finite.any():
-                        raise RasterCompatibilityError(
-                            f"指标 {definition.code} 在研究区内存在未屏蔽的 NaN/Inf"
-                        )
-
-                with _measure_stage(
-                    _stage_timing_callback,
-                    "value_validation_and_stats",
-                    definition.code,
-                ):
-                    values = data[valid_mask]
-                    if values.size == 0:
-                        raise RasterCompatibilityError(
-                            f"指标 {definition.code} 在研究区内没有有效像元"
-                        )
-
-                    below = values < definition.expected_min
-                    above = values > definition.expected_max
-                    if below.any() or above.any():
-                        raise RasterCompatibilityError(
-                            f"指标 {definition.code} 在研究区内存在超出 "
-                            f"[{definition.expected_min}, {definition.expected_max}] 的值"
-                        )
-
-                    indicator_results.append(
-                        IndicatorAnalysis(
-                            code=definition.code,
-                            name=definition.name,
-                            weight_percent=item.weight_percent,
-                            stats=_stats(values),
-                        )
+                path = self.raster_dir / definition.filename
+                if not path.is_file():
+                    raise RasterCompatibilityError(
+                        f"指标 {definition.code} 对应的栅格文件不存在: {path}"
                     )
 
-                with _measure_stage(
-                    _stage_timing_callback, "weighted_accumulation", definition.code
-                ):
-                    # Invalid pixels are temporarily treated as zero only for the
-                    # accumulation step; ``common_valid_mask`` removes them from the
-                    # final result, so missing data can never become "zero risk".
-                    weighted_sum[valid_mask] += values * (item.weight_percent / 100.0)
-                    common_valid_mask &= valid_mask
+                try:
+                    dataset = stack.enter_context(rasterio.open(path))
+                except Exception as exc:
+                    raise RasterCompatibilityError(
+                        f"指标 {definition.code} 的栅格无法读取: {path}"
+                    ) from exc
 
-            with _measure_stage(_stage_timing_callback, "result_finalization"):
-                if not common_valid_mask.any():
-                    raise RasterCompatibilityError("所选指标在研究区内没有共同有效像元")
+                if dataset.count != 1:
+                    raise RasterCompatibilityError(
+                        f"指标 {definition.code} 必须是单波段栅格，实际为 {dataset.count} 波段"
+                    )
+                opened.append((definition, item, dataset))
 
-                result_values = weighted_sum[common_valid_mask]
-                # With non-negative weights summing to 100 and normalized [0,1] inputs,
-                # the weighted result should stay in [0,1]. Allow only floating noise.
-                if result_values.min() < -1e-12 or result_values.max() > 1.0 + 1e-12:
-                    raise RasterCompatibilityError("综合风险结果超出预期的 [0,1] 范围")
+            reference = opened[0][2]
+            for _, _, dataset in opened[1:]:
+                _assert_compatible_grid(dataset, reference)
 
-                result_array = np.full(out_shape, np.nan, dtype=np.float32)
-                result_array[common_valid_mask] = result_values.astype(np.float32)
+            window = _analysis_window(reference, geometry)
+            out_transform = window_transform(window, reference.transform)
+            out_shape = (int(window.height), int(window.width))
 
-                return RiskAnalysisResult(
-                    array=result_array,
-                    transform=out_transform,
-                    crs=reference.crs,
-                    stats=_stats(result_values),
-                    indicators=tuple(indicator_results),
-                    nodata=_OUTPUT_NODATA,
+            # Geometry masking is computed once on the reference grid and reused for
+            # all aligned rasters. ``all_touched=False`` matches Rasterio's default:
+            # a pixel participates when its centre is inside the polygon.
+            inside_geometry = geometry_mask(
+                [mapping(geometry)],
+                out_shape=out_shape,
+                transform=out_transform,
+                invert=True,
+                all_touched=False,
+            )
+            if not inside_geometry.any():
+                raise RasterCompatibilityError("研究区没有覆盖任何栅格像元中心")
+
+            weighted_sum = np.zeros(out_shape, dtype=np.float64)
+            common_valid_mask = inside_geometry.copy()
+            indicator_results: list[IndicatorAnalysis] = []
+
+            for definition, item, dataset in opened:
+                band = dataset.read(1, window=window, masked=True)
+                data = np.asarray(band.filled(np.nan), dtype=np.float64)
+                source_mask = np.ma.getmaskarray(band)
+                finite_mask = np.isfinite(data)
+                valid_mask = inside_geometry & ~source_mask & finite_mask
+
+                # NaN/Inf that are not explicitly masked are treated as corrupted
+                # normalized data, not as ordinary NoData.
+                invalid_finite = inside_geometry & ~source_mask & ~finite_mask
+                if invalid_finite.any():
+                    raise RasterCompatibilityError(
+                        f"指标 {definition.code} 在研究区内存在未屏蔽的 NaN/Inf"
+                    )
+
+                values = data[valid_mask]
+                if values.size == 0:
+                    raise RasterCompatibilityError(
+                        f"指标 {definition.code} 在研究区内没有有效像元"
+                    )
+
+                below = values < definition.expected_min
+                above = values > definition.expected_max
+                if below.any() or above.any():
+                    raise RasterCompatibilityError(
+                        f"指标 {definition.code} 在研究区内存在超出 "
+                        f"[{definition.expected_min}, {definition.expected_max}] 的值"
+                    )
+
+                indicator_results.append(
+                    IndicatorAnalysis(
+                        code=definition.code,
+                        name=definition.name,
+                        weight_percent=item.weight_percent,
+                        stats=_stats(values),
+                    )
                 )
+
+                # Invalid pixels are temporarily treated as zero only for the
+                # accumulation step; ``common_valid_mask`` removes them from the
+                # final result, so missing data can never become "zero risk".
+                weighted_sum[valid_mask] += values * (item.weight_percent / 100.0)
+                common_valid_mask &= valid_mask
+
+            if not common_valid_mask.any():
+                raise RasterCompatibilityError("所选指标在研究区内没有共同有效像元")
+
+            result_values = weighted_sum[common_valid_mask]
+            # With non-negative weights summing to 100 and normalized [0,1] inputs,
+            # the weighted result should stay in [0,1]. Allow only floating noise.
+            if result_values.min() < -1e-12 or result_values.max() > 1.0 + 1e-12:
+                raise RasterCompatibilityError("综合风险结果超出预期的 [0,1] 范围")
+
+            result_array = np.full(out_shape, np.nan, dtype=np.float32)
+            result_array[common_valid_mask] = result_values.astype(np.float32)
+
+            return RiskAnalysisResult(
+                array=result_array,
+                transform=out_transform,
+                crs=reference.crs,
+                stats=_stats(result_values),
+                indicators=tuple(indicator_results),
+                nodata=_OUTPUT_NODATA,
+            )
 
 
 def write_risk_geotiff(result: RiskAnalysisResult, output_path: Path) -> Path:

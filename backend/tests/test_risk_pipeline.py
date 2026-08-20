@@ -75,51 +75,6 @@ def test_weighted_overlay_matches_hand_calculated_values(tmp_path: Path):
     assert result.stats.valid_pixel_count == 4
 
 
-def test_stage_timing_preserves_result_and_reports_fixed_stage_contract(tmp_path: Path):
-    values_a = np.array([[0.2, 0.4], [0.6, 0.8]], dtype="float32")
-    values_b = np.array([[0.8, 0.6], [0.4, 0.2]], dtype="float32")
-    _write_raster(tmp_path / "a.tif", values_a)
-    _write_raster(tmp_path / "b.tif", values_b)
-    pipeline = RiskAnalysisPipeline(tmp_path, indicators=_catalog("a", "b"))
-    arguments = {
-        "geometry": _full_extent(),
-        "weights": [IndicatorWeight("a", 25.0), IndicatorWeight("b", 75.0)],
-    }
-
-    expected = pipeline.run(**arguments)
-    events: list[tuple[str, str | None, int]] = []
-    actual = pipeline.run(
-        **arguments,
-        _stage_timing_callback=lambda stage, code, elapsed_ns: events.append(
-            (stage, code, elapsed_ns)
-        ),
-    )
-
-    np.testing.assert_array_equal(actual.array, expected.array)
-    assert actual.transform == expected.transform
-    assert actual.crs == expected.crs
-    assert actual.nodata == expected.nodata
-    assert actual.stats == expected.stats
-    assert actual.indicators == expected.indicators
-    assert [(stage, code) for stage, code, _ in events] == [
-        ("input_validation", None),
-        ("source_open", "a"),
-        ("source_open", "b"),
-        ("grid_validation", None),
-        ("window_geometry_setup", None),
-        ("raster_read", "a"),
-        ("mask_preparation", "a"),
-        ("value_validation_and_stats", "a"),
-        ("weighted_accumulation", "a"),
-        ("raster_read", "b"),
-        ("mask_preparation", "b"),
-        ("value_validation_and_stats", "b"),
-        ("weighted_accumulation", "b"),
-        ("result_finalization", None),
-    ]
-    assert all(isinstance(elapsed_ns, int) and elapsed_ns >= 0 for *_, elapsed_ns in events)
-
-
 def test_common_valid_mask_keeps_nodata_as_missing_instead_of_zero_risk(tmp_path: Path):
     nodata = -9999.0
     values_a = np.array([[nodata, 0.4], [0.6, 0.8]], dtype="float32")

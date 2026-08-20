@@ -28,8 +28,6 @@ from app.gis.risk_benchmark import (
     INDICATOR_GROUPS,
     PIPELINE_PROFILE_SIZE,
     PIPELINE_PROFILE_TOP_N,
-    PIPELINE_STAGE_TIMING_SIZE,
-    PIPELINE_STAGES,
     PRODUCTION_CANDIDATE_SHA,
     RASTER_READ_ATTRIBUTION_SIZE,
     RASTER_READ_CACHE_SEMANTICS,
@@ -46,7 +44,6 @@ from app.gis.risk_benchmark import (
     run_benchmark,
     run_handle_reuse_applicability,
     run_pipeline_profile,
-    run_pipeline_stage_timing,
     run_raster_read_attribution,
     write_reports,
 )
@@ -155,10 +152,6 @@ def test_formal_p3a_benchmark_contract_is_locked():
     assert inspect.signature(run_pipeline_profile).parameters["warmups"].default == 1
     assert inspect.signature(run_pipeline_profile).parameters["runs"].default == 5
     assert inspect.signature(run_pipeline_profile).parameters["size"].default == 1024
-    assert PIPELINE_STAGE_TIMING_SIZE == 1024
-    assert inspect.signature(run_pipeline_stage_timing).parameters["warmups"].default == 1
-    assert inspect.signature(run_pipeline_stage_timing).parameters["runs"].default == 5
-    assert inspect.signature(run_pipeline_stage_timing).parameters["size"].default == 1024
     assert RASTER_READ_ATTRIBUTION_SIZE == 1024
     assert inspect.signature(run_raster_read_attribution).parameters["warmups"].default == 1
     assert inspect.signature(run_raster_read_attribution).parameters["runs"].default == 5
@@ -194,28 +187,13 @@ def test_formal_p3a_benchmark_contract_is_locked():
     assert inspect.signature(run_handle_reuse_applicability).parameters[
         "size"
     ].default == 1024
-    assert PIPELINE_STAGES == (
-        "input_validation",
-        "source_open",
-        "grid_validation",
-        "window_geometry_setup",
-        "raster_read",
-        "mask_preparation",
-        "value_validation_and_stats",
-        "weighted_accumulation",
-        "result_finalization",
-    )
     assert ALLOWED_BENCHMARK_PATHS == (
         "backend/app/gis/risk_benchmark.py",
         "backend/tests/test_risk_benchmark.py",
         "scripts/benchmark-risk-analysis.ps1",
         "docs/performance/",
     )
-    assert ALLOWED_PIPELINE_DIAGNOSTIC_PATHS == (
-        "backend/app/gis/risk_pipeline.py",
-        "backend/tests/test_risk_pipeline.py",
-        *ALLOWED_BENCHMARK_PATHS,
-    )
+    assert ALLOWED_PIPELINE_DIAGNOSTIC_PATHS == ALLOWED_BENCHMARK_PATHS
 
 
 def test_window_block_metrics_cover_aligned_and_unaligned_windows():
@@ -395,67 +373,6 @@ def test_handle_reuse_applicability_keeps_raw_samples_and_reports(tmp_path: Path
     assert "Median speedup" in markdown
 
 
-def test_pipeline_stage_timing_keeps_raw_events_and_reports(tmp_path: Path):
-    raster_dir = tmp_path / "rasters"
-    _write_catalog_rasters(raster_dir)
-    instrumented_sha = "2" * 40
-
-    result, paths = run_pipeline_stage_timing(
-        raster_dir=raster_dir,
-        output_dir=tmp_path / "stage-timing",
-        subject_baseline_sha=instrumented_sha,
-        repository_head_sha=instrumented_sha,
-        source_tree_verified=True,
-        baseline_is_ancestor=True,
-        production_candidate_is_ancestor=True,
-        diagnostic_source_tree_verified=True,
-        diagnostic_differences=("M:backend/app/gis/risk_pipeline.py",),
-        warmups=0,
-        runs=1,
-        size=2,
-    )
-
-    assert result["benchmark"] == "risk-analysis-pipeline-stage-timing"
-    assert result["production_candidate_sha"] == PRODUCTION_CANDIDATE_SHA
-    assert result["instrumented_subject_sha"] == instrumented_sha
-    assert result["configuration"] == {
-        "warmups_per_scenario": 0,
-        "measured_runs_per_scenario": 1,
-        "stage_timing_size": 2,
-        "indicator_groups": {
-            "3": ["PM25", "AQI", "NDVI"],
-            "6": ["PM25", "AQI", "NDVI", "rkmd", "gyfb", "fmyl"],
-            "12": [indicator.code for indicator in INDICATORS],
-        },
-        "stages": list(PIPELINE_STAGES),
-    }
-    samples = result["pipeline_stage_timing"]["raw_samples"]
-    assert len(samples) == 3
-    for sample in samples:
-        assert sample["rows"] == 2
-        assert sample["cols"] == 2
-        assert sample["window_cells"] == 4
-        assert sample["valid_cells"] == 4
-        assert sample["output_statistics"] == pytest.approx(
-            {"minimum": 0.5, "maximum": 0.5, "mean": 0.5}
-        )
-        assert len(sample["stage_events"]) == 4 + 5 * sample["indicator_count"]
-        assert all(event["elapsed_ns"] >= 0 for event in sample["stage_events"])
-        assert sample["attributed_ns"] <= sample["pipeline_elapsed_ns"]
-        assert sample["unattributed_ns"] == (
-            sample["pipeline_elapsed_ns"] - sample["attributed_ns"]
-        )
-    assert len(result["pipeline_stage_timing"]["summaries"]) == 3
-    assert len(result["raster_dataset"]["files"]) == 12
-    persisted = json.loads(paths["json"].read_text(encoding="utf-8"))
-    assert persisted["pipeline_stage_timing"]["raw_samples"] == samples
-    markdown = paths["markdown"].read_text(encoding="utf-8")
-    assert "Production candidate" in markdown
-    assert "Instrumented subject" in markdown
-    assert "unattributed" in markdown
-    assert "diagnostic and is not a replacement latency baseline" in markdown
-
-
 def test_pipeline_diagnostic_lineage_contract():
     instrumented_sha = "2" * 40
     lineage = _verified_instrumentation_lineage(
@@ -465,8 +382,8 @@ def test_pipeline_diagnostic_lineage_contract():
         True,
         ALLOWED_PIPELINE_DIAGNOSTIC_PATHS,
         (
-            "M:backend/app/gis/risk_pipeline.py",
-            "M:backend/tests/test_risk_pipeline.py",
+            "M:backend/app/gis/risk_benchmark.py",
+            "M:backend/tests/test_risk_benchmark.py",
             "A:docs/performance/p3b-pipeline-stage-timing/result.json",
         ),
     )
@@ -497,11 +414,8 @@ def test_pipeline_diagnostic_lineage_contract():
 @pytest.mark.parametrize(
     "modes",
     [
-        ("--pipeline-profile", "--pipeline-stage-timing"),
         ("--pipeline-profile", "--pipeline-read-attribution"),
         ("--pipeline-profile", "--pipeline-handle-reuse-applicability"),
-        ("--pipeline-stage-timing", "--pipeline-read-attribution"),
-        ("--pipeline-stage-timing", "--pipeline-handle-reuse-applicability"),
         ("--pipeline-read-attribution", "--pipeline-handle-reuse-applicability"),
     ],
 )

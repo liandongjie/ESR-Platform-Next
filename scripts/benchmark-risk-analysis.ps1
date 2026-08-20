@@ -6,7 +6,6 @@ param(
     [string]$ProductionCandidateSha = "8f85c420dcc07edbcbf03674478b973c108e6746",
     [switch]$VerifySourceTreeOnly,
     [switch]$PipelineProfile,
-    [switch]$PipelineStageTiming,
     [switch]$PipelineReadAttribution,
     [switch]$PipelineHandleReuseApplicability
 )
@@ -21,14 +20,10 @@ $AllowedBenchmarkPaths = @(
     "scripts/benchmark-risk-analysis.ps1",
     "docs/performance/"
 )
-$AllowedPipelineDiagnosticPaths = @(
-    "backend/app/gis/risk_pipeline.py",
-    "backend/tests/test_risk_pipeline.py"
-) + $AllowedBenchmarkPaths
+$AllowedPipelineDiagnosticPaths = $AllowedBenchmarkPaths
 
 $SelectedDiagnosticModes = @(
     $PipelineProfile,
-    $PipelineStageTiming,
     $PipelineReadAttribution,
     $PipelineHandleReuseApplicability
 ) | Where-Object { $_ }
@@ -36,7 +31,6 @@ if ($SelectedDiagnosticModes.Count -gt 1) {
     throw "Pipeline diagnostic modes 不能同时启用。benchmark 未运行。"
 }
 $RequiresDiagnosticLineage = (
-    $PipelineStageTiming -or
     $PipelineReadAttribution -or
     $PipelineHandleReuseApplicability
 )
@@ -74,8 +68,6 @@ if ($RequiresDiagnosticLineage) {
     function Test-PipelineDiagnosticPathAllowed([string]$Path) {
         $Normalized = $Path.Replace("\", "/")
         return (
-            $Normalized -eq "backend/app/gis/risk_pipeline.py" -or
-            $Normalized -eq "backend/tests/test_risk_pipeline.py" -or
             $Normalized -eq "backend/app/gis/risk_benchmark.py" -or
             $Normalized -eq "backend/tests/test_risk_benchmark.py" -or
             $Normalized -eq "scripts/benchmark-risk-analysis.ps1" -or
@@ -197,9 +189,6 @@ foreach ($Path in $AllowedUntrackedPaths) {
 }
 if ($PipelineProfile) {
     $BenchmarkArguments += "--pipeline-profile"
-}
-if ($PipelineStageTiming) {
-    $BenchmarkArguments += "--pipeline-stage-timing"
 }
 if ($PipelineReadAttribution) {
     $BenchmarkArguments += "--pipeline-read-attribution"
