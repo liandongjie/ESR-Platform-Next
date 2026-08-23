@@ -1,192 +1,349 @@
-# ESR-Platform-Next
 
-面向环境社会风险分析场景的多用户 WebGIS。系统基于真实的 12 项标准化栅格数据，打通
-研究区选择、米制缓冲、POI、异步风险计算、任务恢复、地图预览和成果下载，并提供可复现的
-PostGIS migration、50 用户负载测试与单机部署/恢复证据。
 
-## 当前已实现
 
-- Vue 3 + TypeScript + Vite WebGIS 工作台
-- Vue Router、Pinia、Element Plus、Axios、ECharts
-- 高德地图绘制、坐标输入、地址/POI 搜索、行政区和 Shapefile 研究区输入
-- Flask Application Factory 与版本化 Blueprint
-- WGS84/GCJ-02 地图边界转换与米制缓冲区
-- 12 项标准化风险指标配置、窗口化栅格读取、共同有效掩膜与加权叠加
-- JWT access token + HttpOnly refresh cookie、生产关闭注册、演示账号 CLI 和跨用户资源隔离
-- PostgreSQL/PostGIS 用户/任务事实源、Alembic 01-03 migration、数据库分页历史任务
-- Celery + Redis 异步队列、幂等提交、每用户限流、活动任务上限和条件状态迁移
-- 失败任务派生重试、排队取消、Worker 丢失重投、Beat 待分发补偿和成果 TTL 清理
-- POI 分析与 CSV 导出、风险 GeoTIFF 和结果清单下载
-- 透明风险 PNG、受保护 Blob 下载和单个高德 ImageLayer；旧 GeoJSON 只作兼容 fallback
-- SQLAlchemy QueuePool 容量预算、PostgreSQL/PostGIS、Redis、Web、Worker、Beat 的 Compose
-- Caddy/HTTPS 单机边界、生产 readiness migration head 检查、备份/恢复和发布门脚本
-- Pytest、Vitest、Ruff、ESLint、Prettier 基础检查
-- GitHub Actions 中的生产镜像和 PostGIS upgrade→downgrade→upgrade gate
 
-## 已验证结果
+# ESR Platform
 
-| 闭环 | 结果 | 证据 |
-|---|---|---|
-| 风险预览 | 指示性响应体 4,966,037 → 15,111 bytes（-99.696%）；地图覆盖物 16,139 → 1 | [预览基准](docs/performance/risk-preview/risk-preview-benchmark.md) |
-| 50 用户读链 | 6,476 请求、0% HTTP 错误；列表/状态 p95 441.34/382.99 ms | [负载报告](docs/performance/load-test/2026-08-20-rc-local/report.md) |
-| 50 用户异步链 | 50/50 任务明确终态；排队/执行 p95 2,641.10/139.20 ms | [负载报告](docs/performance/load-test/2026-08-20-rc-local/report.md) |
-| 连接池调优 | 实测连接峰值 10；`max_overflow` 5→0，配置容量 50→25，复测仍低于 500 ms | [容量模型](docs/performance/capacity-model.md) |
-| 浏览器 E2E | 登录、失败终态、全 UI 成功分析、刷新恢复、PNG 默认链和跨用户 404 通过 | [E2E 报告](docs/performance/e2e/2026-08-20-rc-local/report.md) |
-| 发布恢复 | PostGIS 三版迁移往返通过；52 用户/154 任务与 460 个 runtime 文件恢复一致 | [演练报告](docs/deployment/drills/2026-08-20-rc-local.md) |
+**Environmental and Social Risk Analysis Platform · 环境社会风险分析平台**
 
-负载和故障时间来自本机隔离 RC，不外推为火山引擎公网容量或生产 RTO。正式发布前仍需用
-最终 Git SHA 重建镜像，并在现有域名/HTTPS 环境执行生产 smoke 与回滚。
+ESR Platform是一个面向环境与社会风险分析场景的 WebGIS 应用。
 
-本项目不通过堆叠 TiTiler、GeoServer、微服务、Kafka 或 Kubernetes 代替真实业务问题的解决。
+它把研究区域定义、空间缓冲、POI 检索、栅格指标计算和结果查看放在同一套地图工作流中。用户不需要在多个 GIS 软件、脚本和中间文件之间来回切换，可以直接从一个研究区域开始，完成一次完整的空间分析并保存结果。
 
-## 目录
+## 在线体验
+
+项目已经部署，可直接访问：
+
+**https://14.103.34.41:8081/**
+
+出于演示环境的数据安全考虑，仓库中不公开固定账号和密码。
+
+如需体验完整功能，可以通过邮件联系：
+
+**[502022270071@smail.nju.edu.cn](mailto:502022270071@smail.nju.edu.cn)**
+
+邮件主题注明 `ESR Platform Demo` 即可。
+
+------
+
+## 这个项目解决什么问题
+
+环境与社会风险分析通常不是一次简单的地图查询。
+
+实际工作中，一次分析往往需要先确定研究区域，再构造一定范围的缓冲区，随后查询区域内的兴趣点、读取不同来源的栅格指标，对空间数据进行统一处理，最后才能得到可供判断和进一步使用的结果。
+
+如果这些步骤分别依赖 GIS 软件、Python 脚本和人工文件管理，分析过程会比较零散，也很难完整保留一次任务的上下文。
+
+本项目希望把这件事情整理成一条清晰的工作流：
 
 ```text
-frontend/               Vue 3 + TypeScript 前端
-backend/                Flask 后端与 Celery Worker
-infra/nginx/            Nginx 反向代理配置
-docs/                   架构决策与实施范围
-scripts/                本地初始化和检查脚本
-data/source/            本地栅格挂载占位目录，不提交数据
-data/runtime/           任务结果目录，不提交生成物
+研究区域
+   ↓
+缓冲区
+   ↓
+POI / 风险指标
+   ↓
+空间分析任务
+   ↓
+地图预览
+   ↓
+结果与成果文件
 ```
 
-Production 单 Linux 主机部署见
-[`docs/deployment/single-host-runbook.md`](docs/deployment/single-host-runbook.md)。
-系统边界见 [`docs/architecture/overview.md`](docs/architecture/overview.md)。
 
-## 数据边界
 
-真实栅格不进入 Git。开发机上的源数据目录：
+------
+
+## 使用方式
+
+### 1. 定义研究区域
+
+分析从研究区域开始。
+
+目前可以通过多种方式确定空间范围，包括地图交互、坐标输入、地址或 POI 搜索、行政区选择以及 Shapefile 数据。
+
+不同来源的区域最终都会整理成统一的空间对象，再进入后续分析流程。
+
+![image-20260823163144488](./README.assets/image-20260823163144488.png) 
+
+### 2. 创建缓冲区
+
+确定研究区域以后，可以按照实际分析需求设置缓冲距离。
+
+缓冲距离按真实的米制距离计算。
+
+![image-20260823165013339](./README.assets/image-20260823165013339.png) 
+
+### 3. 查看区域内的 POI
+
+对于需要了解周边设施或社会活动分布的场景，可以进一步执行 POI 分析。
+
+结果可以直接在地图中查看，同时支持以结构化数据形式导出，便于后续统计或独立分析。
+
+![image-20260823165059559](./README.assets/image-20260823165059559.png) 
+
+### 4. 配置风险指标
+
+风险分析以栅格指标为基础。
+
+当前系统配置了 12 项标准化环境、人口和社会相关指标。用户可以根据分析目的选择指标并设置权重，然后提交分析任务。
+
+![image-20260823165144683](./README.assets/image-20260823165144683.png) 
+
+### 5. 查看分析结果
+
+风险计算在后台执行。
+
+任务完成以后，结果可以重新加载到地图中查看，而不是要求用户一直停留在当前页面等待。历史任务及其状态也会被保存，刷新页面或者重新进入系统后仍然能够找到之前的分析。
+
+地图中的风险图层主要承担快速预览作用；需要进一步处理时，可以下载对应的分析成果文件。
+
+------
+
+## 系统是怎么组织的
+
+本项目采用一个比较直接的 WebGIS 架构：
 
 ```text
-D:\ESR-Platform\static\tif
+                         ┌─────────────────────┐
+                         │   Vue 3 Web Client  │
+                         │   Map / Workspace   │
+                         └──────────┬──────────┘
+                                    │
+                               REST / JSON
+                                    │
+                         ┌──────────▼──────────┐
+                         │      Flask API      │
+                         └───────┬──────┬──────┘
+                                 │      │
+                    ┌────────────┘      └────────────┐
+                    │                                │
+          ┌─────────▼──────────┐          ┌──────────▼─────────┐
+          │ PostgreSQL/PostGIS │          │   Redis / Celery   │
+          │ users / tasks /    │          │   async jobs       │
+          │ geometry / metadata│          └──────────┬─────────┘
+          └────────────────────┘                     │
+                                          ┌──────────▼─────────┐
+                                          │    GIS Worker      │
+                                          │ Raster / Vector    │
+                                          │     Analysis       │
+                                          └──────────┬─────────┘
+                                                     │
+                                      ┌──────────────┴──────────────┐
+                                      │                             │
+                               Source Rasters               Runtime Results
 ```
 
-在 `.env` 中设置：
+Web API 负责用户、任务和分析请求，PostgreSQL/PostGIS 保存需要长期存在的业务和空间信息；耗时的 GIS 计算交给 Celery Worker 执行，Redis 用于任务队列；源栅格和计算结果则作为独立的数据文件管理。
 
-```env
-ESR_SOURCE_RASTER_HOST_DIR=D:/ESR-Platform/static/tif
+更完整的架构说明见：
+
+```text
+docs/architecture/
 ```
 
-Docker Compose 会把该目录只读挂载到容器的 `/data/source`。任务输出写入独立运行目录。
+------
 
-## 本地启动
+## 技术栈
 
-### 1. 创建环境变量
+项目主要使用以下技术：
 
-PowerShell：
+| 层次       | 技术                                                     |
+| ---------- | -------------------------------------------------------- |
+| Web        | Vue 3、TypeScript、Vite、Pinia、Vue Router、Element Plus |
+| Map        | 高德地图 JavaScript API                                  |
+| API        | Flask、SQLAlchemy                                        |
+| Spatial    | PostGIS、Rasterio、GeoPandas、Shapely、NumPy             |
+| Async      | Celery、Redis                                            |
+| Database   | PostgreSQL / PostGIS                                     |
+| Migration  | Alembic                                                  |
+| Deployment | Docker Compose                                           |
+| Testing    | Pytest、Vitest、Ruff、ESLint                             |
+
+
+
+------
+
+## 坐标与空间数据
+
+项目对地图展示和空间分析使用的坐标进行了明确区分：
+
+后台 API、GeoJSON、数据库以及栅格分析统一使用：
+
+```text
+WGS84 / EPSG:4326
+```
+
+高德地图展示使用：
+
+```text
+GCJ-02
+```
+
+地图交互产生的坐标会在进入后台分析之前完成转换。
+
+对于缓冲分析，同样不会直接在经纬度坐标上把“度”当作“米”使用。
+
+相关设计记录见：
+
+```text
+docs/architecture/adr-001-coordinate-systems.md
+```
+
+------
+
+## 项目目录
+
+```text
+ESR-Platform-Next/
+├─ frontend/                # Vue 3 Web 客户端
+├─ backend/                 # Flask API 与 GIS / Celery Worker
+├─ data/
+│  ├─ source/               # 本地源栅格挂载位置
+│  └─ runtime/              # 运行时分析结果
+├─ docs/
+│  ├─ architecture/         # 架构与设计记录
+│  └─ deployment/           # 部署说明
+├─ infra/                   # 基础设施相关配置
+├─ scripts/                 # 初始化、检查与辅助脚本
+├─ docker-compose.yml
+└─ README.md
+```
+
+源栅格数据和运行过程中生成的结果文件不提交到 Git 仓库。
+
+------
+
+## 本地运行
+
+### 1. 准备配置
+
+从示例配置创建本地环境文件：
 
 ```powershell
 Copy-Item .env.example .env
 ```
 
-至少填写：
+根据本机环境补充必要配置，包括：
 
-- `SECRET_KEY`
-- `JWT_SECRET_KEY`
-- `ESR_SOURCE_RASTER_HOST_DIR`
-- `VITE_AMAP_JS_API_KEY`
-- `VITE_AMAP_SECURITY_JS_CODE`
+```text
+SECRET_KEY
+JWT_SECRET_KEY
+ESR_SOURCE_RASTER_HOST_DIR
+VITE_AMAP_JS_API_KEY
+VITE_AMAP_SECURITY_JS_CODE
+```
 
-### 2. Docker Compose
+其中：
 
-```powershell
+```text
+ESR_SOURCE_RASTER_HOST_DIR
+```
+
+需要指向本机实际存放源栅格数据的目录。
+
+### 2. 启动服务
+
+推荐直接使用 Docker Compose：
+
+```bash
 docker compose up --build
 ```
 
-首次启动先执行 migration，再创建本地演示账号：
+首次运行需要执行数据库 migration：
 
-```powershell
+```bash
 docker compose run --rm backend flask --app wsgi:app db upgrade
-$env:ESR_DEMO_USER_PASSWORD = "请在本地终端临时填写至少 8 位密码"
-docker compose run --rm -e ESR_DEMO_USER_PASSWORD backend `
-  flask --app wsgi:app create-demo-user --username demo
-Remove-Item Env:ESR_DEMO_USER_PASSWORD
 ```
 
-默认访问：
+随后即可访问：
 
-- 前端：http://localhost:5173
-- 后端存活检查：http://localhost:5000/api/v1/health/live
-- 后端就绪检查：http://localhost:5000/api/v1/health/ready
+```text
+Frontend
+http://localhost:5173
 
-### 3. 不使用 Docker 的后端开发
+Backend health
+http://localhost:5000/api/v1/health/live
+http://localhost:5000/api/v1/health/ready
+```
 
-建议 Python 3.12：
+更完整的单机部署流程见：
+
+```text
+docs/deployment/single-host-runbook.md
+```
+
+------
+
+## 分开启动前后端
+
+如果只是进行本地开发，也可以不通过完整 Compose 环境启动 Web 服务。
+
+### Backend
+
+建议使用 Python 3.12：
+
+```bash
+cd backend
+
+python -m venv .venv
+```
+
+PowerShell：
 
 ```powershell
-cd backend
-python -m venv .venv
 .\.venv\Scripts\Activate.ps1
-python -m pip install -e ".[dev]"
-$env:DATABASE_URL = "sqlite:///esr_dev.sqlite3"
+python -m pip install -e ".[dev,gis]"
 python -m flask --app wsgi:app run --debug
 ```
 
-GIS 依赖按需安装：
+### Frontend
 
-```powershell
-python -m pip install -e ".[dev,gis]"
-```
-
-### 4. 不使用 Docker 的前端开发
-
-```powershell
+```bash
 cd frontend
+
 npm install
 npm run dev
 ```
 
-## 检查
+------
 
-后端：
+## 测试与检查
 
-```powershell
+Backend：
+
+```bash
 cd backend
+
 ruff check .
 pytest
 ```
 
-前端：
+Frontend：
 
-```powershell
+```bash
 cd frontend
+
 npm run type-check
 npm run lint
 npm run test:run
 npm run build
 ```
 
-## 坐标系原则
+------
 
-- 后端、数据库、GeoJSON 和栅格分析统一使用 WGS84 / EPSG:4326。
-- 高德地图展示使用 GCJ-02。
-- 坐标转换集中在前端地图适配层。
-- 高德绘制结果必须转换为 WGS84 后才能提交给分析接口。
-- 米制缓冲区不得直接在经纬度坐标上按“度”计算。
+## Contact
 
-详见 `docs/architecture/adr-001-coordinate-systems.md`。
+如果你在运行项目或阅读代码时遇到问题，可以通过以下方式联系：
 
-## STAR / 简历素材
+**Email:** [502022270071@smail.nju.edu.cn](mailto:502022270071@smail.nju.edu.cn)
 
-以下表述只使用仓库中的实测数据；投递前可按岗位限制压缩字数：
+**GitHub:** https://github.com/liandongjie
 
-- **主导** 12 指标 GIS 风险计算链路，使用 Rasterio window、NumPy 共同有效掩膜和向量化校验
-  替代逐像元 Python 扫描，使 12 指标大范围结果校验中位耗时由 973.797 ms 降至 6.449 ms，
-  降低 99.3%。
-- **设计** JWT + PostgreSQL/PostGIS 多用户任务中心，将用户、WGS84 Geometry、状态、进度、
-  幂等关系和成果元数据纳入数据库事实源；在真实浏览器与 API 中验证用户切换任务清零、跨用户
-  task/下载返回 404，并完成 52 用户、154 任务的备份恢复核对。
-- **引入** Redis/Celery 可靠异步治理，通过用户级幂等/限流、延迟确认、条件状态迁移、受控重试
-  和 Beat 补偿支撑 50 用户同时提交，50/50 已入队任务进入明确终态，HTTP 错误率 0%，执行
-  p95 139.20 ms；Worker 停止后任务保持 QUEUED，恢复后 4.164 秒完成。
-- **重构** 风险空间预览，将 16,139 个逐像元 Polygon 替换为透明 RGBA PNG + 单 ImageLayer，
-  指示性响应体由 4.97 MB 降至 15.11 KB（-99.696%），覆盖物降至 1 个，服务端 PNG 生成
-  p95 5.348 ms，同时保留 GeoTIFF 精度成果和旧任务 fallback。
-- **完成** 50 用户端到端负载与 SQLAlchemy QueuePool 调优，30 秒处理 6,476 个认证/列表/状态/
-  下载请求且错误率 0%，列表/状态 p95 441.34/382.99 ms；依据连接峰值 10 将 overflow 从 5
-  收紧到 0，把常驻 Pool 配置容量从 50 降至 25，复测仍通过 500 ms 门槛。
-- **搭建** 火山引擎单机部署约束下的 Caddy/HTTPS、Compose、Alembic readiness 和恢复流程，
-  在隔离 PostGIS 中验证 upgrade→downgrade→upgrade，并将 52 用户、154 任务及 460 个成果文件
-  恢复到新卷且内容哈希一致；实际生产 RTO 待目标服务器演练后填写。
+------
+
+## License
+
+本仓库暂未单独声明开源许可证。
+
+如需复用项目中的代码或数据，请先联系作者确认使用范围。
