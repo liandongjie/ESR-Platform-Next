@@ -83,7 +83,6 @@ def _check_redis_endpoints() -> dict:
     configured_endpoints = (
         ("redis", current_app.config["REDIS_URL"]),
         ("celery_broker", celery_config["broker_url"]),
-        ("celery_result_backend", celery_config["result_backend"]),
     )
     endpoints: dict[str, list[str]] = {}
     for role, url in configured_endpoints:

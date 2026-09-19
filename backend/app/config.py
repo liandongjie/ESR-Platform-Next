@@ -51,10 +51,9 @@ class BaseConfig:
     REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
     CELERY = {
         "broker_url": os.getenv("CELERY_BROKER_URL", "redis://localhost:6379/0"),
-        "result_backend": os.getenv("CELERY_RESULT_BACKEND", "redis://localhost:6379/1"),
-        "task_track_started": True,
+        # 业务任务状态以 PostgreSQL AnalysisJob 为事实源，不使用 Celery Result Backend。
+        "task_ignore_result": True,
         "task_serializer": "json",
-        "result_serializer": "json",
         "accept_content": ["json"],
         "timezone": "Asia/Shanghai",
         "enable_utc": True,
@@ -145,7 +144,6 @@ class ProductionConfig(BaseConfig):
     CELERY = {
         **BaseConfig.CELERY,
         "broker_url": os.getenv("CELERY_BROKER_URL"),
-        "result_backend": os.getenv("CELERY_RESULT_BACKEND"),
     }
 
 
@@ -203,12 +201,6 @@ def validate_production_config(config: Mapping[str, Any]) -> None:
         (
             "CELERY_BROKER_URL",
             config.get("CELERY", {}).get("broker_url"),
-            {"redis", "rediss"},
-            False,
-        ),
-        (
-            "CELERY_RESULT_BACKEND",
-            config.get("CELERY", {}).get("result_backend"),
             {"redis", "rediss"},
             False,
         ),
