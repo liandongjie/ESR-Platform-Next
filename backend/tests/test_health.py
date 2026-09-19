@@ -1,7 +1,5 @@
 from pathlib import Path
 
-import pytest
-
 import app.api.v1.health as health
 from app.gis.indicators import INDICATORS
 
@@ -71,15 +69,13 @@ def test_ready_returns_200_when_all_dependencies_are_healthy(app, client, monkey
     assert set(app.config["RUNTIME_DATA_DIR"].iterdir()) == runtime_contents
 
 
-def test_ready_checks_each_distinct_redis_endpoint_once(app, client, monkeypatch):
+def test_ready_checks_shared_redis_and_broker_endpoint_once(app, client, monkeypatch):
     prepare_healthy_dependencies(app, monkeypatch)
     redis_url = "redis://localhost:6379/0"
-    result_backend_url = "redis://localhost:6379/1"
     app.config["REDIS_URL"] = redis_url
     app.config["CELERY"] = {
         **app.config["CELERY"],
         "broker_url": redis_url,
-        "result_backend": result_backend_url,
     }
     calls = []
     monkeypatch.setattr(
@@ -91,10 +87,10 @@ def test_ready_checks_each_distinct_redis_endpoint_once(app, client, monkeypatch
     response = client.get("/api/v1/health/ready")
 
     assert response.status_code == 200
-    assert calls == [redis_url, result_backend_url]
+    assert calls == [redis_url]
     endpoints = response.get_json()["checks"]["redis"]["endpoints"]
+    assert len(endpoints) == 1
     assert endpoints[0]["roles"] == ["redis", "celery_broker"]
-    assert endpoints[1]["roles"] == ["celery_result_backend"]
 
 
 def test_ready_returns_503_when_database_is_unavailable(app, client, monkeypatch):
@@ -115,24 +111,21 @@ def test_ready_returns_503_when_database_is_unavailable(app, client, monkeypatch
     assert "raw database exception" not in response.get_data(as_text=True)
 
 
-@pytest.mark.parametrize("failed_suffix", ["/0", "/1"])
 def test_ready_returns_503_when_redis_endpoint_is_unavailable(
-    app, client, monkeypatch, failed_suffix
+    app, client, monkeypatch
 ):
     prepare_healthy_dependencies(app, monkeypatch)
     app.config["REDIS_URL"] = "redis://user:secret@redis.internal:6379/0"
     app.config["CELERY"] = {
         **app.config["CELERY"],
         "broker_url": app.config["REDIS_URL"],
-        "result_backend": "redis://user:secret@redis.internal:6379/1",
     }
 
-    def create_client(url):
-        if url.endswith(failed_suffix):
-            raise RuntimeError("raw redis exception")
-        return HealthyRedis()
-
-    monkeypatch.setattr(health, "create_redis_client", create_client)
+    monkeypatch.setattr(
+        health,
+        "create_redis_client",
+        lambda url: (_ for _ in ()).throw(RuntimeError("raw redis exception")),
+    )
 
     response = client.get("/api/v1/health/ready")
     response_text = response.get_data(as_text=True)

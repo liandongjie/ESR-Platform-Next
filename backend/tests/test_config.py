@@ -20,7 +20,6 @@ def valid_production_config(tmp_path, monkeypatch):
         {
             **ProductionConfig.CELERY,
             "broker_url": "redis://unreachable.invalid:6379/0",
-            "result_backend": "redis://unreachable.invalid:6379/1",
         },
     )
     monkeypatch.setattr(ProductionConfig, "SOURCE_RASTER_DIR", tmp_path / "source")
@@ -38,6 +37,10 @@ def test_valid_production_config_creates_app_without_connecting(valid_production
         "pool_timeout": 10,
         "pool_recycle": 1800,
     }
+    assert app.config["CELERY"]["task_ignore_result"] is True
+    assert "result_backend" not in app.config["CELERY"]
+    assert "task_track_started" not in app.config["CELERY"]
+    assert "result_serializer" not in app.config["CELERY"]
 
 
 @pytest.mark.parametrize(
@@ -91,18 +94,16 @@ def test_production_rejects_invalid_database_url(
         ("CELERY_BROKER_URL", ""),
         ("REDIS_URL", "http://redis:6379/0"),
         ("CELERY_BROKER_URL", "redis:///0"),
-        ("CELERY_RESULT_BACKEND", "redis://redis:not-a-port/1"),
     ],
 )
 def test_production_rejects_invalid_redis_urls(valid_production_config, monkeypatch, key, url):
     if key == "REDIS_URL":
         monkeypatch.setattr(ProductionConfig, key, url)
     else:
-        celery_key = "broker_url" if key == "CELERY_BROKER_URL" else "result_backend"
         monkeypatch.setattr(
             ProductionConfig,
             "CELERY",
-            {**ProductionConfig.CELERY, celery_key: url},
+            {**ProductionConfig.CELERY, "broker_url": url},
         )
 
     with pytest.raises(ValueError, match=key) as error:
